@@ -1,0 +1,26 @@
+{
+  "name": "obsidian-vault-claude",
+  "version": "0.21.1",
+  "private": true,
+  "description": "Obsidian sidebar chat that runs the local Claude Code in the vault via the Claude Agent SDK.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node esbuild.config.mjs production scripts/smoke.ts scripts/smoke.cjs && node scripts/smoke.cjs",
+    "test": "node scripts/build-unit-tests.mjs",
+    "test:panel": "node scripts/build-panel-test.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.272"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "esbuild": "0.28.2",
+    "jsdom": "25.0.1",
+    "obsidian": "1.13.1",
+    "typescript": "7.0.2"
+  }
+}
