@@ -7,7 +7,7 @@ import { patchSetMaxListenersForRenderer } from './electronCompat';
 import { deleteSessionIfAny, deleteSessions, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, type ChatRecord, type HistoryItem } from './history';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
-import { followDraftNotes, followNote, forgetChat, linkNote, NOTE_CHAT_ICONS, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
+import { followDraftNotes, followNote, forgetChat, linkNote, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
@@ -303,7 +303,6 @@ export default class VaultClaudePlugin extends Plugin {
       this.app.workspace.on('file-menu', (menu, file) => {
         attachItem(menu, [file]);
         this.promptFromNoteItem(menu, file);
-        this.chatForNoteItem(menu, file);
       }),
     );
     this.registerNoteEvents();
@@ -822,7 +821,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * Takes chat `chatId` off note `path`'s chats, as ⌥-clicking it in a note's list of chats does: no
+   * Takes chat `chatId` off note `path`'s chats, as ⌥-clicking it in the list above the input does: no
    * longer offered for the note, nor listed under it in the history, until the chat edits the note
    * again or is sent it (see mayLink).
    */
@@ -1013,35 +1012,7 @@ export default class VaultClaudePlugin extends Plugin {
     await view?.sendText(text);
   }
 
-  /** A note's right-click menu: the chats that changed it or were sent it, or the chat a saved chat note came from. */
-  private chatForNoteItem(menu: Menu, file: TAbstractFile): void {
-    if (!(file instanceof TFile)) return;
-    const entries = this.noteChatEntries(file);
-    if (entries.length === 0) return;
-    // ⌥-click takes a chat off the note instead of opening it.
-    const pick = (entry: NoteChatEntry, event: MouseEvent | KeyboardEvent) =>
-      event.altKey ? this.removeNoteChat(file.path, entry.id, entry.title) : void this.openChatById(entry.id, entry.title);
-    menu.addItem((item) => {
-      item.setTitle(entries.length === 1 ? 'Open its Claude chat' : 'Open a Claude chat about this note').setIcon('bot');
-      if (entries.length === 1) {
-        item.onClick((event) => pick(entries[0], event));
-        return;
-      }
-      const submenu = (item as unknown as { setSubmenu(): Menu }).setSubmenu();
-      submenu.addItem((sub) => sub.setTitle('⌥-click takes a chat off this note').setIsLabel(true));
-      const open = this.openChats();
-      for (const entry of entries) {
-        submenu.addItem((sub) =>
-          sub
-            .setTitle(open.has(entry.id) ? `${entry.title} · open` : entry.title)
-            .setIcon(NOTE_CHAT_ICONS[entry.why])
-            .onClick((event) => pick(entry, event)),
-        );
-      }
-    });
-  }
-
-  /** Opens a chat by its session id in the panel, as listed when it was (its copies with it). */
+  /** Opens a chat by its session id in the panel, as listed when it was (its copies with it): a kept side chat whose panel has closed. */
   async openChatById(id: string, title: string): Promise<void> {
     const view = await this.activateView();
     const listed = this.lastListing?.find((item) => item.id === id);

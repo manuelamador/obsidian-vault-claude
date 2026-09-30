@@ -31,7 +31,7 @@ test("a deleted copy leaves its original's copies, in the lists the history's ro
   assert.deepEqual([original.copies?.length, row.copies?.length], [0, 0]);
 });
 
-test("a chat opened from a note's menu is opened as listed, with its copies", async () => {
+test('a chat opened by its id (a kept side chat whose panel closed) is opened as listed, with its copies', async () => {
   const { p, original } = setup();
   const opened: HistoryItem[] = [];
   (p as unknown as { activateView(): Promise<unknown> }).activateView = async () => ({ openChat: async (item: HistoryItem) => void opened.push(item) });

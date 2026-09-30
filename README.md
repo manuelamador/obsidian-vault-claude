@@ -53,9 +53,9 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/edit-selection.png" width="560" alt="The Edit selection with Claude dialog after “check the grammar”: the proposed change as a word diff, with Run again, Accept and Cancel">
 
-- **A file's menu** (right-click in the file explorer, or a note's ⋯ menu): Attach to Claude, for notes, files and folders; for a note, also Send to Claude as a prompt, and Open its Claude chat when it has one.
+- **A file's menu** (right-click in the file explorer, or a note's ⋯ menu): Attach to Claude, for notes, files and folders; for a note, also Send to Claude as a prompt.
 
-  <img src="docs/note-menu.png" width="240" alt="A note’s file menu, ending with Attach to Claude, Send to Claude as a prompt and Open its Claude chat">
+  <img src="docs/note-menu.png" width="240" alt="A note’s file menu, ending with Attach to Claude and Send to Claude as a prompt">
 
 - Ask Claude about selection, Edit selection with Claude and Send this note to Claude as a prompt are also commands.
 
@@ -85,7 +85,7 @@ Open the chat from the robot icon in the left ribbon.
   <img src="docs/background-tasks.png" width="480" alt="The input after a reply that left two background agents running: “Stop 2 tasks” beside Send">
 
 - **Notes ↔ chats**
-  - With a note open, **a line above the input** lists the chats that changed it or were sent it. The note's right-click menu has them too. ⌥-click a chat in either to take it off the note.
+  - With a note open, **a line above the input** lists the chats that changed it or were sent it; ⌥-click one to take it off the note. `with:` in the history finds any note's chats.
 
     <img src="docs/note-line.png" width="480" alt="Above the input of a new chat: the line “1 chat about this note”, and the chip offering to attach the open note, “+ Demo — Solow model”">
 
