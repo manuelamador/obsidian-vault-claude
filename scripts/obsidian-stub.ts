@@ -193,14 +193,14 @@ class MenuItem {
   title = '';
   label = false;
   checked: boolean | null = null;
-  click: (() => unknown) | null = null;
+  click: ((evt?: unknown) => unknown) | null = null;
   submenu: Menu | null = null;
   setTitle(title: string): this { this.title = title; return this; }
   setIcon(): this { return this; }
   setIsLabel(label: boolean): this { this.label = label; return this; }
   setDisabled(): this { return this; }
   setChecked(checked: boolean | null): this { this.checked = checked; return this; }
-  onClick(click: () => unknown): this { this.click = click; return this; }
+  onClick(click: (evt?: unknown) => unknown): this { this.click = click; return this; }
   setSubmenu(): Menu { this.submenu = new Menu(); return this.submenu; }
 }
 export class Menu {

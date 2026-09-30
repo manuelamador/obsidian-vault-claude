@@ -85,7 +85,7 @@ Open the chat from the robot icon in the left ribbon.
   <img src="docs/background-tasks.png" width="480" alt="The input after a reply that left two background agents running: “Stop 2 tasks” beside Send">
 
 - **Notes ↔ chats**
-  - With a note open, **a line above the input** lists the chats that changed it or were sent it. The note's right-click menu has them too.
+  - With a note open, **a line above the input** lists the chats that changed it or were sent it. The note's right-click menu has them too. ⌥-click a chat in either to take it off the note.
 
     <img src="docs/note-line.png" width="480" alt="Above the input of a new chat: the line “1 chat about this note”, and the chip offering to attach the open note, “+ Demo — Solow model”">
 

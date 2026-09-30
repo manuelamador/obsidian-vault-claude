@@ -7,7 +7,7 @@ import { patchSetMaxListenersForRenderer } from './electronCompat';
 import { deleteSessionIfAny, deleteSessions, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, type ChatRecord, type HistoryItem } from './history';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
-import { followDraftNotes, followNote, forgetChat, linkNote, NOTE_CHAT_ICONS, noteChatEntries, type NoteChatEntry, type NoteChats } from './noteChats';
+import { followDraftNotes, followNote, forgetChat, linkNote, NOTE_CHAT_ICONS, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
@@ -64,6 +64,7 @@ interface PluginData {
   noteChats?: NoteChats;
   noteRefs?: NoteChats;
   noteMentions?: NoteChats;
+  noteRemoved?: NoteChats;
   drafts?: Record<string, ChatDraft>;
   unseen?: Record<string, 'done' | 'error'>;
   scratch?: { id: string; usedAt: number };
@@ -96,6 +97,8 @@ export default class VaultClaudePlugin extends Plugin {
   noteRefs: NoteChats = {};
   /** Notes a chat mentioned (linked in a reply, or read), as the notes menu lists them: for the history's notes view. */
   noteMentions: NoteChats = {};
+  /** Chats taken off a note by hand (see removeNoteChat), by note: not linked to it again by a chat drawn again. */
+  noteRemoved: NoteChats = {};
   /** Each chat's unsent text and attached note, by chat id. */
   drafts: Record<string, ChatDraft> = {};
   /** Chats that finished while not on screen, and how, until they are shown. */
@@ -350,7 +353,7 @@ export default class VaultClaudePlugin extends Plugin {
     const dir = this.vaultRoot();
     const ids = dir ? await sessionIds(dir) : null;
     let changed = false;
-    for (const index of [this.noteChats, this.noteRefs, this.noteMentions]) {
+    for (const index of [this.noteChats, this.noteRefs, this.noteMentions, this.noteRemoved]) {
       for (const id of ids ? new Set(Object.values(index).flat()) : []) {
         if (!ids?.has(id)) changed = forgetChat(index, id) || changed;
       }
@@ -623,6 +626,7 @@ export default class VaultClaudePlugin extends Plugin {
     let changed = followNote(this.noteChats, from, to);
     changed = followNote(this.noteRefs, from, to) || changed;
     changed = followNote(this.noteMentions, from, to) || changed;
+    changed = followNote(this.noteRemoved, from, to) || changed;
     changed = followDraftNotes(Object.entries(this.drafts), from, to, (id) => delete this.drafts[id]) || changed;
     // Moving or deleting a folder is one event per file: saved once for them all.
     if (changed) this.saveSoon();
@@ -773,7 +777,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Records that a chat changed a note, so the note can offer it later. */
   /** `promote`: an edit made now, which makes the chat the note's newest (see linkNote); saved only when the index changed. */
   linkNoteChat(path: string, chatId: string, promote = true): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path)) return;
+    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path) || !this.mayLink(path, chatId, promote)) return;
     // Links come in bursts (a turn editing many notes, an older chat reopened): saved once for them.
     if (linkNote(this.noteChats, path, chatId, promote)) this.saveSoon();
   }
@@ -796,20 +800,45 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Records that a note went with a message in a chat: as the attached note, or mentioned. */
   linkNoteRef(path: string, chatId: string): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path)) return;
+    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path) || !this.mayLink(path, chatId, true)) return;
     if (linkNote(this.noteRefs, path, chatId)) this.saveSoon();
   }
 
   /** Records that a chat mentioned a note (see ChatView.recordMentions), for the history's notes view. */
   linkNoteMention(path: string, chatId: string): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path)) return;
+    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path) || !this.mayLink(path, chatId, false)) return;
     if (linkNote(this.noteMentions, path, chatId, false)) this.saveSoon();
   }
 
-  /** The chats offered for a note; only chats still in the history. */
+  /**
+   * Whether chat `chatId` may be linked to note `path`: always, unless it was taken off the note by
+   * hand (see removeNoteChat). Then only something new (`now`: the chat edits the note again, or is
+   * sent it) links it again, and ends the removal; a saved chat drawn again, or a mention, does not.
+   */
+  private mayLink(path: string, chatId: string, now: boolean): boolean {
+    if (!this.noteRemoved[path]?.includes(chatId)) return true;
+    if (now) unlinkNote(this.noteRemoved, path, chatId);
+    return now;
+  }
+
+  /**
+   * Takes chat `chatId` off note `path`'s chats, as ⌥-clicking it in a note's list of chats does: no
+   * longer offered for the note, nor listed under it in the history, until the chat edits the note
+   * again or is sent it (see mayLink).
+   */
+  removeNoteChat(path: string, chatId: string, title: string): void {
+    for (const index of [this.noteChats, this.noteRefs, this.noteMentions]) unlinkNote(index, path, chatId);
+    linkNote(this.noteRemoved, path, chatId, false);
+    this.saveSoon();
+    for (const view of this.chatViews()) view.noteLinksChanged();
+    new Notice(`“${title}” is no longer listed with this note.`);
+  }
+
+  /** The chats offered for a note; only chats still in the history, and none taken off it by hand. */
   noteChatEntries(file: TFile): NoteChatEntry[] {
     const known = (ids: string[] | undefined) => (ids ?? []).flatMap((id) => this.chats.find((chat) => chat.id === id) ?? []);
-    return noteChatEntries(known(this.noteChats[file.path]), this.sessionOfNote(file), known(this.noteRefs[file.path]));
+    const removed = this.noteRemoved[file.path] ?? [];
+    return noteChatEntries(known(this.noteChats[file.path]), this.sessionOfNote(file), known(this.noteRefs[file.path])).filter((entry) => !removed.includes(entry.id));
   }
 
   /** The chat a saved chat note came from, from its `claude_session` frontmatter. */
@@ -843,7 +872,7 @@ export default class VaultClaudePlugin extends Plugin {
     delete this.ticks[id];
     delete this.drafts[id];
     delete this.unseen[id];
-    for (const index of [this.noteChats, this.noteRefs, this.noteMentions]) forgetChat(index, id);
+    for (const index of [this.noteChats, this.noteRefs, this.noteMentions, this.noteRemoved]) forgetChat(index, id);
   }
 
   /** The positions of reply `replyKey`'s checkboxes that the reader flipped; a fresh set to change and save. */
@@ -989,20 +1018,24 @@ export default class VaultClaudePlugin extends Plugin {
     if (!(file instanceof TFile)) return;
     const entries = this.noteChatEntries(file);
     if (entries.length === 0) return;
+    // ⌥-click takes a chat off the note instead of opening it.
+    const pick = (entry: NoteChatEntry, event: MouseEvent | KeyboardEvent) =>
+      event.altKey ? this.removeNoteChat(file.path, entry.id, entry.title) : void this.openChatById(entry.id, entry.title);
     menu.addItem((item) => {
       item.setTitle(entries.length === 1 ? 'Open its Claude chat' : 'Open a Claude chat about this note').setIcon('bot');
       if (entries.length === 1) {
-        item.onClick(() => void this.openChatById(entries[0].id, entries[0].title));
+        item.onClick((event) => pick(entries[0], event));
         return;
       }
       const submenu = (item as unknown as { setSubmenu(): Menu }).setSubmenu();
+      submenu.addItem((sub) => sub.setTitle('⌥-click takes a chat off this note').setIsLabel(true));
       const open = this.openChats();
       for (const entry of entries) {
         submenu.addItem((sub) =>
           sub
             .setTitle(open.has(entry.id) ? `${entry.title} · open` : entry.title)
             .setIcon(NOTE_CHAT_ICONS[entry.why])
-            .onClick(() => void this.openChatById(entry.id, entry.title)),
+            .onClick((event) => pick(entry, event)),
         );
       }
     });
@@ -1203,6 +1236,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.noteChats = raw.noteChats && typeof raw.noteChats === 'object' ? raw.noteChats : {};
     this.noteRefs = raw.noteRefs && typeof raw.noteRefs === 'object' ? raw.noteRefs : {};
     this.noteMentions = raw.noteMentions && typeof raw.noteMentions === 'object' ? raw.noteMentions : {};
+    this.noteRemoved = raw.noteRemoved && typeof raw.noteRemoved === 'object' ? raw.noteRemoved : {};
     this.drafts = raw.drafts && typeof raw.drafts === 'object' ? raw.drafts : {};
     // A draft of a chat in the panel's list goes with the chat (deleted with it, or dropped with
     // the oldest records); one of a session opened from elsewhere has no such end, so it ages out.
@@ -1230,6 +1264,7 @@ export default class VaultClaudePlugin extends Plugin {
       noteChats: this.noteChats,
       noteRefs: this.noteRefs,
       noteMentions: this.noteMentions,
+      noteRemoved: this.noteRemoved,
       drafts: this.drafts,
       unseen: this.unseen,
       models: this.models,

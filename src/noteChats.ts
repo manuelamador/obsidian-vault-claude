@@ -85,6 +85,16 @@ export function followDraftNotes(
   return changed;
 }
 
+/** Drops chat `chatId` from note `path`. Returns whether the index changed. */
+export function unlinkNote(index: NoteChats, path: string, chatId: string): boolean {
+  const chats = index[path];
+  if (!chats?.includes(chatId)) return false;
+  const left = chats.filter((id) => id !== chatId);
+  if (left.length > 0) index[path] = left;
+  else delete index[path];
+  return true;
+}
+
 /** Drops a chat that no longer exists from every note. */
 export function forgetChat(index: NoteChats, chatId: string): boolean {
   let changed = false;

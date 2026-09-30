@@ -1815,6 +1815,43 @@ async function main(): Promise<void> {
     const openLineOk = oneOfTwo === '2 chats about this note · 1 open' && noneOfTwo === '2 chats about this note' && singleOpen === '1 chat about this note · open';
     console.log(`note chat line marks open chats: ${JSON.stringify([oneOfTwo, noneOfTwo, singleOpen])} -> ${openLineOk}`);
     if (!openLineOk) process.exitCode = 1;
+    // ⌥-click on a chat in the note's list takes it off the note; a plain click opens it.
+    {
+      const taken: string[] = [];
+      const opened: string[] = [];
+      const lineView = view as unknown as Record<string, unknown> & { openNoteChats(evt: unknown): void; updateNoteChats(file: unknown): void };
+      const pluginRec = plugin as unknown as Record<string, unknown>;
+      const pluginWas = { removeNoteChat: pluginRec.removeNoteChat, noteChatEntries: pluginRec.noteChatEntries };
+      pluginRec.removeNoteChat = (path: string, id: string) => void taken.push(`${path}:${id}`);
+      lineView.activeNote = () => ({ file: { path: 'Note.md' } });
+      lineView.openChatId = async (id: string) => void opened.push(id);
+      const listed = (entries: typeof two) => {
+        pluginRec.noteChatEntries = () => entries;
+        lineView.updateNoteChats({ path: 'Note.md', basename: 'Note' });
+      };
+      listed(two);
+      stub.Menu.last = null;
+      lineView.openNoteChats({ altKey: false });
+      const menu = stub.Menu.last as unknown as { items: { title: string; label: boolean; click: ((evt?: unknown) => unknown) | null }[] } | null;
+      const hint = menu?.items[0];
+      const item = (title: string) => menu?.items.find((entry) => entry.title === title);
+      item('Also about it')?.click?.({ altKey: true });
+      item('About the note')?.click?.({ altKey: false });
+      // One chat opens at once on a click; ⌥-click on the line takes it off.
+      listed([two[1]]);
+      lineView.openNoteChats({ altKey: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (const key of ['activeNote', 'openChatId']) delete lineView[key];
+      Object.assign(pluginRec, pluginWas);
+      listed([]);
+      const takeOk =
+        hint?.label === true &&
+        hint.title === '⌥-click takes a chat off this note' &&
+        JSON.stringify(taken) === JSON.stringify(['Note.md:c2', 'Note.md:c2']) &&
+        JSON.stringify(opened) === JSON.stringify(['c1']);
+      console.log(`taking a chat off a note: hint "${hint?.title}"; taken ${JSON.stringify(taken)}; opened ${JSON.stringify(opened)} -> ${takeOk}`);
+      if (!takeOk) process.exitCode = 1;
+    }
 
 
     // The notes a message carries: the active note, mentioned notes and attached selections.

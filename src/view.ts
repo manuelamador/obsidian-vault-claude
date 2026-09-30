@@ -3045,7 +3045,13 @@ export class ChatView extends ItemView {
     this.noteChatsEl.toggle(count > 0);
     if (count === 0) return;
     this.noteChatsEl.setText(text);
-    this.noteChatsEl.setAttr('aria-label', count === 1 ? 'Open it' : 'Choose one to open');
+    this.noteChatsEl.setAttr('aria-label', count === 1 ? 'Open it · ⌥-click to take it off this note' : 'Choose one to open');
+  }
+
+  /** A chat was taken off a note (see VaultClaudePlugin.removeNoteChat): the line above the input is counted again. */
+  noteLinksChanged(): void {
+    this.noteChatsText = null;
+    this.updateContextChip();
   }
 
   /**
@@ -3193,11 +3199,18 @@ export class ChatView extends ItemView {
         this.updateChatButtons();
       });
     };
+    // ⌥-click takes a chat off the note instead.
+    const note = this.activeNote()?.file.path;
+    const pick = (entry: NoteChatEntry, event: MouseEvent | KeyboardEvent) => {
+      if (event.altKey && note) this.plugin.removeNoteChat(note, entry.id, entry.title);
+      else open(entry);
+    };
     if (entries.length === 1) {
-      open(entries[0]);
+      pick(entries[0], evt);
       return;
     }
     const menu = new Menu();
+    menu.addItem((item) => item.setTitle('⌥-click takes a chat off this note').setIsLabel(true));
     const held = this.plugin.openChats();
     const groups: [string, NoteChatEntry[]][] = [
       ['Changed it', entries.filter((entry) => entry.why === 'changed')],
@@ -3209,7 +3222,7 @@ export class ChatView extends ItemView {
       if (labelled) menu.addItem((item) => item.setTitle(label).setIsLabel(true));
       for (const entry of group) {
         const title = held.has(entry.id) ? `${entry.title} · open` : entry.title;
-        menu.addItem((item) => item.setTitle(title).setIcon(NOTE_CHAT_ICONS[entry.why]).onClick(() => open(entry)));
+        menu.addItem((item) => item.setTitle(title).setIcon(NOTE_CHAT_ICONS[entry.why]).onClick((event) => pick(entry, event)));
       }
     }
     menu.showAtMouseEvent(evt);
