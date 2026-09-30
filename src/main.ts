@@ -800,8 +800,7 @@ export default class VaultClaudePlugin extends Plugin {
 
   recordChat(id: string, title: string): void {
     if (this.isPanelChat(id)) return;
-    const now = Date.now();
-    this.chats.unshift({ id, title, createdAt: now, updatedAt: now });
+    this.chats.unshift({ id, title });
     for (const dropped of this.chats.slice(MAX_CHAT_RECORDS)) this.forgetChatData(dropped.id);
     this.chats = this.chats.slice(0, MAX_CHAT_RECORDS);
     void this.saveSettings();
@@ -1025,13 +1024,6 @@ export default class VaultClaudePlugin extends Plugin {
     void this.saveSettings();
   }
 
-  touchChat(id: string): void {
-    const chat = this.chats.find((record) => record.id === id);
-    if (!chat) return;
-    chat.updatedAt = Date.now();
-    void this.saveSettings();
-  }
-
   /** "Edit selection with Claude" for the editor's selection, or for writing at the cursor. */
   async openInlineEdit(editor: Editor, file: TFile): Promise<void> {
     const launch = this.launchOrNotice();
@@ -1171,7 +1163,8 @@ export default class VaultClaudePlugin extends Plugin {
     }
     // Up to 0.13.0 a panel-wide switch, on by default; notes are now attached per chat, and none to start with.
     delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
-    this.chats = Array.isArray(raw.chats) ? raw.chats : [];
+    // Up to 0.21.1 each record also held when it was made and last used, which nothing read.
+    this.chats = Array.isArray(raw.chats) ? raw.chats.map(({ id, title }) => ({ id, title })) : [];
     this.pinned = Array.isArray(raw.pinned) ? raw.pinned : [];
     this.scratch = raw.scratch && typeof raw.scratch.id === 'string' ? raw.scratch : null;
     this.sideSessions = Array.isArray(raw.sideSessions) ? raw.sideSessions.filter((id): id is string => typeof id === 'string') : [];

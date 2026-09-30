@@ -1390,7 +1390,6 @@ export class ChatView extends ItemView {
         } else if (message.type === 'result') {
           entry.busy = false;
           entry.turnPrompts = [];
-          if (entry.chatId) this.plugin.touchChat(entry.chatId);
           for (const id of message.user_message_uuids ?? []) entry.pendingIds.delete(id);
           if (entry.pendingIds.size > 0 && !entry.waitedForQueue) {
             // A queued message not taken up by this turn runs as the next one.
@@ -3705,7 +3704,6 @@ export class ChatView extends ItemView {
           }
         }
         if (this.scratch) this.plugin.touchScratch();
-        else if (this.chatId) this.plugin.touchChat(this.chatId);
         void this.refreshMeters();
         void this.refreshTitle();
         break;

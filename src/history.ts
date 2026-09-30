@@ -9,8 +9,6 @@ import { log } from './log';
 export interface ChatRecord {
   id: string;
   title: string;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface HistoryItem {
@@ -71,12 +69,12 @@ const unrecorded = new Map<string, string | false>();
 const SMALL_SESSION_BYTES = 16 * 1024;
 
 /**
- * When each session last had a prompt or reply (see lastActive), with the time and size of the file
- * it was read from, so that a file is read again only once it has changed. A session file's own time
- * is not its chat's: rows with no message and no time of their own are added to it after the chat
- * (Claude Code's as its process exits; the desktop app's as it starts, which on 2026-09-29 touched ten
- * of its sessions at once and put them at the top of the history). Reading all 118 of the vault's
- * sessions this way took 20 to 40 ms.
+ * When each listed chat last had a prompt or reply (see lastActive), with the time and size of the
+ * file it was read from, so that a file is read again only once it has changed. A session file's own
+ * time is not its chat's: rows with no message and no time of their own are added to it after the
+ * chat (Claude Code's as its process exits; the desktop app's as it starts, which on 2026-09-29
+ * touched ten of its sessions at once and put them at the top of the history). With these reads, the
+ * vault's 117 chats listed as fast as before: about 1 s the first time and 150 ms after.
  */
 const activeAt = new Map<string, { stamp: string; at: number | null }>();
 
@@ -101,21 +99,12 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
   // Those with no prompt: one just starting, or a file of only what Claude Code notes about a
   // session, as a process exiting after its file was deleted writes. Nothing to open; read again next time.
   const empty = new Set<string>();
-  const stamp = ({ lastModified, fileSize }: { lastModified: number; fileSize?: number }) => `${lastModified}:${fileSize ?? ''}`;
-  const listed = new Set(sessions.map((session) => session.sessionId));
-  for (const id of activeAt.keys()) if (!listed.has(id)) activeAt.delete(id);
-  const changed = sessions.filter((session) => activeAt.get(session.sessionId)?.stamp !== stamp(session));
-  await Promise.all([
-    eachInParallel(unread, async ({ sessionId }) => {
-      const first = await firstUserText(sessionId, dir);
-      if (first === null) empty.add(sessionId);
-      else unrecorded.set(sessionId, first.startsWith('<obsidian_context>') ? chatTitle(first) : false);
-    }),
-    eachInParallel(changed, async (session) => {
-      activeAt.set(session.sessionId, { stamp: stamp(session), at: await lastActive(session.sessionId, dir) });
-    }),
-  ]);
-  const items: HistoryItem[] = [];
+  await eachInParallel(unread, async ({ sessionId }) => {
+    const first = await firstUserText(sessionId, dir);
+    if (first === null) empty.add(sessionId);
+    else unrecorded.set(sessionId, first.startsWith('<obsidian_context>') ? chatTitle(first) : false);
+  });
+  const listed: { item: HistoryItem; stamp: string }[] = [];
   for (const session of sessions) {
     if (empty.has(session.sessionId)) continue;
     const record = byId.get(session.sessionId);
@@ -127,34 +116,53 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
       title = panelTitle;
     }
     if (!fromPanel && !includeAll) continue;
-    items.push({
-      id: session.sessionId,
-      title: title ?? chatTitle(session.customTitle ?? session.summary),
-      updatedAt: activeAt.get(session.sessionId)?.at ?? session.lastModified,
-      fromPanel,
+    listed.push({
+      item: { id: session.sessionId, title: title ?? chatTitle(session.customTitle ?? session.summary), updatedAt: session.lastModified, fromPanel },
+      stamp: `${session.lastModified}:${session.fileSize ?? ''}`,
     });
   }
-  return items.sort((a, b) => b.updatedAt - a.updatedAt);
+  // Each listed chat's time, read again only for the files that changed; the file's own time stands
+  // in where its messages cannot be read.
+  const ids = new Set(listed.map(({ item }) => item.id));
+  for (const id of activeAt.keys()) if (!ids.has(id)) activeAt.delete(id);
+  await eachInParallel(
+    listed.filter(({ item, stamp }) => activeAt.get(item.id)?.stamp !== stamp),
+    async ({ item, stamp }) => {
+      const at = await lastActive(item.id, dir);
+      if (at === undefined) activeAt.delete(item.id);
+      else activeAt.set(item.id, { stamp, at });
+    },
+  );
+  return listed.map(({ item }) => ({ ...item, updatedAt: activeAt.get(item.id)?.at ?? item.updatedAt })).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 /** How much of the end of a session file lastActive reads first: its last message is nearly always there. */
 const ACTIVE_TAIL_BYTES = 64 * 1024;
 
-/** When session `id` last had a prompt or reply, from the end of its file (see eachRowFromEnd); null when it has none or cannot be read. */
-async function lastActive(id: string, dir: string): Promise<number | null> {
+/**
+ * When session `id` last had a prompt or reply, from the end of its file (see eachRowFromEnd): null
+ * when it has none, undefined when its file cannot be read. A copy of a chat (see branchChat) counts
+ * from when it was made: the SDK gives the copy's last row the time of copying and every other row
+ * its original's, and that last row may be neither a prompt nor a reply (the end of a turn, say).
+ */
+async function lastActive(id: string, dir: string): Promise<number | null | undefined> {
   let at: number | null = null;
-  await eachRowFromEnd(
+  const read = await eachRowFromEnd(
     id,
     dir,
     (row) => {
-      const time = (row.type === 'user' || row.type === 'assistant') && row.timestamp ? Date.parse(row.timestamp) : NaN;
+      const counts = row.type === 'user' || row.type === 'assistant' || row.forkedFrom !== undefined;
+      const time = counts && row.timestamp ? Date.parse(row.timestamp) : NaN;
       if (!Number.isNaN(time)) at = time;
       return at !== null;
     },
     Infinity,
     ACTIVE_TAIL_BYTES,
-  ).catch(() => false);
-  return at;
+  ).catch((error: unknown) => {
+    log(`reading the end of session ${id} failed`, error);
+    return false;
+  });
+  return read ? at : undefined;
 }
 
 /** The text of a session's first prompt: empty for one with none (an image alone), null when it has no prompt. */
@@ -292,6 +300,8 @@ interface SessionRow {
   toolUseResult?: unknown;
   /** When the row was written, for the rows of a chat's messages; the rows Claude Code adds about a session have none. */
   timestamp?: string;
+  /** In a copy of a chat (see branchChat), the message the row copies. */
+  forkedFrom?: unknown;
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;

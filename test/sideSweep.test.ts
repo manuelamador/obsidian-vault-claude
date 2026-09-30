@@ -26,7 +26,7 @@ test('the startup sweep deletes the side chats left from the last run, but not a
     // Held at the last quit: one left open, one since kept as a chat, and one that never wrote a file.
     const neverWritten = '44444444-4444-4444-8444-444444444444';
     plugin.sideSessions = [left, kept, neverWritten];
-    plugin.chats = [{ id: kept, title: 'Side chat: kept', createdAt: 0, updatedAt: 0 }];
+    plugin.chats = [{ id: kept, title: 'Side chat: kept' }];
     const leftover = [...plugin.sideSessions];
     // A side chat opened after the plugin loaded holds its own session.
     plugin.holdSideSession(opened);

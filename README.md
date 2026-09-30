@@ -2,7 +2,7 @@
 
 An [Obsidian](https://obsidian.md) sidebar chat that runs your locally installed Claude Code in the vault, through the Claude Agent SDK. It uses the same sign-in as the `claude` CLI, so a Claude subscription works without an API key.
 
-Built by **Claude Opus 5** (`claude-opus-5`) in Claude Code.
+Built by **Claude Opus 5** (`claude-opus-5`) and **Claude Opus 5.5** (`claude-opus-5-5`) in Claude Code.
 
 <img src="docs/chat.png" width="800" alt="Obsidian with a note on the Solow model in Live Preview on the left, its callouts and equations rendered, and the Vault Claude panel on the right: the chat title with its save, side-chat and delete buttons, the bar over the chat naming the prompt being answered, a reply with the steady-state equations displayed, a reply embedding a figure from the vault, the note attached above the input, and under the input the notes button showing 2 beside the paperclip">
 
@@ -47,17 +47,17 @@ Open the chat from the robot icon in the left ribbon.
 - A system notification arrives when a long reply finishes or Claude needs approval while Obsidian is in the background.
 
 **Working from notes**
-- **A note's right-click menu:** Ask Claude about selection, Edit selection with Claude (a word diff to accept), and Send to Claude as a prompt.
+- **Right-clicking selected text in a note:** Ask Claude about selection, and Edit with Claude (a word diff to accept).
 
   <img src="docs/editor-menu.png" width="360" alt="A note’s right-click menu on a selection, with Edit with Claude and Ask Claude about selection">
 
   <img src="docs/edit-selection.png" width="560" alt="The Edit selection with Claude dialog after “check the grammar”: the proposed change as a word diff, with Run again, Accept and Cancel">
 
-- **The file explorer's right-click menu:** Attach to Claude, for notes, files and folders.
+- **A file's menu** (right-click in the file explorer, or a note's ⋯ menu): Attach to Claude, for notes, files and folders; for a note, also Send to Claude as a prompt, and Open its Claude chat when it has one.
 
   <img src="docs/note-menu.png" width="240" alt="A note’s file menu, ending with Attach to Claude, Send to Claude as a prompt and Open its Claude chat">
 
-- All of these are also commands.
+- Ask Claude about selection, Edit selection with Claude and Send this note to Claude as a prompt are also commands.
 
 **Controls**
 - **Under the input:** the chat's model, effort and permission mode, and the ⚡ fast-mode toggle. Approvals appear in the chat.
@@ -127,7 +127,7 @@ Open the chat from the robot icon in the left ribbon.
 
 - **Conversations** are Claude Code's own session files, in `~/.claude/projects/` on your computer, outside the vault. Deleting a chat from the history deletes its file.
 - **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings and each chat's title, pin, unsent text, attached note, note links and ticked checkboxes. A chat's entries go when it is deleted. Obsidian Sync copies the file if it syncs plugin settings.
-- **The diagnostic log** records process starts, stops and errors, never message text: `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
+- **The diagnostic log** records process starts, stops and errors, with session ids and paths (the vault's and Claude Code's), never message text: `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
 - Nothing is sent anywhere but through Claude Code itself.
 
 ## Requirements
@@ -213,7 +213,7 @@ Open chat · New chat · New chat in a new tab · Edit selection with Claude · 
 - **"Claude Code executable not found":** install Claude Code with the native installer (see Requirements), or set its path under **Settings → Vault Claude → Claude Code executable**.
 - **A notice that Claude Code is far from the plugin's SDK version:** update Claude Code (`claude update`), or the plugin if Claude Code is ahead.
 - **Windows, with Claude Code installed through npm:** the plugin cannot start `claude.cmd`; install it with the native Windows installer, which provides `claude.exe`.
-- **Anything else:** attach the diagnostic log (see Your data) to a bug report.
+- **Anything else:** attach the diagnostic log (see Your data) to a bug report; it holds your vault's path.
 
 ## License
 

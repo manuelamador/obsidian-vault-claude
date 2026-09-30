@@ -14,9 +14,9 @@ test("a chat is dated by its last prompt or reply, not by rows added to its file
   process.env.CLAUDE_CONFIG_DIR = config;
   // Each message follows the last one written, as Claude Code chains them.
   const last = new Map<string, string>();
-  const row = (id: string, type: 'user' | 'assistant', at: string, text: string) => {
+  const row = (id: string, type: 'user' | 'assistant', at: string, text: string, extra: object = {}) => {
     const uuid = randomUUID();
-    const line = JSON.stringify({ type, uuid, parentUuid: last.get(id) ?? null, sessionId: id, cwd: root, timestamp: at, message: { role: type, content: type === 'user' ? text : [{ type: 'text', text }] } });
+    const line = JSON.stringify({ type, uuid, parentUuid: last.get(id) ?? null, sessionId: id, cwd: root, timestamp: at, message: { role: type, content: type === 'user' ? text : [{ type: 'text', text }] }, ...extra });
     last.set(id, uuid);
     return line;
   };
@@ -41,8 +41,18 @@ test("a chat is dated by its last prompt or reply, not by rows added to its file
     const newer = session('2026-09-10T10:00:00.000Z');
     // A last reply longer than the first read of the file's end.
     const long = session('2026-09-05T10:00:00.000Z', 'x'.repeat(200 * 1024));
-    // All three files were written just now; the chats keep their own dates, newest first.
+    // A copy of a chat, as the SDK writes one: every row keeps its original's time but the last,
+    // which has the time of copying, here the end of a turn.
+    const copy = randomUUID();
+    const copied = { forkedFrom: { sessionId: older, messageUuid: randomUUID() } };
+    const turnEnd = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 1000, uuid: randomUUID(), parentUuid: null, sessionId: copy, timestamp: '2026-09-25T10:00:00.000Z', ...copied });
+    writeFileSync(
+      `${dir}/${copy}.jsonl`,
+      `${row(copy, 'user', '2026-09-02T10:00:00.000Z', 'hi', copied)}\n${row(copy, 'assistant', '2026-09-02T10:00:00.000Z', 'ok', copied)}\n${turnEnd}\n${bookkeeping(copy)}`,
+    );
+    // All four files were written just now; the chats keep their own dates, newest first.
     assert.deepEqual([...(await dates()).entries()], [
+      [copy, '2026-09-25T10:00:00.000Z'],
       [newer, '2026-09-10T10:00:00.000Z'],
       [long, '2026-09-05T10:00:00.000Z'],
       [older, '2026-09-01T10:00:00.000Z'],

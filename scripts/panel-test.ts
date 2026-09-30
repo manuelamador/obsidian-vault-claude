@@ -122,7 +122,6 @@ async function main(): Promise<void> {
     releaseSideSession(id: string) {
       this.sideSessions = this.sideSessions.filter((held) => held !== id);
     },
-    touchChat: () => undefined,
     renameChat: () => undefined,
     commands: [
       { name: 'todosync', description: 'Sync todos with the calendar', argumentHint: '' },
@@ -702,14 +701,14 @@ async function main(): Promise<void> {
     // beneath, three at a time; Enter on "+N more" shows the rest, ⌘↵ on a note opens it.
     {
       const chats = [1, 2, 3, 4, 5].map((n) => ({ id: `c${n}`, title: `Chat ${n}`, updatedAt: n, fromPanel: true }));
-      const kernel = 'Projects/Orchard/Threads/Pruning.md';
+      const pruning = 'Projects/Orchard/Threads/Pruning.md';
       const opened: string[] = [];
       const byNote = new HistoryModal({} as never, chats, Promise.resolve(null), {
         ...historyActions,
         noteLinks: () => ({
-          changed: { [kernel]: ['c4', 'c3', 'c1', 'c2', 'gone'] },
-          sent: { [kernel]: ['c5', 'c4'], 'Reading/Novels.md': ['c2'] },
-          mentioned: { [kernel]: ['c5'], 'Timeline — Garden.md': ['c3'] },
+          changed: { [pruning]: ['c4', 'c3', 'c1', 'c2', 'gone'] },
+          sent: { [pruning]: ['c5', 'c4'], 'Reading/Novels.md': ['c2'] },
+          mentioned: { [pruning]: ['c5'], 'Timeline — Garden.md': ['c3'] },
         }),
         openNote: (path: string) => void opened.push(path),
       });
@@ -738,14 +737,14 @@ async function main(): Promise<void> {
         clicked === 'with:' &&
         noteKeys === '↵ ⌘ ↵ tab' &&
         tabbed === 'with:orchard' &&
-        rowIds(orchard).join() === `note ${kernel},c5 sent,c4 changed,c3 changed,more ${kernel}` &&
-        all.join() === `note ${kernel},note Timeline — Garden.md,note Reading/Novels.md` &&
+        rowIds(orchard).join() === `note ${pruning},c5 sent,c4 changed,c3 changed,more ${pruning}` &&
+        all.join() === `note ${pruning},note Timeline — Garden.md,note Reading/Novels.md` &&
         rowIds(await byNote.getSuggestions('with:timeline')).join() === 'note Timeline — Garden.md,c3 mentioned' &&
-        rowIds(await byNote.getSuggestions('With:orchard 5')).join() === `note ${kernel},c5 sent` &&
+        rowIds(await byNote.getSuggestions('With:orchard 5')).join() === `note ${pruning},c5 sent` &&
         // Every word in the path: all its chats, the note having been opened out above.
         rowIds(await byNote.getSuggestions('with:threads pruning')).length === 6 &&
-        expanded.join() === `note ${kernel},c5 sent,c4 changed,c3 changed,c2 changed,c1 changed` &&
-        JSON.stringify(opened) === JSON.stringify([kernel]) &&
+        expanded.join() === `note ${pruning},c5 sent,c4 changed,c3 changed,c2 changed,c1 changed` &&
+        JSON.stringify(opened) === JSON.stringify([pruning]) &&
         picked.join() === 'c5 new tab,c4';
       console.log(`chats by note: tab ${tabbed}; ${rowIds(orchard).join(' | ')}; all notes ${all.join(' | ')}; after "+N more" ${expanded.length - 1} chats; opened ${opened} -> ${notesOk}`);
       if (!notesOk) process.exitCode = 1;
@@ -1430,7 +1429,7 @@ async function main(): Promise<void> {
     const keepPlugin = plugin as unknown as Record<string, unknown>;
     const pluginWas = { recordChat: keepPlugin.recordChat, openChatById: keepPlugin.openChatById, openChatTab: keepPlugin.openChatTab, chats: keepPlugin.chats };
     keepPlugin.recordChat = (id: string, title: string) => void recorded.push(`${id}:${title}`);
-    keepPlugin.chats = [{ id: 'kept-id', title: 'Side chat: The chat', createdAt: 0, updatedAt: 0 }];
+    keepPlugin.chats = [{ id: 'kept-id', title: 'Side chat: The chat' }];
     keepPlugin.openChatById = async (id: string, title: string) => void openedBy.push(`plugin ${id}:${title}`);
     keepPlugin.openChatTab = async () => ({ openChat: async (item: { id: string; title: string }) => void openedBy.push(`tab ${item.id}:${item.title}`) });
     plugin.sideSessions = ['kept-id'];

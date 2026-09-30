@@ -81,7 +81,7 @@ test('clearing the scratch chat starts the panels showing it over, and deletes i
 test('with no vault folder, deleting a chat says it could not and forgets nothing', async () => {
   const { p, done } = setup();
   p.vaultRoot = () => null;
-  p.chats = [{ id: 'c', title: 'C', createdAt: 0, updatedAt: 0 }];
+  p.chats = [{ id: 'c', title: 'C' }];
   try {
     assert.equal(await p.deleteChat('c'), false);
     assert.equal(p.chats.length, 1);
