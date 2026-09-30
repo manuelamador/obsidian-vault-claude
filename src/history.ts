@@ -71,6 +71,16 @@ const unrecorded = new Map<string, string | false>();
 const SMALL_SESSION_BYTES = 16 * 1024;
 
 /**
+ * When each session last had a prompt or reply (see lastActive), with the time and size of the file
+ * it was read from, so that a file is read again only once it has changed. A session file's own time
+ * is not its chat's: rows with no message and no time of their own are added to it after the chat
+ * (Claude Code's as its process exits; the desktop app's as it starts, which on 2026-09-29 touched ten
+ * of its sessions at once and put them at the top of the history). Reading all 118 of the vault's
+ * sessions this way took 20 to 40 ms.
+ */
+const activeAt = new Map<string, { stamp: string; at: number | null }>();
+
+/**
  * Sessions for the vault directory, newest first; panel chats only unless `includeAll`.
  * A session counts as a panel chat when the plugin recorded it, or when it is an SDK
  * session whose first prompt starts with the panel's context block (chats from before
@@ -91,11 +101,20 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
   // Those with no prompt: one just starting, or a file of only what Claude Code notes about a
   // session, as a process exiting after its file was deleted writes. Nothing to open; read again next time.
   const empty = new Set<string>();
-  await eachInParallel(unread, async ({ sessionId }) => {
-    const first = await firstUserText(sessionId, dir);
-    if (first === null) empty.add(sessionId);
-    else unrecorded.set(sessionId, first.startsWith('<obsidian_context>') ? chatTitle(first) : false);
-  });
+  const stamp = ({ lastModified, fileSize }: { lastModified: number; fileSize?: number }) => `${lastModified}:${fileSize ?? ''}`;
+  const listed = new Set(sessions.map((session) => session.sessionId));
+  for (const id of activeAt.keys()) if (!listed.has(id)) activeAt.delete(id);
+  const changed = sessions.filter((session) => activeAt.get(session.sessionId)?.stamp !== stamp(session));
+  await Promise.all([
+    eachInParallel(unread, async ({ sessionId }) => {
+      const first = await firstUserText(sessionId, dir);
+      if (first === null) empty.add(sessionId);
+      else unrecorded.set(sessionId, first.startsWith('<obsidian_context>') ? chatTitle(first) : false);
+    }),
+    eachInParallel(changed, async (session) => {
+      activeAt.set(session.sessionId, { stamp: stamp(session), at: await lastActive(session.sessionId, dir) });
+    }),
+  ]);
   const items: HistoryItem[] = [];
   for (const session of sessions) {
     if (empty.has(session.sessionId)) continue;
@@ -111,11 +130,31 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
     items.push({
       id: session.sessionId,
       title: title ?? chatTitle(session.customTitle ?? session.summary),
-      updatedAt: session.lastModified,
+      updatedAt: activeAt.get(session.sessionId)?.at ?? session.lastModified,
       fromPanel,
     });
   }
   return items.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** How much of the end of a session file lastActive reads first: its last message is nearly always there. */
+const ACTIVE_TAIL_BYTES = 64 * 1024;
+
+/** When session `id` last had a prompt or reply, from the end of its file (see eachRowFromEnd); null when it has none or cannot be read. */
+async function lastActive(id: string, dir: string): Promise<number | null> {
+  let at: number | null = null;
+  await eachRowFromEnd(
+    id,
+    dir,
+    (row) => {
+      const time = (row.type === 'user' || row.type === 'assistant') && row.timestamp ? Date.parse(row.timestamp) : NaN;
+      if (!Number.isNaN(time)) at = time;
+      return at !== null;
+    },
+    Infinity,
+    ACTIVE_TAIL_BYTES,
+  ).catch(() => false);
+  return at;
 }
 
 /** The text of a session's first prompt: empty for one with none (an image alone), null when it has no prompt. */
@@ -251,6 +290,8 @@ interface SessionRow {
   sessionId?: string;
   message?: { content?: unknown };
   toolUseResult?: unknown;
+  /** When the row was written, for the rows of a chat's messages; the rows Claude Code adds about a session have none. */
+  timestamp?: string;
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;
@@ -318,11 +359,11 @@ const TAIL_BYTES = 256 * 1024;
 
 /**
  * Visits a session file's rows from the last back, until `visit` returns true or `maxBytes` have
- * been read; false when the file cannot be opened. Each read goes further back, twice as far as the
- * last, and each byte is read and parsed once, so a row costs in proportion to its distance from
- * the end.
+ * been read; false when the file cannot be opened. The first read takes the last `firstBytes`, and
+ * each further one goes further back, twice as far as the last; each byte is read and parsed once,
+ * so a row costs in proportion to its distance from the end.
  */
-async function eachRowFromEnd(id: string, dir: string, visit: (row: SessionRow) => boolean, maxBytes = Infinity): Promise<boolean> {
+async function eachRowFromEnd(id: string, dir: string, visit: (row: SessionRow) => boolean, maxBytes = Infinity, firstBytes = TAIL_BYTES): Promise<boolean> {
   let file: fs.FileHandle;
   try {
     file = await fs.open(sessionFile(id, dir), 'r');
@@ -336,7 +377,7 @@ async function eachRowFromEnd(id: string, dir: string, visit: (row: SessionRow) 
     let end = size;
     let cut = Buffer.alloc(0);
     let done = false;
-    for (let length = TAIL_BYTES; end > 0 && !done && size - end < maxBytes; length *= 2) {
+    for (let length = firstBytes; end > 0 && !done && size - end < maxBytes; length *= 2) {
       // Never past `maxBytes` read in all.
       const start = Math.max(0, end - Math.min(length, maxBytes - (size - end)));
       const bytes = Buffer.alloc(end - start);
