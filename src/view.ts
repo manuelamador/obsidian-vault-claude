@@ -419,6 +419,8 @@ export class ChatView extends ItemView {
   /** A subagent's calls in the running reply, until their results: its edits join the reply's changed files. */
   private readonly agentCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
   private lastMarkdownView: MarkdownView | null = null;
+  /** Another kind of view (a canvas, a calendar) is in front in the main area, so no note is (see onActiveLeafChange). */
+  private otherViewInFront = false;
   /** The last selection made in reading view, kept after the click into the panel clears the page's. */
   private readingSelection: { view: MarkdownView; file: TFile; text: string; fromLine: number; toLine: number } | null = null;
   private selectionTimer: number | null = null;
@@ -868,15 +870,11 @@ export class ChatView extends ItemView {
     const sendButton = actions.createEl('button', { text: 'Send', cls: 'mod-cta' });
     this.registerDomEvent(sendButton, 'click', () => void this.send());
 
+    // The main area's tab in front when the panel opens.
     const recent = this.app.workspace.getMostRecentLeaf();
     if (recent?.view instanceof MarkdownView) this.lastMarkdownView = recent.view;
-    this.registerEvent(
-      this.app.workspace.on('active-leaf-change', (leaf) => {
-        if (leaf?.view instanceof MarkdownView) this.lastMarkdownView = leaf.view;
-        this.updateContextChip();
-        this.markSeen();
-      }),
-    );
+    else this.otherViewInFront = recent !== null;
+    this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => this.onActiveLeafChange(leaf)));
     this.registerEvent(this.app.workspace.on('file-open', () => this.updateContextChip()));
     // Selections in the editor and in reading view; redrawn shortly after the selection settles.
     this.registerDomEvent(document, 'selectionchange', () => {
@@ -2857,7 +2855,27 @@ export class ChatView extends ItemView {
     return { prompt: `<obsidian_context>\n${blocks.join('\n\n')}\n</obsidian_context>\n\n${text}`, notes: [...notes] };
   }
 
+  /**
+   * Follows the tab in front. A note becomes the note in front; another kind of view in the main area
+   * or a popout (a canvas, a calendar) leaves none in front; this panel or a sidebar leaves it as it
+   * was, so that a click into the panel keeps the note being asked about. Obsidian's own active file
+   * would not do: it stays the last note while another kind of view is in front.
+   */
+  private onActiveLeafChange(leaf: WorkspaceLeaf | null): void {
+    if (leaf?.view instanceof MarkdownView) {
+      this.lastMarkdownView = leaf.view;
+      this.otherViewInFront = false;
+    } else if (leaf && !(leaf.view instanceof ChatView)) {
+      const { leftSplit, rightSplit } = this.app.workspace;
+      const root = leaf.getRoot();
+      if (root !== leftSplit && root !== rightSplit) this.otherViewInFront = true;
+    }
+    this.updateContextChip();
+    this.markSeen();
+  }
+
   private activeNote(): NoteContext | null {
+    if (this.otherViewInFront) return null;
     const view = this.lastMarkdownView;
     const file = view?.file ?? this.app.workspace.getActiveFile();
     if (!file || file.extension !== 'md') return null;

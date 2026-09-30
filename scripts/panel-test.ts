@@ -397,6 +397,35 @@ async function main(): Promise<void> {
     const detached = !root.querySelector('.vc-context-chip.is-attached') && !!root.querySelector('.vc-context-offer');
     console.log(`note chip: detached by the × ${detached}`);
     if (!detached) process.exitCode = 1;
+    // Another kind of view in front in the main area (a canvas, a calendar) leaves no note in front;
+    // a click into the panel or a sidebar keeps the note, and a note in front again brings it back.
+    {
+      const front = view as unknown as { onActiveLeafChange(leaf: unknown): void };
+      const noteView = Object.assign(Object.create(stub.MarkdownView.prototype), { file: noteFile, getMode: () => 'preview', previewMode: { containerEl: document.createElement('div') } });
+      const mainArea = {};
+      const sidebar = {};
+      (app.workspace as Record<string, unknown>).rightSplit = sidebar;
+      const leaf = (leafView: unknown, leafRoot: unknown) => ({ view: leafView, getRoot: () => leafRoot });
+      const offered = () => root.querySelector('.vc-context-offer .vc-context-name')?.textContent ?? 'none';
+      const seen: string[] = [];
+      front.onActiveLeafChange(leaf(noteView, mainArea));
+      seen.push(offered());
+      front.onActiveLeafChange(leaf({}, mainArea));
+      seen.push(offered());
+      front.onActiveLeafChange(leaf(view, sidebar));
+      seen.push(offered());
+      front.onActiveLeafChange(leaf(noteView, mainArea));
+      front.onActiveLeafChange(leaf({}, sidebar));
+      seen.push(offered());
+      front.onActiveLeafChange(leaf(view, sidebar));
+      seen.push(offered());
+      delete (app.workspace as Record<string, unknown>).rightSplit;
+      const frontOk = JSON.stringify(seen) === JSON.stringify(['Note', 'none', 'none', 'Note', 'Note']);
+      console.log(`note in front: a note, a canvas, the panel, a sidebar, the panel -> ${seen.join(', ')} -> ${frontOk}`);
+      if (!frontOk) process.exitCode = 1;
+      front.onActiveLeafChange(leaf({}, mainArea));
+      front.onActiveLeafChange(leaf(noteView, mainArea));
+    }
     ctx.lastMarkdownView = null;
 
     // Mentions of a folder and of a non-note file go by path.
