@@ -675,6 +675,24 @@ async function main(): Promise<void> {
       return row.classList.contains('is-outside');
     };
     const mutedOk = rowClass({ fromPanel: false }) && !rowClass({ fromPanel: true }) && !rowClass({ fromPanel: true, scratch: true });
+    // Where a chat comes from: started outside the panel, and how often copied, or a copy of one.
+    const rowMeta = (item: object) => {
+      const row = document.createElement('div');
+      modal.renderSuggestion({ kind: 'chat', item: { id: 'x', title: 'X', updatedAt: 1, ...item } } as never, row);
+      return row.querySelector('.vc-muted')?.textContent?.replace(/^\S+ \S+/, '') ?? '';
+    };
+    const copyRows = [
+      rowMeta({ fromPanel: false, copies: [{}, {}] }),
+      rowMeta({ fromPanel: false, copies: [{}] }),
+      rowMeta({ fromPanel: false }),
+      rowMeta({ fromPanel: true, copyOf: 'desk' }),
+      rowMeta({ fromPanel: true }),
+    ];
+    const copyRowsOk =
+      JSON.stringify(copyRows) ===
+      JSON.stringify([' · outside the panel, opens as a copy · copied 2 times', ' · outside the panel, opens as a copy · copied once', ' · outside the panel, opens as a copy', ' · copy of a chat from outside the panel', '']);
+    console.log(`copies in the history: ${JSON.stringify(copyRows)} -> ${copyRowsOk}`);
+    if (!copyRowsOk) process.exitCode = 1;
     // Titles show at once while the texts are still being read; the search runs again once they are in.
     let release: () => void = () => undefined;
     const slowRead = new Promise<void>((resolve) => (release = resolve));
@@ -2991,6 +3009,36 @@ async function main(): Promise<void> {
     const adoptOk = rearmed && closedOnAdopt && adopter.background.size === 0;
     console.log(`adopting a chat: idle one re-armed ${rearmed}; a closing panel closes it ${closedOnAdopt} -> ${adoptOk}`);
     if (!adoptOk) process.exitCode = 1;
+
+    // Opening a chat from outside the panel that was copied before offers its latest copy, whose line
+    // then says it is a copy.
+    {
+      const newer = { id: 'copy-2', title: 'Papers', updatedAt: Date.UTC(2026, 8, 28, 12), fromPanel: true, copyOf: 'desk' };
+      const older = { id: 'copy-1', title: 'Papers', updatedAt: Date.UTC(2026, 8, 17, 12), fromPanel: true, copyOf: 'desk' };
+      const original = { id: 'desk', title: 'Papers', updatedAt: Date.UTC(2026, 8, 20, 12), fromPanel: false, copies: [newer, older] };
+      const copyView = view as unknown as { readForOpening: unknown; openChat(item: unknown): Promise<boolean>; resumeId: string | null; forkOnResume: boolean; messagesEl: HTMLElement };
+      const said = (id: string) => [
+        { type: 'user', uuid: `${id}-u`, session_id: id, parent_tool_use_id: null, message: { role: 'user', content: 'Which papers?' } },
+        { type: 'assistant', uuid: `${id}-a`, session_id: id, parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'These.' }] } },
+      ];
+      copyView.readForOpening = async (id: string) => ({ chat: { transcript: said(id), edits: new Map() }, readMs: 0 });
+      await copyView.openChat(original);
+      const offer = [...copyView.messagesEl.querySelectorAll('.vc-resumed')].pop();
+      const offerText = offer?.textContent ?? '';
+      (offer?.querySelector('.vc-welcome-link') as HTMLElement | null)?.click();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const copyLine = copyView.messagesEl.querySelector('.vc-resumed')?.textContent ?? '';
+      const openedCopy = copyView.resumeId === 'copy-2' && !copyView.forkOnResume;
+      delete (copyView as unknown as Record<string, unknown>).readForOpening;
+      view.newChat();
+      const offerOk =
+        offerText.startsWith('Started outside the panel, and copied before: the latest of your 2 copies was last active') &&
+        offerText.includes('Open that copy. New messages here start another copy') &&
+        openedCopy &&
+        copyLine.endsWith(' · a copy of a chat from outside the panel');
+      console.log(`opening a copied chat: offered "${offerText}"; opened the latest ${openedCopy}, "${copyLine}" -> ${offerOk}`);
+      if (!offerOk) process.exitCode = 1;
+    }
 
     const adopted: unknown[] = [];
     (plugin as { heir: unknown }).heir = { adoptBackground: (entry: unknown) => void adopted.push(entry) };

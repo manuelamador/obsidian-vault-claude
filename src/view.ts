@@ -1873,11 +1873,15 @@ export class ChatView extends ItemView {
     }
     this.messagesEl.createDiv({
       cls: 'vc-muted vc-resumed',
-      text: branch?.scratch ? 'Carried on from the scratch chat' : branch ? `Branch of “${branch.title}”` : `${item.title} · last active ${formatDate(item.updatedAt)}`,
+      text: branch?.scratch
+        ? 'Carried on from the scratch chat'
+        : branch
+          ? `Branch of “${branch.title}”`
+          : `${item.title} · last active ${formatDate(item.updatedAt)}${item.copyOf ? ' · a copy of a chat from outside the panel' : ''}`,
     });
     this.renderHistory(chat, false, read.readMs);
     this.recordMentions();
-    this.messagesEl.createDiv({
+    const end = this.messagesEl.createDiv({
       cls: 'vc-muted vc-resumed',
       text: branch?.scratch
         ? 'New messages continue this chat; the scratch chat is unchanged.'
@@ -1887,6 +1891,15 @@ export class ChatView extends ItemView {
           ? 'New messages continue this chat.'
           : 'Started outside the panel. New messages continue in a copy; the original session is unchanged.',
     });
+    // Copied before: what was said in its copies is not here, so the latest is offered first.
+    const latest = !item.fromPanel ? item.copies?.[0] : undefined;
+    if (latest) {
+      const copies = item.copies?.length ?? 0;
+      end.setText(`Started outside the panel, and copied before: ${copies === 1 ? 'your copy' : `the latest of your ${copies} copies`} was last active ${formatDate(latest.updatedAt)}. `);
+      const link = end.createSpan({ cls: 'vc-welcome-link', text: 'Open that copy' });
+      link.addEventListener('click', () => void this.openChat(latest));
+      end.appendText('. New messages here start another copy; the original session is unchanged.');
+    }
     this.restoreDraft();
     this.seeChat();
     this.scrollToBottom(true);

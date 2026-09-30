@@ -221,7 +221,7 @@ export class HistoryModal extends SuggestModal<Match> {
       meta.createSpan({ cls: `vc-history-status${quiet ? ' is-quiet' : ''}`, text: `${quiet ? '○' : '●'} ${item.status} · ` });
     }
     if (item.scratch) meta.appendText(item.updatedAt ? `${formatDate(item.updatedAt)} · starts over when idle` : 'not used yet · starts over when idle');
-    else meta.appendText(`${formatDate(item.updatedAt)}${item.fromPanel ? '' : ' · outside the panel, opens as a copy'}`);
+    else meta.appendText(`${formatDate(item.updatedAt)}${origin(item)}`);
     if (match.why) {
       meta.appendText(' · ');
       setIcon(meta.createSpan({ cls: 'vc-history-why' }), NOTE_CHAT_ICONS[match.why]);
@@ -356,9 +356,19 @@ function byNote(query: string): boolean {
   return query.toLowerCase().startsWith(NOTES_PREFIX);
 }
 
+/** Where a chat comes from, after its date: started outside the panel (and how often copied), or a copy of one. */
+function origin(item: HistoryItem): string {
+  if (item.copyOf) return ' · copy of a chat from outside the panel';
+  if (item.fromPanel) return '';
+  const copies = item.copies?.length ?? 0;
+  return ` · outside the panel, opens as a copy${copies === 0 ? '' : copies === 1 ? ' · copied once' : ` · copied ${copies} times`}`;
+}
+
 /** What the history shows of its rows, to tell whether a new listing changed any of them. */
 function rowsKey(items: HistoryItem[]): string {
-  return JSON.stringify(items.map((item) => [item.id, item.title, item.updatedAt, item.fromPanel, item.status, item.pinned, item.tasksRunning, item.scratch]));
+  return JSON.stringify(
+    items.map((item) => [item.id, item.title, item.updatedAt, item.fromPanel, item.status, item.pinned, item.tasksRunning, item.scratch, item.copyOf, item.copies?.length]),
+  );
 }
 
 /** Asks before chat `title` is deleted; `fromPanel`: started in the panel, not in Claude Code elsewhere. */

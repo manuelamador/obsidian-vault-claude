@@ -24,6 +24,10 @@ export interface HistoryItem {
   scratch?: boolean;
   /** Set while the chat has tasks running in the background, which the history offers to stop. */
   tasksRunning?: boolean;
+  /** A copy of a chat started outside the panel (see listHistory): that chat's id. */
+  copyOf?: string;
+  /** A chat started outside the panel: the listed copies of it, most recently active first. */
+  copies?: HistoryItem[];
 }
 
 const CONTEXT_BLOCK = /^<obsidian_context>[\s\S]*?<\/obsidian_context>\s*/;
@@ -77,6 +81,17 @@ const SMALL_SESSION_BYTES = 16 * 1024;
  * vault's 117 chats listed as fast as before: about 1 s the first time and 150 ms after.
  */
 const activeAt = new Map<string, { stamp: string; at: number | null }>();
+
+/**
+ * The uuid of each listed session's first prompt; null for one with none within its first
+ * FIRST_PROMPT_BYTES. Claude Code keeps it in the copy it makes of a session resumed as a fork, which
+ * is how the panel continues a chat started elsewhere, so a copy shares its original's (the SDK's own
+ * copies, branches, get new ones). A session's first prompt does not change, so each is read once.
+ */
+const firstPrompts = new Map<string, string | null>();
+
+/** How far into a session file its first prompt is looked for: in the vault's 122, it was at most 600 KB in. */
+const FIRST_PROMPT_BYTES = 1024 * 1024;
 
 /**
  * Sessions for the vault directory, newest first; panel chats only unless `includeAll`.
@@ -133,7 +148,62 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
       else activeAt.set(item.id, { stamp, at });
     },
   );
-  return listed.map(({ item }) => ({ ...item, updatedAt: activeAt.get(item.id)?.at ?? item.updatedAt })).sort((a, b) => b.updatedAt - a.updatedAt);
+  const items = listed.map(({ item }) => ({ ...item, updatedAt: activeAt.get(item.id)?.at ?? item.updatedAt })).sort((a, b) => b.updatedAt - a.updatedAt);
+  await markCopies(items, dir);
+  return items;
+}
+
+/**
+ * Links each chat started outside the panel to the copies of it listed, which opening it in the
+ * panel makes (see ChatView.showSavedChat): they share its first prompt (see firstPrompts). Chats of
+ * the panel's own that share one, a kept side chat and the chat it was opened on, are left alone.
+ */
+async function markCopies(items: HistoryItem[], dir: string): Promise<void> {
+  await eachInParallel(
+    items.filter((item) => !firstPrompts.has(item.id)),
+    async (item) => void firstPrompts.set(item.id, await firstPromptId(item.id, dir)),
+  );
+  const byPrompt = new Map<string, HistoryItem[]>();
+  for (const item of items) {
+    const prompt = firstPrompts.get(item.id);
+    if (prompt) byPrompt.set(prompt, [...(byPrompt.get(prompt) ?? []), item]);
+  }
+  for (const group of byPrompt.values()) {
+    const originals = group.filter((item) => !item.fromPanel);
+    const copies = group.filter((item) => item.fromPanel);
+    if (originals.length === 0 || copies.length === 0) continue;
+    for (const original of originals) original.copies = copies;
+    for (const copy of copies) copy.copyOf = originals[0].id;
+  }
+}
+
+/** The uuid of session `id`'s first prompt (see firstPrompts); null when there is none to read. */
+async function firstPromptId(id: string, dir: string): Promise<string | null> {
+  const file = await fs.open(sessionFile(id, dir), 'r').catch(() => null);
+  if (!file) return null;
+  try {
+    // Lines are split on the newline byte, which never occurs inside a multi-byte character.
+    let rest = Buffer.alloc(0);
+    for (let position = 0; position < FIRST_PROMPT_BYTES; ) {
+      const chunk = Buffer.alloc(64 * 1024);
+      const { bytesRead } = await file.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      let block = Buffer.concat([rest, chunk.subarray(0, bytesRead)]);
+      for (let end = block.indexOf(0x0a); end !== -1; end = block.indexOf(0x0a)) {
+        const row = parseRow(block.subarray(0, end).toString('utf8'));
+        if (row?.type === 'user' && row.uuid) return row.uuid;
+        block = block.subarray(end + 1);
+      }
+      rest = block;
+    }
+    return null;
+  } catch (error) {
+    log(`reading the start of session ${id} failed`, error);
+    return null;
+  } finally {
+    await file.close();
+  }
 }
 
 /** How much of the end of a session file lastActive reads first: its last message is nearly always there. */
