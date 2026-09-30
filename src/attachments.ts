@@ -38,15 +38,14 @@ const MEDIA_TYPES: Record<string, ImageMediaType> = {
   webp: 'image/webp',
 };
 
-export const IMAGE_EXTENSIONS = new Set(Object.keys(MEDIA_TYPES));
-
 // The Messages API rejects images over 5 MB (base64) or 8000 px on a side.
 const MAX_BYTES = 3_750_000;
 const MAX_EDGE = 8000;
 const RESIZE_EDGE = 2576;
 
 export function mimeForExtension(extension: string): ImageMediaType | undefined {
-  return MEDIA_TYPES[extension.toLowerCase()];
+  const key = extension.toLowerCase();
+  return Object.hasOwn(MEDIA_TYPES, key) ? MEDIA_TYPES[key] : undefined;
 }
 
 export function imageDataUrl(image: ImageAttachment): string {

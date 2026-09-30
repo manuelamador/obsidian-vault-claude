@@ -1567,7 +1567,8 @@ button.vc-continue-button:hover span:last-child {
   color: var(--text-normal);
 }
 
-.vc-root.is-drop-target .vc-footer {
+.vc-root.is-drop-target .vc-footer,
+.vc-side-chat.is-drop-target {
   outline: 2px dashed var(--interactive-accent);
   outline-offset: -4px;
 }
@@ -1709,6 +1710,11 @@ button.vc-continue-button:hover span:last-child {
 .vc-side-chat-status {
   padding: 0 var(--size-4-3) var(--size-2-2);
   font-size: var(--font-ui-smaller);
+}
+
+/* Images pasted or dropped, to go with the next question. */
+.vc-side-chat-tray {
+  margin: 0 var(--size-4-2) var(--size-2-2);
 }
 
 .vc-side-chat-input {

@@ -4,8 +4,10 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'crypto';
 import { Component, setIcon } from 'obsidian';
+import { imageFromBlob, toImageBlock, type ImageAttachment } from './attachments';
 import { withQuote } from './chatText';
-import type { ClaudeSession, PermissionRequest, SessionHandlers } from './session';
+import { chipFor, renderChip } from './chip';
+import type { ClaudeSession, PermissionRequest, SessionHandlers, UserContent } from './session';
 
 /** What a side chat needs from the panel. */
 export interface SideChatHost {
@@ -48,6 +50,9 @@ export class SideChat {
   private readonly messages: HTMLElement;
   private readonly input: HTMLTextAreaElement;
   private readonly status: HTMLElement;
+  /** The images to go with the next question (see attach), shown above the input. */
+  private readonly tray: HTMLElement;
+  private images: ImageAttachment[] = [];
   /** The session answering, or the last one if it failed; a new question resumes that one. */
   private run: Run | null = null;
   /** The reply streaming in, drawn as plain text until its message is complete. */
@@ -76,8 +81,19 @@ export class SideChat {
     button('x', 'Close (Esc)', () => this.close());
     this.messages = this.el.createDiv({ cls: 'vc-side-chat-messages' });
     this.status = this.el.createDiv({ cls: 'vc-side-chat-status vc-muted' });
+    this.tray = this.el.createDiv({ cls: 'vc-tray vc-side-chat-tray' });
+    this.tray.hide();
     this.input = this.el.createEl('textarea', { cls: 'vc-side-chat-input', attr: { rows: '2', placeholder: 'Ask about this chat…' } });
     this.el.addEventListener('keydown', (evt) => this.onKey(evt));
+    // Pasted images go with the question; pasted text is left to the input.
+    this.input.addEventListener('paste', (evt) => {
+      const files = Array.from(evt.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'));
+      if (files.length === 0) return;
+      evt.preventDefault();
+      void Promise.all(files.map((file) => imageFromBlob(file, file.name || 'Pasted image'))).then((images) =>
+        this.attach(images.filter((image): image is ImageAttachment => image !== null)),
+      );
+    });
     this.component.load();
   }
 
@@ -99,7 +115,22 @@ export class SideChat {
     this.end('delete');
     this.clear();
     this.input.value = '';
+    this.setImages([]);
     this.el.hide();
+  }
+
+  /** Adds `images` to go with the next question: pasted into its input, or dropped on it (see ChatView.onDrop). */
+  attach(images: ImageAttachment[]): void {
+    if (images.length === 0) return;
+    this.setImages([...this.images, ...images]);
+    this.input.focus();
+  }
+
+  private setImages(images: ImageAttachment[]): void {
+    this.images = images;
+    this.tray.empty();
+    this.tray.toggle(images.length > 0);
+    images.forEach((image, index) => renderChip(this.tray, chipFor(image), () => this.setImages(this.images.filter((_, i) => i !== index))));
   }
 
   /** Empties it and ends its session, deleting its copy; the next question starts a new one. */
@@ -115,11 +146,12 @@ export class SideChat {
       this.showStatus('There is nothing to keep yet.');
       return;
     }
-    // What was typed and not sent goes with the conversation, to the kept chat's input.
+    // What was typed and not sent goes with the conversation, to the kept chat's input; images do not.
     this.host.keep(this.run.id, this.input.value);
     this.end('keep');
     this.clear();
     this.input.value = '';
+    this.setImages([]);
     this.el.hide();
   }
 
@@ -169,20 +201,28 @@ export class SideChat {
 
   private async send(): Promise<void> {
     const text = this.input.value.trim();
+    const images = this.images;
     // Busy from here on, so a second question waits for this one's session.
-    if (!text || this.busy) return;
+    if ((!text && images.length === 0) || this.busy) return;
     const bubble = this.messages.createDiv({ cls: 'vc-side-chat-question' });
-    this.host.renderMarkdown(text, bubble, this.component);
+    if (text) this.host.renderMarkdown(text, bubble, this.component);
+    if (images.length > 0) {
+      const row = bubble.createDiv({ cls: 'vc-user-attachments' });
+      for (const image of images) renderChip(row, chipFor(image));
+    }
     this.input.value = '';
+    this.setImages([]);
     this.setBusy(true);
     this.scrollToEnd();
     const session = this.run?.session ?? (await this.startRun());
     if (session) {
-      session.send(text);
+      const content: UserContent = images.length === 0 ? text : [...images.map(toImageBlock), ...(text ? [{ type: 'text' as const, text }] : [])];
+      session.send(content);
     } else if (bubble.isConnected) {
-      // It could not start: the question goes back to the input.
+      // It could not start: the question goes back to the input, with its images.
       bubble.remove();
       this.input.value = text;
+      this.setImages([...images, ...this.images]);
       this.setBusy(false);
       this.showStatus('');
     }

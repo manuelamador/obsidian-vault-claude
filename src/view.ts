@@ -30,9 +30,7 @@ import type {
 import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, loadTranscript, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
-  IMAGE_EXTENSIONS,
   filePathOf,
-  imageDataUrl,
   imageFromBlob,
   mimeForExtension,
   toImageBlock,
@@ -41,6 +39,7 @@ import {
   type ImageAttachment,
   type SelectionAttachment,
 } from './attachments';
+import { chipFor, renderChip } from './chip';
 import { FindBar } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -77,7 +76,6 @@ import {
   startsTurn,
   withQuote,
   replyKey,
-  selectionLabel,
   type BranchSource,
   type Chip,
   type ContentBlock,
@@ -831,17 +829,22 @@ export class ChatView extends ItemView {
     this.populateModelSelect();
 
     // Files dropped anywhere on the panel: from Finder, or from Obsidian's file explorer.
+    // Over an open side chat, the drop is the side chat's, and it is the one outlined.
+    const outline = (side: boolean | null) => {
+      root.toggleClass('is-drop-target', side === false);
+      this.sideChat.el.toggleClass('is-drop-target', side === true);
+    };
     this.registerDomEvent(root, 'dragover', (evt) => {
       if (!this.isFileDrag(evt)) return;
       evt.preventDefault();
       if (evt.dataTransfer) evt.dataTransfer.dropEffect = 'copy';
-      root.addClass('is-drop-target');
+      outline(this.overSideChat(evt));
     });
     this.registerDomEvent(root, 'dragleave', (evt) => {
-      if (!root.contains(evt.relatedTarget as Node | null)) root.removeClass('is-drop-target');
+      if (!root.contains(evt.relatedTarget as Node | null)) outline(null);
     });
     this.registerDomEvent(root, 'drop', (evt) => {
-      root.removeClass('is-drop-target');
+      outline(null);
       if (!this.isFileDrag(evt)) return;
       evt.preventDefault();
       evt.stopPropagation();
@@ -2513,30 +2516,11 @@ export class ChatView extends ItemView {
     this.trayEl.empty();
     this.trayEl.toggle(this.attachments.length > 0);
     this.attachments.forEach((attachment, index) => {
-      this.renderChip(this.trayEl, this.chipFor(attachment), () => {
+      renderChip(this.trayEl, chipFor(attachment), () => {
         this.attachments.splice(index, 1);
         this.renderTray();
       });
     });
-  }
-
-  private chipFor(attachment: Attachment): Chip {
-    if (attachment.kind === 'image') return { label: attachment.name, image: imageDataUrl(attachment) };
-    if (attachment.kind === 'selection') {
-      return { label: selectionLabel(attachment.name, lineRange(attachment.fromLine, attachment.toLine)), icon: 'text-select' };
-    }
-    return { label: attachment.name };
-  }
-
-  private renderChip(parent: HTMLElement, chip: Chip, onRemove?: () => void): void {
-    const el = parent.createDiv({ cls: 'vc-chip', attr: { title: chip.label } });
-    if (chip.image) el.createEl('img', { attr: { src: chip.image, alt: chip.label } });
-    else setIcon(el.createSpan({ cls: 'vc-chip-icon' }), chip.icon ?? 'file');
-    el.createSpan({ cls: 'vc-chip-label', text: chip.label });
-    if (onRemove) {
-      const remove = el.createSpan({ cls: 'vc-chip-remove', text: '×', attr: { 'aria-label': `Remove ${chip.label}` } });
-      remove.addEventListener('click', onRemove);
-    }
   }
 
   /** `uuid`: the message's own, in the chat's file; with it, the bubble offers to copy the chat from it on. */
@@ -2558,7 +2542,7 @@ export class ChatView extends ItemView {
     }
     if (chips.length > 0) {
       const row = bubble.createDiv({ cls: 'vc-user-attachments' });
-      for (const chip of chips) this.renderChip(row, chip);
+      for (const chip of chips) renderChip(row, chip);
     }
     return bubble;
   }
@@ -2604,16 +2588,19 @@ export class ChatView extends ItemView {
       this.inputEl.focus();
       return;
     }
-    const mediaType = IMAGE_EXTENSIONS.has(file.extension.toLowerCase()) ? mimeForExtension(file.extension) : undefined;
-    if (mediaType) {
-      const image = await imageFromBlob(new Blob([await this.app.vault.readBinary(file)], { type: mediaType }), file.name);
-      if (image) {
-        this.addAttachment(image);
-        return;
-      }
+    const image = await this.vaultImage(file);
+    if (image) {
+      this.addAttachment(image);
+      return;
     }
     const root = this.plugin.vaultRoot();
     this.addAttachment({ kind: 'file', name: file.name, path: root ? joinPath(root, file.path) : file.path });
+  }
+
+  /** A vault image as an attachment; null for any other file, or an image that cannot be read. */
+  private async vaultImage(file: TFile): Promise<ImageAttachment | null> {
+    const mediaType = mimeForExtension(file.extension);
+    return mediaType ? imageFromBlob(new Blob([await this.app.vault.readBinary(file)], { type: mediaType }), file.name) : null;
   }
 
   /** Files being dragged from Obsidian's file explorer (its drag manager is not in the public API). */
@@ -2634,11 +2621,38 @@ export class ChatView extends ItemView {
     // Both sources are read before the first await: the drag state is cleared once the drop ends.
     const vaultFiles = this.draggedVaultFiles();
     const external = Array.from(evt.dataTransfer?.files ?? []);
+    if (this.overSideChat(evt)) {
+      await this.dropOnSideChat(vaultFiles, external);
+      return;
+    }
     if (vaultFiles.length > 0) {
       for (const file of vaultFiles) await this.attachVaultFile(file);
     } else {
       await this.attachExternalFiles(external);
     }
+  }
+
+  /** Whether a drag is over the side chat, open: what is dropped there is its own. */
+  private overSideChat(evt: DragEvent): boolean {
+    return this.sideChat.isOpen() && this.sideChat.el.contains(evt.target as Node | null);
+  }
+
+  /** Images dropped on the side chat go with its next question; it takes no other files. */
+  private async dropOnSideChat(vaultFiles: TFile[], external: File[]): Promise<void> {
+    const images: ImageAttachment[] = [];
+    const others: string[] = [];
+    for (const file of vaultFiles) {
+      const image = await this.vaultImage(file);
+      if (image) images.push(image);
+      else others.push(file.name);
+    }
+    for (const file of external) {
+      const image = file.type.startsWith('image/') ? await imageFromBlob(file, file.name || 'Dropped image') : null;
+      if (image) images.push(image);
+      else others.push(file.name);
+    }
+    this.sideChat.attach(images);
+    if (others.length > 0) new Notice(`The side chat takes images only; left out: ${others.join(', ')}.`);
   }
 
   // ---- Sending -----------------------------------------------------------
@@ -2661,7 +2675,7 @@ export class ChatView extends ItemView {
     this.saveDraft();
     this.suggest.hide();
     this.messagesEl.querySelector('.vc-welcome')?.remove();
-    const chips = attachments.map((attachment) => this.chipFor(attachment));
+    const chips = attachments.map(chipFor);
     const uuid = crypto.randomUUID();
     // Sent while Claude works: shown where the conversation is now, marked until a turn takes it up.
     const queued = this.busy;

@@ -36,7 +36,7 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/quote-button.png" width="480" alt="Text selected in a reply, with an equation in it, and the Quote button just above it">
 
-- **Side chat:** ask about the chat without changing it, from the button beside Quote or beside the chat title. It knows the conversation so far, runs in Plan mode so it changes nothing, and is deleted when closed unless you choose **Keep as a chat**.
+- **Side chat:** ask about the chat without changing it, from the button beside Quote or beside the chat title. Paste or drop images on it to ask about them. It knows the conversation so far, runs in Plan mode so it changes nothing, and is deleted when closed unless you choose **Keep as a chat**.
 
   <img src="docs/side-chat.png" width="520" alt="A side chat open over the right of a chat about a Solow-model note: a quoted passage and the question “what is the main cite/reference for this model?”, answered with Solow (1956) and Swan (1956)">
 

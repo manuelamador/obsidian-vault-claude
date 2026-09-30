@@ -1420,6 +1420,71 @@ async function main(): Promise<void> {
       `side chat keep ${JSON.stringify(sideKept) === sideIds(1)}, with its unsent text ${unsentCarried}, after its process ended ${keptBeforeEnd === 0} (too soon: ${JSON.stringify(keepNothing)}, ${JSON.stringify(keepUnstarted)}); start over ${startedOver}; failed ${JSON.stringify(failedStatus)}, then resumed its own ${resumedOwn}; failed before starting: replaced and deleted ${replaced}; new chat closes and deletes ${newChatOk}; closed while starting ${closedWhileStarting}; unable to start, gives the question back ${gaveBack} -> ${sideRestOk}`,
     );
     if (!sideRestOk) process.exitCode = 1;
+
+    // Images: pasted into the side chat's input, or dropped on it, go with its question as image
+    // blocks; it takes no other files, and a drop elsewhere on the panel is the chat's.
+    {
+      sideView.startSideSession = startNow;
+      const globals = globalThis as { createImageBitmap?: unknown };
+      const bitmapBefore = globals.createImageBitmap;
+      globals.createImageBitmap = async () => ({ width: 10, height: 10, close() {} });
+      const sideRoot = side.closest('.vc-root') as HTMLElement;
+      const file = (name: string, type: string) => new File([new Uint8Array([137, 80, 78, 71])], name, { type });
+      const withData = (type: string, key: string, value: unknown, target: HTMLElement) => {
+        const evt = new dom.window.Event(type, { cancelable: true, bubbles: true });
+        Object.defineProperty(evt, key, { value });
+        target.dispatchEvent(evt);
+        return evt;
+      };
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+      sideView.openSideChat();
+      const pasted = withData('paste', 'clipboardData', { files: [file('shot.png', 'image/png')] }, sideInput);
+      const textPaste = withData('paste', 'clipboardData', { files: [] }, sideInput);
+      await settle();
+      withData('dragover', 'dataTransfer', { types: ['Files'], files: [] }, sideInput);
+      const outlined = side.classList.contains('is-drop-target') && !sideRoot.classList.contains('is-drop-target');
+      const said: string[] = [];
+      const realLog = console.log;
+      console.log = (...parts: unknown[]) => void said.push(parts.join(' '));
+      withData('drop', 'dataTransfer', { types: ['Files'], files: [file('plot.jpg', 'image/jpeg'), file('paper.pdf', 'application/pdf')] }, sideInput);
+      await settle();
+      console.log = realLog;
+      const outlineGone = !side.classList.contains('is-drop-target');
+      const sideTray = () => [...side.querySelectorAll('.vc-side-chat-tray .vc-chip-label')].map((el) => el.textContent).join();
+      const trayBefore = sideTray();
+      const mainTray = () => [...sideRoot.querySelectorAll('.vc-tray:not(.vc-side-chat-tray) .vc-chip-label')].map((el) => el.textContent).join();
+      const mainBefore = mainTray();
+      sideInput.value = 'What is in these?';
+      sideKey('Enter', true);
+      await tick();
+      const imaged = sideSessions[sideSessions.length - 1];
+      imaged.started();
+      const sent = imaged.sent[0] as { type: string; source?: { media_type?: string }; text?: string }[];
+      const bubbleImages = side.querySelectorAll('.vc-side-chat-question .vc-chip img').length;
+      // A drop on the chat itself, beside the side chat, still goes to the chat's own tray.
+      withData('drop', 'dataTransfer', { types: ['Files'], files: [file('other.png', 'image/png')] }, sideRoot.querySelector('.vc-footer') as HTMLElement);
+      await settle();
+      const mainAfter = mainTray();
+      (sideRoot.querySelector('.vc-tray:not(.vc-side-chat-tray) .vc-chip-remove') as HTMLElement | null)?.click();
+      sideButton('Close (Esc)');
+      globals.createImageBitmap = bitmapBefore;
+      const imagesOk =
+        pasted.defaultPrevented &&
+        !textPaste.defaultPrevented &&
+        outlined &&
+        outlineGone &&
+        trayBefore === 'shot.png,plot.jpg' &&
+        said.some((line) => line.includes('left out: paper.pdf')) &&
+        mainBefore === '' &&
+        JSON.stringify(sent.map((block) => block.source?.media_type ?? block.text)) === JSON.stringify(['image/png', 'image/jpeg', 'What is in these?']) &&
+        sideTray() === '' &&
+        bubbleImages === 2 &&
+        mainAfter === 'other.png';
+      console.log(
+        `side chat images: tray ${trayBefore}; sent ${JSON.stringify(sent.map((block) => block.source?.media_type ?? block.text))}; in the question ${bubbleImages}; outlined over it ${outlined}; a pdf ${said.some((line) => line.includes('left out: paper.pdf')) ? 'refused' : 'taken'}; a drop beside it went to the chat ${mainAfter} -> ${imagesOk}`,
+      );
+      if (!imagesOk) process.exitCode = 1;
+    }
     for (const key of ['startSideSession', 'deleteSideSession', 'keepSideChat', 'openKeptSideChat']) delete (sideView as unknown as Record<string, unknown>)[key];
 
     // Keeping records the chat at once, named after the chat it was opened from and let go of by the
