@@ -10,6 +10,7 @@ import {
   Scope,
   TFile,
   TFolder,
+  View,
   normalizePath,
   setIcon,
   type TAbstractFile,
@@ -419,7 +420,7 @@ export class ChatView extends ItemView {
   /** A subagent's calls in the running reply, until their results: its edits join the reply's changed files. */
   private readonly agentCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
   private lastMarkdownView: MarkdownView | null = null;
-  /** Another kind of view (a canvas, a calendar) is in front in the main area, so no note is (see onActiveLeafChange). */
+  /** Another kind of view (a canvas, a calendar) is in front in the main area, so no note is (see followFront). */
   private otherViewInFront = false;
   /** The last selection made in reading view, kept after the click into the panel clears the page's. */
   private readingSelection: { view: MarkdownView; file: TFile; text: string; fromLine: number; toLine: number } | null = null;
@@ -871,11 +872,17 @@ export class ChatView extends ItemView {
     this.registerDomEvent(sendButton, 'click', () => void this.send());
 
     // The main area's tab in front when the panel opens.
-    const recent = this.app.workspace.getMostRecentLeaf();
-    if (recent?.view instanceof MarkdownView) this.lastMarkdownView = recent.view;
-    else this.otherViewInFront = recent !== null;
-    this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => this.onActiveLeafChange(leaf)));
-    this.registerEvent(this.app.workspace.on('file-open', () => this.updateContextChip()));
+    this.followFront(this.app.workspace.getMostRecentLeaf());
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', (leaf) => {
+        this.followFront(leaf);
+        this.updateContextChip();
+        this.markSeen();
+      }),
+    );
+    // A tab can change what it shows in place (a note opened from a canvas in its own tab), which
+    // changes no leaf: what is in front is looked at again.
+    this.registerEvent(this.app.workspace.on('file-open', () => this.followActiveLeaf()));
     // Selections in the editor and in reading view; redrawn shortly after the selection settles.
     this.registerDomEvent(document, 'selectionchange', () => {
       if (this.selectionTimer !== null) window.clearTimeout(this.selectionTimer);
@@ -1875,7 +1882,7 @@ export class ChatView extends ItemView {
         ? 'Carried on from the scratch chat'
         : branch
           ? `Branch of “${branch.title}”`
-          : `${item.title} · last active ${formatDate(item.updatedAt)}${item.copyOf ? ' · a copy of a chat from outside the panel' : ''}`,
+          : `${item.title} · last active ${formatDate(item.updatedAt)}${item.copied ? ' · a copy of a chat from outside the panel' : ''}`,
     });
     this.renderHistory(chat, false, read.readMs);
     this.recordMentions();
@@ -2857,11 +2864,17 @@ export class ChatView extends ItemView {
 
   /**
    * Follows the tab in front. A note becomes the note in front; another kind of view in the main area
-   * or a popout (a canvas, a calendar) leaves none in front; this panel or a sidebar leaves it as it
-   * was, so that a click into the panel keeps the note being asked about. Obsidian's own active file
-   * would not do: it stays the last note while another kind of view is in front.
+   * or a popout (a canvas, a calendar) leaves none in front; a Claude panel or a sidebar leaves it as
+   * it was, so that a click into the panel keeps the note being asked about. Obsidian's own active
+   * file would not do: it stays the last note while another kind of view is in front.
    */
-  private onActiveLeafChange(leaf: WorkspaceLeaf | null): void {
+  /** Looks again at the tab in front, which a tab showing something else in place does not announce. */
+  private followActiveLeaf(): void {
+    this.followFront(this.app.workspace.getActiveViewOfType(View)?.leaf ?? null);
+    this.updateContextChip();
+  }
+
+  private followFront(leaf: WorkspaceLeaf | null): void {
     if (leaf?.view instanceof MarkdownView) {
       this.lastMarkdownView = leaf.view;
       this.otherViewInFront = false;
@@ -2870,8 +2883,6 @@ export class ChatView extends ItemView {
       const root = leaf.getRoot();
       if (root !== leftSplit && root !== rightSplit) this.otherViewInFront = true;
     }
-    this.updateContextChip();
-    this.markSeen();
   }
 
   private activeNote(): NoteContext | null {
@@ -3606,13 +3617,15 @@ export class ChatView extends ItemView {
       case 'system':
         if (message.subtype === 'init') {
           const draftWas = this.draftKey();
+          // A chat from outside the panel, copied as it resumes: the copy names it.
+          const copyOf = this.forkOnResume ? (this.resumeId ?? undefined) : undefined;
           this.resumeId = message.session_id;
           // A fork has its own id now; resuming it later (after a crash) must not fork again.
           this.forkOnResume = false;
           if (this.chatId !== message.session_id) {
             this.chatId = message.session_id;
             if (this.scratch) this.plugin.setScratch(message.session_id);
-            else this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat');
+            else this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf);
           }
           this.moveDraft(draftWas);
           this.linkSentNotes([]);

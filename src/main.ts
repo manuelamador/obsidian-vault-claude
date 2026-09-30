@@ -370,7 +370,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.listing ??= (async () => {
       const started = performance.now();
       try {
-        const listed = await listHistory(dir, this.chats, this.settings.historyIncludesAllSessions);
+        const listed = await listHistory(dir, this.chats, this.settings.historyIncludesAllSessions, new Set(this.sideSessions));
         // A chat deleted while this listing ran, or whose file is still there, is not listed again.
         const found = new Set(listed.map((item) => item.id));
         for (const id of this.unlisted) if (!found.has(id)) this.unlisted.delete(id);
@@ -408,7 +408,13 @@ export default class VaultClaudePlugin extends Plugin {
    */
   private unlist(id: string): void {
     this.unlisted.add(id);
-    if (this.lastListing) this.lastListing = this.lastListing.filter((item) => item.id !== id);
+    if (!this.lastListing) return;
+    this.lastListing = this.lastListing.filter((item) => item.id !== id);
+    // Nor is it offered as a copy. In place: the history's rows share these lists.
+    for (const item of this.lastListing) {
+      const at = item.copies?.findIndex((copy) => copy.id === id) ?? -1;
+      if (at !== -1) item.copies?.splice(at, 1);
+    }
   }
 
   /**
@@ -798,9 +804,15 @@ export default class VaultClaudePlugin extends Plugin {
     return this.chats.some((chat) => chat.id === id);
   }
 
-  recordChat(id: string, title: string): void {
+  /**
+   * Records a chat started in the panel; `copyOf`: it is the copy of a chat started outside the panel
+   * made by sending a message there, which is then offered with it at once (see listHistory).
+   */
+  recordChat(id: string, title: string, copyOf?: string): void {
     if (this.isPanelChat(id)) return;
-    this.chats.unshift({ id, title });
+    this.chats.unshift(copyOf ? { id, title, copyOf } : { id, title });
+    const original = copyOf ? this.lastListing?.find((item) => item.id === copyOf) : undefined;
+    if (original) (original.copies ??= []).unshift({ id, title, updatedAt: Date.now(), fromPanel: true, copied: true });
     for (const dropped of this.chats.slice(MAX_CHAT_RECORDS)) this.forgetChatData(dropped.id);
     this.chats = this.chats.slice(0, MAX_CHAT_RECORDS);
     void this.saveSettings();
@@ -977,10 +989,11 @@ export default class VaultClaudePlugin extends Plugin {
     });
   }
 
-  /** Opens a chat by its session id in the panel. */
+  /** Opens a chat by its session id in the panel, as listed when it was (its copies with it). */
   async openChatById(id: string, title: string): Promise<void> {
     const view = await this.activateView();
-    await view?.openChat({ id, title, updatedAt: Date.now(), fromPanel: this.isPanelChat(id) });
+    const listed = this.lastListing?.find((item) => item.id === id);
+    await view?.openChat(listed ? { ...listed, title } : { id, title, updatedAt: Date.now(), fromPanel: this.isPanelChat(id) });
   }
 
   async deleteChat(id: string): Promise<boolean> {
@@ -1164,7 +1177,7 @@ export default class VaultClaudePlugin extends Plugin {
     // Up to 0.13.0 a panel-wide switch, on by default; notes are now attached per chat, and none to start with.
     delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
     // Up to 0.21.1 each record also held when it was made and last used, which nothing read.
-    this.chats = Array.isArray(raw.chats) ? raw.chats.map(({ id, title }) => ({ id, title })) : [];
+    this.chats = Array.isArray(raw.chats) ? raw.chats.map(({ id, title, copyOf }) => ({ id, title, ...(typeof copyOf === 'string' ? { copyOf } : {}) })) : [];
     this.pinned = Array.isArray(raw.pinned) ? raw.pinned : [];
     this.scratch = raw.scratch && typeof raw.scratch.id === 'string' ? raw.scratch : null;
     this.sideSessions = Array.isArray(raw.sideSessions) ? raw.sideSessions.filter((id): id is string => typeof id === 'string') : [];

@@ -9,6 +9,8 @@ import { log } from './log';
 export interface ChatRecord {
   id: string;
   title: string;
+  /** For a copy of a chat started outside the panel, made by sending a message in it: that chat's id. */
+  copyOf?: string;
 }
 
 export interface HistoryItem {
@@ -24,8 +26,8 @@ export interface HistoryItem {
   scratch?: boolean;
   /** Set while the chat has tasks running in the background, which the history offers to stop. */
   tasksRunning?: boolean;
-  /** A copy of a chat started outside the panel (see listHistory): that chat's id. */
-  copyOf?: string;
+  /** A copy of a chat started outside the panel (see markCopies). */
+  copied?: boolean;
   /** A chat started outside the panel: the listed copies of it, most recently active first. */
   copies?: HistoryItem[];
 }
@@ -83,12 +85,13 @@ const SMALL_SESSION_BYTES = 16 * 1024;
 const activeAt = new Map<string, { stamp: string; at: number | null }>();
 
 /**
- * The uuid of each listed session's first prompt; null for one with none within its first
- * FIRST_PROMPT_BYTES. Claude Code keeps it in the copy it makes of a session resumed as a fork, which
- * is how the panel continues a chat started elsewhere, so a copy shares its original's (the SDK's own
- * copies, branches, get new ones). A session's first prompt does not change, so each is read once.
+ * The uuid of each listed session's first prompt, with the time and size of the file it was read
+ * from; null for one with none within its first FIRST_PROMPT_BYTES, read again once the file has
+ * changed (it may still have been being written). Claude Code keeps the uuid in the copy it makes of a
+ * session resumed as a fork, which is how the panel continued a chat started elsewhere, so a copy
+ * shares its original's (the SDK's own copies, branches, get new ones).
  */
-const firstPrompts = new Map<string, string | null>();
+const firstPrompts = new Map<string, { stamp: string; prompt: string | null }>();
 
 /** How far into a session file its first prompt is looked for: in the vault's 122, it was at most 600 KB in. */
 const FIRST_PROMPT_BYTES = 1024 * 1024;
@@ -99,7 +102,7 @@ const FIRST_PROMPT_BYTES = 1024 * 1024;
  * session whose first prompt starts with the panel's context block (chats from before
  * recording began; ones sent without a note open cannot be told apart and are left out).
  */
-export async function listHistory(dir: string, records: ChatRecord[], includeAll: boolean): Promise<HistoryItem[]> {
+export async function listHistory(dir: string, records: ChatRecord[], includeAll: boolean, sideSessions: ReadonlySet<string> = new Set()): Promise<HistoryItem[]> {
   const [sessions, interactive] = await Promise.all([
     listSessions({ dir, includeWorktrees: false }),
     listSessions({ dir, includeWorktrees: false, includeProgrammatic: false }),
@@ -148,33 +151,61 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
       else activeAt.set(item.id, { stamp, at });
     },
   );
+  const stamps = new Map(listed.map(({ item, stamp }) => [item.id, stamp]));
   const items = listed.map(({ item }) => ({ ...item, updatedAt: activeAt.get(item.id)?.at ?? item.updatedAt })).sort((a, b) => b.updatedAt - a.updatedAt);
-  await markCopies(items, dir);
+  await markCopies(items, byId, stamps, sideSessions, dir);
   return items;
 }
 
 /**
- * Links each chat started outside the panel to the copies of it listed, which opening it in the
- * panel makes (see ChatView.showSavedChat): they share its first prompt (see firstPrompts). Chats of
- * the panel's own that share one, a kept side chat and the chat it was opened on, are left alone.
+ * Marks the copies of chats started outside the panel and links each such chat to the copies of it
+ * listed. A copy made since 0.22.0 names its original in its record; an older one is told by sharing
+ * its original's first prompt (see firstPrompts), and is linked only when one listed chat from outside
+ * the panel has that prompt: a chat forked in the desktop app shares it too, and a copy of either
+ * cannot then be told apart. Chats of the panel's own that share a first prompt (a kept side chat and
+ * the chat it was opened on) are not copies; side chats still open (`sideSessions`) are left out.
  */
-async function markCopies(items: HistoryItem[], dir: string): Promise<void> {
-  await eachInParallel(
-    items.filter((item) => !firstPrompts.has(item.id)),
-    async (item) => void firstPrompts.set(item.id, await firstPromptId(item.id, dir)),
-  );
-  const byPrompt = new Map<string, HistoryItem[]>();
+async function markCopies(
+  items: HistoryItem[],
+  records: Map<string, ChatRecord>,
+  stamps: Map<string, string>,
+  sideSessions: ReadonlySet<string>,
+  dir: string,
+): Promise<void> {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const link = (copy: HistoryItem, original: HistoryItem | undefined) => {
+    copy.copied = true;
+    if (original) (original.copies ??= []).push(copy);
+  };
+  const unrecorded: HistoryItem[] = [];
   for (const item of items) {
-    const prompt = firstPrompts.get(item.id);
-    if (prompt) byPrompt.set(prompt, [...(byPrompt.get(prompt) ?? []), item]);
+    const copyOf = records.get(item.id)?.copyOf;
+    if (copyOf) link(item, byId.get(copyOf));
+    else if (item.fromPanel) unrecorded.push(item);
   }
-  for (const group of byPrompt.values()) {
-    const originals = group.filter((item) => !item.fromPanel);
-    const copies = group.filter((item) => item.fromPanel);
-    if (originals.length === 0 || copies.length === 0) continue;
-    for (const original of originals) original.copies = copies;
-    for (const copy of copies) copy.copyOf = originals[0].id;
+  // Older copies, by first prompt: read only when a chat from outside the panel is listed to match.
+  const outside = items.filter((item) => !item.fromPanel && !sideSessions.has(item.id));
+  for (const id of firstPrompts.keys()) if (!byId.has(id)) firstPrompts.delete(id);
+  if (outside.length > 0 && unrecorded.length > 0) {
+    const toRead = [...outside, ...unrecorded].filter((item) => {
+      const kept = firstPrompts.get(item.id);
+      return !kept || (kept.prompt === null && kept.stamp !== stamps.get(item.id));
+    });
+    await eachInParallel(toRead, async (item) => {
+      firstPrompts.set(item.id, { stamp: stamps.get(item.id) ?? '', prompt: await firstPromptId(item.id, dir) });
+    });
+    const originals = new Map<string, HistoryItem[]>();
+    for (const item of outside) {
+      const prompt = firstPrompts.get(item.id)?.prompt;
+      if (prompt) originals.set(prompt, [...(originals.get(prompt) ?? []), item]);
+    }
+    for (const item of unrecorded) {
+      const prompt = firstPrompts.get(item.id)?.prompt;
+      const sharing = prompt ? originals.get(prompt) : undefined;
+      if (sharing) link(item, sharing.length === 1 ? sharing[0] : undefined);
+    }
   }
+  for (const item of items) item.copies?.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 /** The uuid of session `id`'s first prompt (see firstPrompts); null when there is none to read. */

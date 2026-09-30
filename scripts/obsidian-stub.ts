@@ -108,7 +108,10 @@ export class Component {
 /** Properties Obsidian's ItemView sets in its constructor; a subclass field with one of these names overwrites them. */
 export const ITEM_VIEW_PROPERTIES = ['app', 'leaf', 'containerEl', 'contentEl', 'headerEl', 'titleEl', 'titleContainerEl', 'titleParentEl', 'actionsEl', 'iconEl', 'navigation', 'icon', 'scope'];
 
-export class ItemView extends Component {
+/** Every view: the panel asks the workspace for the active one of this type, which is any. */
+export class View extends Component {}
+
+export class ItemView extends View {
   app: unknown;
   containerEl: HTMLElement;
   headerEl: HTMLElement;

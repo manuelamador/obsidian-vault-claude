@@ -72,7 +72,7 @@ Open the chat from the robot icon in the left ribbon.
   - Search chats by title, prompt or reply. Each row has pin, rename and delete buttons; ⌘↵ or ⌘-click opens a chat in a new tab.
   - **Tab** lists chats by note: type part of a note's name or folder to see the chats that changed it, were sent it, or mentioned it. More words filter by chat title (`with:solow diagram`); ⌘↵ opens the note.
   - Beside each date is the chat's status: grey ○ for open or in the background; accent ● for working, waiting for approval, background tasks, or a new reply. No mark means closed.
-  - A chat started outside the panel (in the desktop app or a terminal) reads in italics and opens as a copy, so that two programs never write to one session. Its row says how often it was copied, each copy says it is one, and opening it again offers your latest copy.
+  - With **History includes all vault sessions** on, chats started outside the panel (in the desktop app or a terminal) are listed too, in italics. One opens as a copy, so that two programs never write to one session: its row says how often it was copied, each copy says it is one, and opening it again offers your latest copy.
 
   <img src="docs/history.png" width="480" alt="The history: its search field, the Scratch chat, and a chat marked “● 2 tasks in the background” in the accent colour">
 

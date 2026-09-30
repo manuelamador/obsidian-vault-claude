@@ -398,33 +398,35 @@ async function main(): Promise<void> {
     console.log(`note chip: detached by the × ${detached}`);
     if (!detached) process.exitCode = 1;
     // Another kind of view in front in the main area (a canvas, a calendar) leaves no note in front;
-    // a click into the panel or a sidebar keeps the note, and a note in front again brings it back.
+    // a click into a Claude panel, in a sidebar or the main area, or into a sidebar keeps the note; a
+    // note in front again brings it back, also when a tab shows it in place (announced by file-open only).
     {
-      const front = view as unknown as { onActiveLeafChange(leaf: unknown): void };
+      const front = view as unknown as { followFront(leaf: unknown): void; followActiveLeaf(): void; updateContextChip(): void };
       const noteView = Object.assign(Object.create(stub.MarkdownView.prototype), { file: noteFile, getMode: () => 'preview', previewMode: { containerEl: document.createElement('div') } });
       const mainArea = {};
       const sidebar = {};
-      (app.workspace as Record<string, unknown>).rightSplit = sidebar;
+      const workspace = app.workspace as Record<string, unknown>;
+      workspace.rightSplit = sidebar;
       const leaf = (leafView: unknown, leafRoot: unknown) => ({ view: leafView, getRoot: () => leafRoot });
       const offered = () => root.querySelector('.vc-context-offer .vc-context-name')?.textContent ?? 'none';
-      const seen: string[] = [];
-      front.onActiveLeafChange(leaf(noteView, mainArea));
+      const show = (leafView: unknown, leafRoot: unknown) => {
+        front.followFront(leaf(leafView, leafRoot));
+        front.updateContextChip();
+        return offered();
+      };
+      const seen = [show(noteView, mainArea), show({}, mainArea), show(view, sidebar), show(noteView, mainArea), show({}, sidebar), show(view, sidebar), show(view, mainArea)];
+      // A canvas in front, then a note opened in the canvas's own tab: only file-open says so.
+      show({}, mainArea);
+      const canvasTab = leaf({}, mainArea);
+      workspace.getActiveViewOfType = () => ({ leaf: canvasTab });
+      canvasTab.view = noteView;
+      front.followActiveLeaf();
       seen.push(offered());
-      front.onActiveLeafChange(leaf({}, mainArea));
-      seen.push(offered());
-      front.onActiveLeafChange(leaf(view, sidebar));
-      seen.push(offered());
-      front.onActiveLeafChange(leaf(noteView, mainArea));
-      front.onActiveLeafChange(leaf({}, sidebar));
-      seen.push(offered());
-      front.onActiveLeafChange(leaf(view, sidebar));
-      seen.push(offered());
-      delete (app.workspace as Record<string, unknown>).rightSplit;
-      const frontOk = JSON.stringify(seen) === JSON.stringify(['Note', 'none', 'none', 'Note', 'Note']);
-      console.log(`note in front: a note, a canvas, the panel, a sidebar, the panel -> ${seen.join(', ')} -> ${frontOk}`);
+      delete workspace.rightSplit;
+      delete workspace.getActiveViewOfType;
+      const frontOk = JSON.stringify(seen) === JSON.stringify(['Note', 'none', 'none', 'Note', 'Note', 'Note', 'Note', 'Note']);
+      console.log(`note in front: a note, a canvas, the panel, a note, a sidebar, the panel, a Claude tab, a note shown in the canvas's tab -> ${seen.join(', ')} -> ${frontOk}`);
       if (!frontOk) process.exitCode = 1;
-      front.onActiveLeafChange(leaf({}, mainArea));
-      front.onActiveLeafChange(leaf(noteView, mainArea));
     }
     ctx.lastMarkdownView = null;
 
@@ -714,7 +716,7 @@ async function main(): Promise<void> {
       rowMeta({ fromPanel: false, copies: [{}, {}] }),
       rowMeta({ fromPanel: false, copies: [{}] }),
       rowMeta({ fromPanel: false }),
-      rowMeta({ fromPanel: true, copyOf: 'desk' }),
+      rowMeta({ fromPanel: true, copied: true }),
       rowMeta({ fromPanel: true }),
     ];
     const copyRowsOk =
@@ -3042,8 +3044,8 @@ async function main(): Promise<void> {
     // Opening a chat from outside the panel that was copied before offers its latest copy, whose line
     // then says it is a copy.
     {
-      const newer = { id: 'copy-2', title: 'Papers', updatedAt: Date.UTC(2026, 8, 28, 12), fromPanel: true, copyOf: 'desk' };
-      const older = { id: 'copy-1', title: 'Papers', updatedAt: Date.UTC(2026, 8, 17, 12), fromPanel: true, copyOf: 'desk' };
+      const newer = { id: 'copy-2', title: 'Papers', updatedAt: Date.UTC(2026, 8, 28, 12), fromPanel: true, copied: true };
+      const older = { id: 'copy-1', title: 'Papers', updatedAt: Date.UTC(2026, 8, 17, 12), fromPanel: true, copied: true };
       const original = { id: 'desk', title: 'Papers', updatedAt: Date.UTC(2026, 8, 20, 12), fromPanel: false, copies: [newer, older] };
       const copyView = view as unknown as { readForOpening: unknown; openChat(item: unknown): Promise<boolean>; resumeId: string | null; forkOnResume: boolean; messagesEl: HTMLElement };
       const said = (id: string) => [
@@ -3052,6 +3054,17 @@ async function main(): Promise<void> {
       ];
       copyView.readForOpening = async (id: string) => ({ chat: { transcript: said(id), edits: new Map() }, readMs: 0 });
       await copyView.openChat(original);
+      // Sending in it makes a copy, whose record names it.
+      const recordedCopies: string[] = [];
+      const initPlugin = plugin as unknown as Record<string, unknown>;
+      const pluginBefore = { recordChat: initPlugin.recordChat, checkClaudeVersion: initPlugin.checkClaudeVersion };
+      initPlugin.recordChat = (id: string, _title: string, copyOf?: string) => void recordedCopies.push(`${id}:${copyOf}`);
+      initPlugin.checkClaudeVersion = () => undefined;
+      const initView = view as unknown as { onMessage(message: unknown): void; forkOnResume: boolean; chatId: string | null; resumeId: string | null };
+      const stateBefore = { forkOnResume: initView.forkOnResume, chatId: initView.chatId, resumeId: initView.resumeId };
+      initView.onMessage({ type: 'system', subtype: 'init', session_id: 'copy-3', model: 'claude-opus-5-5', tools: [], mcp_servers: [], slash_commands: [], permissionMode: 'default' });
+      Object.assign(initView, stateBefore);
+      Object.assign(initPlugin, pluginBefore);
       const offer = [...copyView.messagesEl.querySelectorAll('.vc-resumed')].pop();
       const offerText = offer?.textContent ?? '';
       (offer?.querySelector('.vc-welcome-link') as HTMLElement | null)?.click();
@@ -3061,11 +3074,12 @@ async function main(): Promise<void> {
       delete (copyView as unknown as Record<string, unknown>).readForOpening;
       view.newChat();
       const offerOk =
+        JSON.stringify(recordedCopies) === JSON.stringify(['copy-3:desk']) &&
         offerText.startsWith('Started outside the panel, and copied before: the latest of your 2 copies was last active') &&
         offerText.includes('Open that copy. New messages here start another copy') &&
         openedCopy &&
         copyLine.endsWith(' · a copy of a chat from outside the panel');
-      console.log(`opening a copied chat: offered "${offerText}"; opened the latest ${openedCopy}, "${copyLine}" -> ${offerOk}`);
+      console.log(`opening a copied chat: recorded ${JSON.stringify(recordedCopies)}; offered "${offerText}"; opened the latest ${openedCopy}, "${copyLine}" -> ${offerOk}`);
       if (!offerOk) process.exitCode = 1;
     }
 

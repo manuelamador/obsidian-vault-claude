@@ -31,20 +31,44 @@ test('a chat started outside the panel is linked to the copies of it the panel m
     const original = session(prompt, '2026-09-20T10:00:00.000Z');
     const older = session(prompt, '2026-09-17T10:00:00.000Z');
     // Its first prompt starts after the first read of the file, and runs past the second's end.
-    const newer = session(prompt, '2026-09-28T10:00:00.000Z', Array.from({ length: 3 }, () => ({ type: 'attachment', cwd: root, attachment: { type: 'note', content: 'x'.repeat(40 * 1024) } })));
+    const newer = session(
+      prompt,
+      '2026-09-28T10:00:00.000Z',
+      Array.from({ length: 3 }, () => ({ type: 'attachment', cwd: root, attachment: { type: 'note', content: 'x'.repeat(40 * 1024) } })),
+    );
+    // A side chat still open on the original is neither a copy nor a second original.
+    const side = session(prompt, '2026-09-29T10:00:00.000Z');
+    // A chat forked in the desktop app shares its original's first prompt: an older copy of either
+    // is marked as a copy but credited to neither, while one that names its original is credited.
+    const forked = randomUUID();
+    const desktop = session(forked, '2026-09-05T10:00:00.000Z');
+    const desktopFork = session(forked, '2026-09-06T10:00:00.000Z');
+    const unnamed = session(forked, '2026-09-07T10:00:00.000Z');
+    const named = session(forked, '2026-09-08T10:00:00.000Z');
     // Two of the panel's own chats that share a first prompt (a kept side chat, say) are neither.
     const shared = randomUUID();
     const chat = session(shared, '2026-09-10T10:00:00.000Z');
     const kept = session(shared, '2026-09-11T10:00:00.000Z');
     const other = session(randomUUID(), '2026-09-12T10:00:00.000Z');
-    const records: ChatRecord[] = [older, newer, chat, kept, other].map((id) => ({ id, title: 'A chat' }));
-    const items = new Map((await listHistory(root, records, true)).map((item) => [item.id, item]));
+    // A copy listed while its first rows are still being written is matched once they are.
+    const late = randomUUID();
+    writeFileSync(`${dir}/${late}.jsonl`, `${JSON.stringify({ type: 'ai-title', aiTitle: 'Papers database', sessionId: late })}\n`);
+    const records: ChatRecord[] = [older, newer, unnamed, chat, kept, other, late].map((id) => ({ id, title: 'A chat' }));
+    records.push({ id: named, title: 'A chat', copyOf: desktopFork });
+    const list = async () => new Map((await listHistory(root, records, true, new Set([side]))).map((item) => [item.id, item]));
+    const first = await list();
+    const lateBefore = first.get(late)?.copied;
+    writeFileSync(`${dir}/${late}.jsonl`, `${JSON.stringify({ type: 'user', uuid: prompt, parentUuid: null, sessionId: late, cwd: root, timestamp: '2026-09-14T13:54:15.000Z', message: { role: 'user', content: 'Build the papers database' } })}\n`, { flag: 'a' });
+    const items = await list();
+    const ids = (item: string) => items.get(item)?.copies?.map((copy) => copy.id);
+    assert.equal(lateBefore, undefined);
+    assert.deepEqual(ids(original), [newer, older, late]);
+    assert.deepEqual([ids(desktop), ids(desktopFork)], [undefined, [named]]);
     assert.deepEqual(
-      items.get(original)?.copies?.map((copy) => copy.id),
-      [newer, older],
+      [older, newer, late, unnamed, named].map((id) => items.get(id)?.copied),
+      [true, true, true, true, true],
     );
-    assert.deepEqual([items.get(older)?.copyOf, items.get(newer)?.copyOf], [original, original]);
-    for (const id of [chat, kept, other]) assert.deepEqual([items.get(id)?.copyOf, items.get(id)?.copies], [undefined, undefined]);
+    for (const id of [side, chat, kept, other]) assert.deepEqual([items.get(id)?.copied, items.get(id)?.copies], [undefined, undefined]);
   } finally {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = before;

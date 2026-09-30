@@ -358,7 +358,7 @@ function byNote(query: string): boolean {
 
 /** Where a chat comes from, after its date: started outside the panel (and how often copied), or a copy of one. */
 function origin(item: HistoryItem): string {
-  if (item.copyOf) return ' · copy of a chat from outside the panel';
+  if (item.copied) return ' · copy of a chat from outside the panel';
   if (item.fromPanel) return '';
   const copies = item.copies?.length ?? 0;
   return ` · outside the panel, opens as a copy${copies === 0 ? '' : copies === 1 ? ' · copied once' : ` · copied ${copies} times`}`;
@@ -367,7 +367,7 @@ function origin(item: HistoryItem): string {
 /** What the history shows of its rows, to tell whether a new listing changed any of them. */
 function rowsKey(items: HistoryItem[]): string {
   return JSON.stringify(
-    items.map((item) => [item.id, item.title, item.updatedAt, item.fromPanel, item.status, item.pinned, item.tasksRunning, item.scratch, item.copyOf, item.copies?.length]),
+    items.map((item) => [item.id, item.title, item.updatedAt, item.fromPanel, item.status, item.pinned, item.tasksRunning, item.scratch, item.copied, item.copies?.length]),
   );
 }
 
