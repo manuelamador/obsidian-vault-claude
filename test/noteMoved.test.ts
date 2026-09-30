@@ -7,6 +7,8 @@ function plugin() {
   const p = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
   p.saveSettings = async () => undefined;
   (p as unknown as { app: unknown }).app = { workspace: { getLeavesOfType: () => [] } };
+  // No vault folder to look in: every note counts as on disk.
+  p.vaultRoot = () => null;
   return p;
 }
 

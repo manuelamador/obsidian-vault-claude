@@ -39,11 +39,20 @@ test('the chats as last listed are kept for the history; listings at once share 
     (p as unknown as { unlist(id: string): void }).unlist(ids[1]);
     assert.deepEqual(await running, []);
     // Links to sessions whose files are gone are let go at startup; those of sessions still there stay.
-    p.noteChats = { 'A.md': [ids[0], ids[1]] };
+    // So are links to notes no longer on disk.
+    for (const note of ['A.md', 'B.md', 'C.md']) writeFileSync(`${root}/${note}`, '');
+    p.noteChats = { 'A.md': [ids[0], ids[1]], 'Gone/Deleted.md': [ids[1]] };
     p.noteRefs = { 'B.md': [ids[0]] };
     p.noteMentions = { 'C.md': [ids[1], 'gone-too'] };
     await p.pruneNoteLinks();
     assert.deepEqual([p.noteChats, p.noteRefs, p.noteMentions], [{ 'A.md': [ids[1]] }, {}, { 'C.md': [ids[1]] }]);
+    // A note that is not on disk is not linked, however the chat reports it: made and deleted in one
+    // reply, or seen again in a saved chat after it was deleted.
+    p.linkNoteChat('Gone/Deleted.md', ids[1]);
+    p.linkNoteRef('Gone/Deleted.md', ids[1]);
+    p.linkNoteMention('Gone/Deleted.md', ids[1]);
+    p.linkNoteChat('B.md', ids[1]);
+    assert.deepEqual([p.noteChats, p.noteRefs, p.noteMentions], [{ 'A.md': [ids[1]], 'B.md': [ids[1]] }, {}, { 'C.md': [ids[1]] }]);
   } finally {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = before;

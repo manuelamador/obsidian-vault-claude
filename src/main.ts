@@ -1,4 +1,6 @@
+import { existsSync } from 'fs';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, type Editor, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
+import { join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
@@ -340,19 +342,36 @@ export default class VaultClaudePlugin extends Plugin {
   /**
    * Lets go of the links between notes and sessions whose files are gone (Claude Code deletes old
    * sessions; links of chats from outside the panel are not dropped with the oldest chat records),
-   * so that the note indexes do not grow for good. Nothing is let go when the folder cannot be read.
+   * so that the note indexes do not grow for good; nothing is let go when the folder cannot be read.
+   * And of notes no longer on disk: deleted while Obsidian was closed, or linked before 0.23.0 once
+   * gone (see onDisk).
    */
   async pruneNoteLinks(): Promise<void> {
     const dir = this.vaultRoot();
     const ids = dir ? await sessionIds(dir) : null;
-    if (!ids) return;
     let changed = false;
     for (const index of [this.noteChats, this.noteRefs, this.noteMentions]) {
-      for (const id of new Set(Object.values(index).flat())) {
-        if (!ids.has(id)) changed = forgetChat(index, id) || changed;
+      for (const id of ids ? new Set(Object.values(index).flat()) : []) {
+        if (!ids?.has(id)) changed = forgetChat(index, id) || changed;
+      }
+      for (const path of Object.keys(index)) {
+        if (this.onDisk(path)) continue;
+        delete index[path];
+        changed = true;
       }
     }
     if (changed) this.saveSoon();
+  }
+
+  /**
+   * Whether vault path `path` is a file on disk now: only such notes are linked to chats. A note a
+   * chat made and then deleted in the same reply (its content moved into another note by a shell
+   * command) was otherwise linked for good, and drawing the saved chat again linked it once more. On
+   * disk rather than in Obsidian's index, which learns of a note a moment after Claude writes it.
+   */
+  private onDisk(path: string): boolean {
+    const root = this.vaultRoot();
+    return root === null || existsSync(joinPath(root, path));
   }
 
   /** The vault's chats as last listed (see listChats), for the history to show at once; null before the first listing. */
@@ -754,7 +773,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Records that a chat changed a note, so the note can offer it later. */
   /** `promote`: an edit made now, which makes the chat the note's newest (see linkNote); saved only when the index changed. */
   linkNoteChat(path: string, chatId: string, promote = true): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path)) return;
+    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path)) return;
     // Links come in bursts (a turn editing many notes, an older chat reopened): saved once for them.
     if (linkNote(this.noteChats, path, chatId, promote)) this.saveSoon();
   }
@@ -777,13 +796,13 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Records that a note went with a message in a chat: as the attached note, or mentioned. */
   linkNoteRef(path: string, chatId: string): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path)) return;
+    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path)) return;
     if (linkNote(this.noteRefs, path, chatId)) this.saveSoon();
   }
 
   /** Records that a chat mentioned a note (see ChatView.recordMentions), for the history's notes view. */
   linkNoteMention(path: string, chatId: string): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path)) return;
+    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path)) return;
     if (linkNote(this.noteMentions, path, chatId, false)) this.saveSoon();
   }
 
