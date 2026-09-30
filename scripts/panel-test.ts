@@ -2435,6 +2435,27 @@ async function main(): Promise<void> {
     const placeOk = JSON.stringify(placements) === JSON.stringify(['40/116', '130/206']);
     console.log(`Side chat button beside Quote: ${placements.join(', ')} (expected 40/116, 130/206) -> ${placeOk}`);
     if (!placeOk) process.exitCode = 1;
+    // A link out of the vault opens through window.open, as a note's reading view opens one, so that
+    // Obsidian asks before opening a file; a link whose scheme runs script is refused.
+    {
+      const opened: string[][] = [];
+      const openBefore = dom.window.open;
+      dom.window.open = ((url: string, target: string) => void opened.push([url, target])) as typeof dom.window.open;
+      const messages = root.querySelector('.vc-messages') as HTMLElement;
+      const link = (href: string) => {
+        const a = messages.createEl('a', { cls: 'external-link', text: 'link', attr: { href } });
+        const evt = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+        a.dispatchEvent(evt);
+        a.remove();
+        return evt.defaultPrevented;
+      };
+      const pdf = 'file:///private/tmp/Harvest%20Plan%202026.pdf';
+      const handled = [link(pdf), link('javascript:alert(1)')];
+      dom.window.open = openBefore;
+      const linksOk = JSON.stringify(opened) === JSON.stringify([[pdf, '']]) && handled.every(Boolean);
+      console.log(`links out of the vault: opened ${JSON.stringify(opened)}; both clicks handled ${handled.every(Boolean)} -> ${linksOk}`);
+      if (!linksOk) process.exitCode = 1;
+    }
     dom.window.getSelection()?.removeAllRanges();
     (view as unknown as { placeQuoteButton(): void }).placeQuoteButton();
     const hiddenWithout = !quoteBtn.isShown() && !sideBtn.isShown();

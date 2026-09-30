@@ -54,7 +54,7 @@ import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
 import type { ChatDraft } from './main';
-import { neutralizeRemoteMedia, sweepRemoteMedia } from './safeMarkdown';
+import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
 import { SCRATCH_IDLE_CHOICES, chatModel, denyRuleList, idleLabel, permissionModes, type ToolDisplay } from './settings';
 import { summarizeTool, toolLabel, vaultRelative } from './toolSummary';
@@ -4754,6 +4754,20 @@ export class ChatView extends ItemView {
     if (fileLink?.dataset.path) {
       evt.preventDefault();
       void this.app.workspace.openLinkText(fileLink.dataset.path, '', Keymap.isModEvent(evt));
+      return;
+    }
+    // Any other link opens as one in a note's reading view does, through window.open: Obsidian then
+    // asks before handing a file or another app's link to the system, and warns of an executable.
+    // Left to the browser, a click on a file:// link does nothing, refused from the app's page.
+    const href = target.closest<HTMLAnchorElement>('a.external-link')?.getAttribute('href');
+    if (href) {
+      evt.preventDefault();
+      if (!openableHref(href)) {
+        new Notice(`This link cannot be opened: ${href.slice(0, 80)}`);
+        return;
+      }
+      const pane = Keymap.isModEvent(evt);
+      window.open(href, typeof pane === 'boolean' ? '' : pane);
     }
   }
 

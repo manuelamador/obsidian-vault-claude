@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { neutralizeRemoteMedia } from '../src/safeMarkdown';
+import { neutralizeRemoteMedia, openableHref } from '../src/safeMarkdown';
 
 // A real tag (not one escaped as text) with a loading attribute, a live <input>, or a remote image.
 const loads = (out: string) =>
@@ -29,4 +29,13 @@ test('a remote image becomes a link', () => {
 test('embeds, local images and code are left alone', () => {
   const text = 'Embed ![[Figure 1.png]], local ![fig](attachments/fig.png), code `![x](https://a.test/b.png)`';
   assert.equal(neutralizeRemoteMedia(text), text);
+});
+
+test('links in replies open unless their scheme runs script or they do not parse', () => {
+  for (const href of ['https://example.org/a', 'file:///private/tmp/A%20B.pdf', 'vscode://file/Users/x/a.tex:120', 'zotero://select/library/items/ABC', 'mailto:a@b.c']) {
+    assert.equal(openableHref(href), true, href);
+  }
+  for (const href of ['javascript:alert(1)', ' JavaScript:alert(1)', 'data:text/html,<b>x</b>', 'vbscript:x', 'blob:https://a/b', 'not a url', '']) {
+    assert.equal(openableHref(href), false, href);
+  }
 });
