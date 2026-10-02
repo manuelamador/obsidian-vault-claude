@@ -992,7 +992,7 @@ async function main(): Promise<void> {
     // Claude's plan: approved as it is, approved as edited in a note (which then goes), sent back with
     // feedback, or rejected.
     {
-      type Answer = { behavior: string; updatedInput?: { plan?: string }; message?: string };
+      type Answer = { behavior: string; updatedInput?: { plan?: string }; message?: string; updatedPermissions?: unknown };
       const planView = view as unknown as { askPermission(request: unknown): Promise<Answer>; draw: { turn: HTMLElement | null } };
       const vault = app.vault as unknown as Record<string, unknown>;
       vault.create = async (path: string, text: string) => {
@@ -1011,6 +1011,15 @@ async function main(): Promise<void> {
       };
       const decided = () => internals.messagesEl.querySelector('.vc-permission.is-decided')?.textContent;
       const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+      // Approved in Plan mode entered from Auto: back to Auto, and Claude Code is told so.
+      const modeView = view as unknown as { mode: string; modeBeforePlan: string };
+      const modeWas = { mode: modeView.mode, before: modeView.modeBeforePlan };
+      Object.assign(modeView, { mode: 'plan', modeBeforePlan: 'auto' });
+      const fromAuto = propose();
+      fromAuto.button('Approve').click();
+      const fromAutoResult = (await fromAuto.answered) as Answer & { updatedPermissions?: { type: string; mode: string }[] };
+      const backTo = modeView.mode;
+      Object.assign(modeView, modeWas);
       // As it is.
       const plain = propose();
       const planTitle = plain.card.querySelector('.vc-permission-title')?.textContent;
@@ -1111,6 +1120,9 @@ async function main(): Promise<void> {
         feedbackResult.message === 'The user reviewed the plan and asks for changes: Only the first step' &&
         rejectResult.behavior === 'deny' &&
         cancelledGone &&
+        backTo === 'auto' &&
+        JSON.stringify(fromAutoResult.updatedPermissions) === JSON.stringify([{ type: 'setMode', mode: 'auto', destination: 'session' }]) &&
+        plainResult.updatedPermissions === undefined &&
         racedResult.behavior === 'allow' &&
         racedResult.updatedInput?.plan === `${plan}\n3. Renamed and edited.` &&
         racedNoteGone &&
@@ -1825,8 +1837,19 @@ async function main(): Promise<void> {
       (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(blankTurn);
       const blankOrder = [...blankTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
       const blankHeader = blankTurn.querySelector('.vc-steps-header')?.textContent;
-      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts';
-      console.log(`steps around empty text: ${blankOrder}, "${blankHeader}" -> ${blankOk}`);
+      // Text whose Markdown is still rendering is empty on screen but not blank: it stays between folds.
+      const pendingTurn = document.createElement('div');
+      const pendingStep = (text: string) => pendingTurn.createDiv({ cls: 'vc-tools' }).createDiv({ cls: 'vc-tool', text });
+      pendingStep('Bash ls');
+      pendingStep('Read x');
+      const rendering = pendingTurn.createDiv({ cls: 'vc-text' });
+      (view as unknown as { markdownSource: Map<HTMLElement, string> }).markdownSource.set(rendering, 'Here is what I found, with a [[link]].');
+      pendingStep('Bash pwd');
+      pendingStep('Read y');
+      (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(pendingTurn);
+      const pendingOrder = [...pendingTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
+      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts' && pendingOrder === 'fold,text,fold' && rendering.parentElement === pendingTurn;
+      console.log(`steps around empty text: ${blankOrder}, "${blankHeader}"; around text still rendering: ${pendingOrder} -> ${blankOk}`);
       if (!blankOk) process.exitCode = 1;
     }
     // Steps before any message of yours (a resumed session) must still land in a turn, not loose in the chat.
@@ -3342,7 +3365,8 @@ async function main(): Promise<void> {
       const offeredPlan = [...root.querySelectorAll('.vc-suggest-item .vc-suggest-name')].some((el) => el.textContent === '/plan');
       const modes: string[] = [];
       const sentPlan: unknown[] = [];
-      const planChat = view as unknown as { session: unknown; mode: string; send(): Promise<void> };
+      const planChat = view as unknown as { session: unknown; mode: string; busy: boolean; lastSent: string; send(): Promise<void> };
+      const modeBefore = planChat.mode;
       view.newChat();
       planChat.mode = 'auto';
       planChat.session = {
@@ -3351,22 +3375,34 @@ async function main(): Promise<void> {
         setHandlers() {},
         close() {},
       };
+      // While Claude works, /plan waits: the reply running is not switched.
+      planChat.busy = true;
       planInput.value = '/plan check the notes';
       await planChat.send();
-      const afterPlan = { mode: planChat.mode, input: planInput.value };
+      const whileBusy = { mode: planChat.mode, input: planInput.value, sent: sentPlan.length };
+      planChat.busy = false;
+      await planChat.send();
+      const afterPlan = { mode: planChat.mode, input: planInput.value, recalled: planChat.lastSent };
+      // The reply to it has ended; /plan alone then only switches.
+      planChat.busy = false;
       planInput.value = '/plan';
       await planChat.send();
       const alone = { sent: sentPlan.length, input: planInput.value };
       planChat.session = null;
       view.newChat();
+      planChat.mode = modeBefore;
       const slashOk =
         offeredPlan &&
+        whileBusy.mode === 'auto' &&
+        whileBusy.input === '/plan check the notes' &&
+        whileBusy.sent === 0 &&
+        afterPlan.recalled === '/plan check the notes' &&
         JSON.stringify(modes) === JSON.stringify(['plan']) &&
         afterPlan.mode === 'plan' &&
         JSON.stringify(sentPlan) === JSON.stringify(['check the notes']) &&
         alone.sent === 1 &&
         alone.input === '';
-      console.log(`/plan: offered ${offeredPlan}; modes set ${JSON.stringify(modes)}; sent ${JSON.stringify(sentPlan)}; alone sends nothing ${alone.sent === 1} -> ${slashOk}`);
+      console.log(`/plan: busy ${JSON.stringify(whileBusy)}; after ${JSON.stringify(afterPlan)}; offered ${offeredPlan}; modes set ${JSON.stringify(modes)}; sent ${JSON.stringify(sentPlan)}; alone sends nothing ${alone.sent === 1}, leaves ${JSON.stringify(alone.input)} -> ${slashOk}`);
       if (!slashOk) process.exitCode = 1;
     }
 

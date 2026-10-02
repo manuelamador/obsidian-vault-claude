@@ -338,6 +338,8 @@ export class ChatView extends ItemView {
   /** Set when a session from outside the panel is opened: resuming it forks a copy. */
   private forkOnResume = false;
   private mode: PermissionMode;
+  /** The mode before Plan mode, which an approved plan returns to (see changeMode). */
+  private modeBeforePlan: PermissionMode = 'default';
   private modelOverride: string | undefined;
   /** Whether this panel is showing the scratch chat, which starts over when it has been idle. */
   private scratch = false;
@@ -2160,15 +2162,17 @@ export class ChatView extends ItemView {
    */
   private foldSteps(turn: HTMLElement): void {
     if (turn.querySelector(':scope > .vc-steps')) return;
-    // Something with nothing to show between two steps (text that was only white space, streamed
-    // between tool calls) does not end their run: it would split one fold into two with nothing between.
-    const blank = (el: HTMLElement) => !el.textContent?.trim() && !el.querySelector('img, svg, video, audio, iframe, canvas, input, mjx-container');
+    // Text that was only white space between two steps does not end their run, which would split one
+    // fold into two with nothing between: it is removed. Judged by its source, not by what is on
+    // screen, since a reply's Markdown is still being rendered when a chat opened from the history folds.
+    const blank = (el: HTMLElement) => el.hasClass('vc-text') && !(this.markdownSource.get(el) ?? el.textContent ?? '').trim();
     const runs: HTMLElement[][] = [];
     let run: HTMLElement[] = [];
     let gap: HTMLElement[] = [];
     for (const el of Array.from(turn.children) as HTMLElement[]) {
       if (isStep(el)) {
-        run.push(...gap, el);
+        for (const empty of gap) empty.remove();
+        run.push(el);
         gap = [];
       } else if (run.length > 0 && blank(el)) {
         gap.push(el);
@@ -2179,7 +2183,7 @@ export class ChatView extends ItemView {
       }
     }
     if (run.length > 0) runs.push(run);
-    for (const steps of runs) if (steps.filter(isStep).length >= 2) this.foldRun(turn, steps);
+    for (const steps of runs) if (steps.length >= 2) this.foldRun(turn, steps);
   }
 
   /** One run of consecutive steps, folded in place. */
@@ -2195,7 +2199,7 @@ export class ChatView extends ItemView {
     const thoughts = body.querySelectorAll(':scope > .vc-thinking').length;
     const parts = [tools && count(tools, 'tool call'), thoughts && count(thoughts, 'thought')].filter(Boolean);
     setIcon(header.createSpan({ cls: 'vc-tools-chevron' }), 'chevron-right');
-    header.createSpan({ cls: 'vc-tools-text', text: `Steps: ${parts.join(', ') || count(steps.filter(isStep).length, 'step')}` });
+    header.createSpan({ cls: 'vc-tools-text', text: `Steps: ${parts.join(', ') || count(steps.length, 'step')}` });
     const failed = body.querySelectorAll('.vc-tool.is-error').length;
     if (failed > 0) header.createSpan({ cls: 'vc-tools-failed', text: `${failed} failed` });
     header.addEventListener('click', () => fold.toggleClass('is-collapsed', !fold.hasClass('is-collapsed')));
@@ -2716,9 +2720,15 @@ export class ChatView extends ItemView {
   private async send(): Promise<void> {
     // `/plan`, as in a terminal: the chat goes into Plan mode, and what follows is the message. Claude
     // Code takes the command only in a terminal, and answers "/plan isn't available in this environment".
-    const plan = /^\/plan(?=\s|$)/i.exec(this.inputEl.value.trimStart());
+    const typed = this.inputEl.value.trim();
+    const plan = /^\/plan(?=\s|$)/i.exec(typed);
     if (plan) {
-      const rest = this.inputEl.value.trimStart().slice(plan[0].length).trim();
+      // Switching now would change the reply that is running, not only this message: it waits.
+      if (this.busy) {
+        new Notice('Claude is still working. Send /plan once it has finished, or stop it first.');
+        return;
+      }
+      const rest = typed.slice(plan[0].length).trim();
       if (this.mode !== 'plan') {
         this.modeMenu.value = 'plan';
         await this.changeMode('plan');
@@ -2728,6 +2738,7 @@ export class ChatView extends ItemView {
       this.inputEl.value = rest;
       this.growInput();
       if (!rest && this.attachments.length === 0) {
+        this.saveDraft();
         new Notice('Plan mode: Claude plans first, and asks before carrying the plan out.');
         return;
       }
@@ -2743,7 +2754,8 @@ export class ChatView extends ItemView {
       this.attachments = [];
       this.renderTray();
     }
-    if (text) this.lastSent = text;
+    // ↑ brings back what was typed, `/plan` included, so it can be sent again the same way.
+    if (text) this.lastSent = plan ? typed : text;
     this.inputEl.value = '';
     this.growInput();
     this.saveDraft();
@@ -3307,6 +3319,8 @@ export class ChatView extends ItemView {
 
   private async changeMode(mode: PermissionMode): Promise<void> {
     const previous = this.mode;
+    // What an approved plan returns to (see renderApprovalCard).
+    if (mode === 'plan' && previous !== 'plan') this.modeBeforePlan = previous;
     this.mode = mode;
     this.modeMenu.el.toggleClass('is-bypass', mode === 'bypassPermissions');
     if (!this.session) return;
@@ -4266,8 +4280,10 @@ export class ChatView extends ItemView {
         card.addClass('is-decided');
         card.setText(said ?? `${label}: ${toolLabel(toolName)}${summary.text ? ` ${summary.text}` : ''}`);
         if (result.behavior === 'allow' && toolName === 'ExitPlanMode' && this.mode === 'plan') {
-          this.mode = 'default';
-          this.modeMenu.value = 'default';
+          // Claude Code was told the same mode in the approval (see renderPlanCard).
+          this.mode = this.modeBeforePlan;
+          this.modeMenu.value = this.modeBeforePlan;
+          this.modeMenu.el.toggleClass('is-bypass', this.mode === 'bypassPermissions');
         }
       }
       resolve(result);
@@ -4360,6 +4376,7 @@ export class ChatView extends ItemView {
     const buttons = card.createDiv({ cls: 'vc-permission-buttons' });
     // The first answer holds: the card's controls go still while the note is read and put away.
     let deciding = false;
+    let planShown = false;
     const decide = (answer: () => Promise<void>) => {
       if (deciding) return;
       deciding = true;
@@ -4369,12 +4386,19 @@ export class ChatView extends ItemView {
         new Notice(`Could not answer the plan: ${errorText(error)}`);
         deciding = false;
         for (const control of card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')) control.disabled = false;
+        // Still unseen: it is not approved or edited.
+        approveButton.disabled = !planShown;
+        editButton.disabled = !planShown;
       });
     };
     const approve = async () => {
       const edited = await takeNote();
-      if (edited) finish({ behavior: 'allow', updatedInput: { ...input, plan: edited } }, 'Approved', 'Plan approved, with your edits');
-      else finish({ behavior: 'allow', updatedInput: input }, 'Approved', 'Plan approved');
+      // The chat goes back to the mode it had before Plan mode, which Claude Code is told with the
+      // approval (left to itself, it would return to Ask first).
+      const back = this.mode === 'plan' ? this.modeBeforePlan : null;
+      const returning = back && back !== 'default' ? { updatedPermissions: [{ type: 'setMode', mode: back, destination: 'session' }] as PermissionUpdate[] } : {};
+      if (edited) finish({ behavior: 'allow', updatedInput: { ...input, plan: edited }, ...returning }, 'Approved', 'Plan approved, with your edits');
+      else finish({ behavior: 'allow', updatedInput: input, ...returning }, 'Approved', 'Plan approved');
     };
     const approveButton = buttons.createEl('button', { cls: 'mod-cta', text: 'Approve' });
     approveButton.addEventListener('click', () => decide(approve));
@@ -4422,6 +4446,7 @@ export class ChatView extends ItemView {
     });
     // Nothing is approved or edited unseen: until the plan is shown, only feedback and Reject answer.
     const shown = (text: string) => {
+      planShown = true;
       plan = text.trim();
       body.empty();
       this.renderMarkdown(plan, body);
