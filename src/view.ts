@@ -212,6 +212,8 @@ interface ToolEntry {
 interface Approval {
   request: PermissionRequest;
   resolve: (result: PermissionResult) => void;
+  /** For a plan: the note it is being edited in, kept with the request while its chat is in the background. */
+  notePath?: string | null;
 }
 
 /** What a chat waiting on `request` is waiting for, after "Claude": an approval, or an answer to its questions. */
@@ -4201,7 +4203,7 @@ export class ChatView extends ItemView {
         this.pendingApprovals = Math.max(0, this.pendingApprovals - 1);
         if (this.busy) this.tickStatus();
         card.empty();
-        card.removeClass('vc-question-card');
+        card.removeClass('vc-question-card', 'vc-plan-card');
         card.addClass('is-decided');
         card.setText(said ?? `${label}: ${toolLabel(toolName)}${summary.text ? ` ${summary.text}` : ''}`);
         if (result.behavior === 'allow' && toolName === 'ExitPlanMode' && this.mode === 'plan') {
@@ -4222,6 +4224,13 @@ export class ChatView extends ItemView {
           ? finish({ behavior: 'allow', updatedInput: { ...input, answers } }, 'Answered', `Answered: ${answeredText(questions, answers)}`)
           : finish({ behavior: 'deny', message: 'The user chose not to answer these questions.' }, 'Skipped', 'Questions skipped'),
       );
+      this.scrollToBottom(true);
+      return;
+    }
+
+    // The plan that ends plan mode: approved as it is or as edited in a note, or sent back with feedback.
+    if (toolName === 'ExitPlanMode' && typeof input.plan === 'string') {
+      this.renderPlanCard(card, approval, input.plan, finish);
       this.scrollToBottom(true);
       return;
     }
@@ -4248,6 +4257,81 @@ export class ChatView extends ItemView {
       .createEl('button', { text: 'Deny' })
       .addEventListener('click', () => finish({ behavior: 'deny', message: 'The user denied this action.' }, 'Denied'));
     this.scrollToBottom(true);
+  }
+
+  /**
+   * The card for a plan Claude asks to carry out (its ExitPlanMode request), which holds the plan's
+   * Markdown. It can be edited in a note, in a Plans folder beside the saved chats; Approve sends the
+   * note's text as the plan, which Claude Code passes on as "edited by user". Feedback declines the
+   * plan with what to change, and Claude plans again; Reject declines it. The note is deleted once
+   * the plan is answered, however it is.
+   */
+  private renderPlanCard(card: HTMLElement, approval: Approval, plan: string, finish: (result: PermissionResult, label: string, said?: string) => void): void {
+    const { input, signal } = approval.request;
+    const noteFile = (): TFile | null => {
+      const file = approval.notePath ? this.app.vault.getAbstractFileByPath(approval.notePath) : null;
+      return file instanceof TFile ? file : null;
+    };
+    /** The plan as edited in its note (null when it has none, or was not changed), and the note gone. */
+    const takeNote = async (): Promise<string | null> => {
+      const file = noteFile();
+      approval.notePath = null;
+      if (!file) return null;
+      const text = (await this.app.vault.read(file)).trim();
+      this.closeDraftTabs(file);
+      await this.app.fileManager.trashFile(file).catch((error: unknown) => log('removing a plan note failed', error));
+      return text && text !== plan.trim() ? text : null;
+    };
+    // A card drawn again (its chat back from the background) listens again: taking the note twice is harmless.
+    signal.addEventListener('abort', () => void takeNote(), { once: true });
+
+    card.addClass('vc-plan-card');
+    card.createDiv({ cls: 'vc-permission-title', text: "Claude's plan" });
+    this.renderMarkdown(plan, card.createDiv({ cls: 'vc-permission-detail vc-plan' }));
+    const buttons = card.createDiv({ cls: 'vc-permission-buttons' });
+    const approve = async () => {
+      const edited = await takeNote();
+      if (edited) finish({ behavior: 'allow', updatedInput: { ...input, plan: edited } }, 'Approved', 'Plan approved, with your edits');
+      else finish({ behavior: 'allow', updatedInput: input }, 'Approved', 'Plan approved');
+    };
+    buttons.createEl('button', { cls: 'mod-cta', text: 'Approve' }).addEventListener('click', () => void approve());
+    const editButton = buttons.createEl('button', { text: noteFile() ? 'Open the plan note' : 'Edit in a note' });
+    editButton.addEventListener('click', () => {
+      void (async () => {
+        try {
+          let file = noteFile();
+          if (!file) {
+            const path = await this.savedNotePath(formatDate(Date.now()).slice(0, 10), `Plan — ${this.chatName ?? 'New chat'}`, '', 'Plans');
+            file = await this.app.vault.create(path, plan);
+            approval.notePath = file.path;
+            editButton.setText('Open the plan note');
+          }
+          await this.app.workspace.getLeaf('tab').openFile(file);
+          new Notice('Edit the plan there, then approve it, or send feedback, here.');
+        } catch (error) {
+          log('opening a plan note failed', error);
+          new Notice(`Could not open the plan in a note: ${errorText(error)}`);
+        }
+      })();
+    });
+    buttons.createEl('button', { text: 'Reject' }).addEventListener('click', () => {
+      void takeNote().then(() => finish({ behavior: 'deny', message: 'The user rejected the plan.' }, 'Rejected', 'Plan rejected'));
+    });
+    const feedbackRow = card.createDiv({ cls: 'vc-plan-feedback' });
+    const feedback = feedbackRow.createEl('input', { attr: { type: 'text', placeholder: 'Or tell Claude what to change' } });
+    const sendFeedback = async () => {
+      const text = feedback.value.trim();
+      if (!text) return;
+      const edited = await takeNote();
+      const message = `The user reviewed the plan and asks for changes: ${text}${edited ? `\n\nTheir edited version of the plan:\n\n${edited}` : ''}`;
+      finish({ behavior: 'deny', message }, 'Sent back', `Plan sent back: “${text}”`);
+    };
+    feedbackRow.createEl('button', { text: 'Send feedback' }).addEventListener('click', () => void sendFeedback());
+    feedback.addEventListener('keydown', (evt) => {
+      if (evt.key !== 'Enter' || evt.isComposing) return;
+      evt.preventDefault();
+      void sendFeedback();
+    });
   }
 
   private renderPermissionDetail(el: HTMLElement, request: PermissionRequest): void {

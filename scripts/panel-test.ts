@@ -984,6 +984,88 @@ async function main(): Promise<void> {
       );
       if (!questionsOk) process.exitCode = 1;
     }
+    // Claude's plan: approved as it is, approved as edited in a note (which then goes), sent back with
+    // feedback, or rejected.
+    {
+      type Answer = { behavior: string; updatedInput?: { plan?: string }; message?: string };
+      const planView = view as unknown as { askPermission(request: unknown): Promise<Answer>; draw: { turn: HTMLElement | null } };
+      const vault = app.vault as unknown as Record<string, unknown>;
+      vault.create = async (path: string, text: string) => {
+        notesOnDisk.set(path, text);
+        return Object.assign(new stub.TFile(), { path, basename: path.split('/').pop()?.replace(/\.md$/, ''), extension: 'md' });
+      };
+      vault.createFolder = async () => undefined;
+      const plan = '## Steps\n\n1. List the notes.\n2. Summarise them.';
+      const propose = (signal = new AbortController().signal) => {
+        internals.messagesEl.empty();
+        planView.draw.turn = null;
+        const answered = planView.askPermission({ toolName: 'ExitPlanMode', input: { plan, planFilePath: '/tmp/plan.md' }, signal });
+        const card = internals.messagesEl.querySelector('.vc-plan-card') as HTMLElement;
+        const button = (text: string) => [...card.querySelectorAll('button')].find((el) => el.textContent === text) as HTMLElement;
+        return { answered, card, button };
+      };
+      const decided = () => internals.messagesEl.querySelector('.vc-permission.is-decided')?.textContent;
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+      // As it is.
+      const plain = propose();
+      const planTitle = plain.card.querySelector('.vc-permission-title')?.textContent;
+      plain.button('Approve').click();
+      const plainResult = await plain.answered;
+      const plainSaid = decided();
+      // Edited in a note: the note's text is the plan, and the note goes.
+      const edited = propose();
+      edited.button('Edit in a note').click();
+      await settle();
+      const notePath = [...notesOnDisk.keys()].find((path) => path.includes('/Plans/'));
+      const opened = openedFiles.some((entry) => entry.path === notePath);
+      const relabelled = edited.button('Open the plan note') !== undefined;
+      if (notePath) notesOnDisk.set(notePath, `${plan}\n3. Say PINEAPPLE.`);
+      edited.button('Approve').click();
+      const editedResult = await edited.answered;
+      const editedSaid = decided();
+      const noteGone = notePath !== undefined && !notesOnDisk.has(notePath) && trashed.includes(notePath);
+      // Feedback, and Reject.
+      const sentBack = propose();
+      const feedbackBox = sentBack.card.querySelector('.vc-plan-feedback input') as HTMLInputElement;
+      feedbackBox.value = 'Only the first step';
+      sentBack.button('Send feedback').click();
+      const feedbackResult = await sentBack.answered;
+      const rejected = propose();
+      rejected.button('Reject').click();
+      const rejectResult = await rejected.answered;
+      // Cancelled with a note open: the note goes too.
+      const controller = new AbortController();
+      const cancelled = propose(controller.signal);
+      cancelled.button('Edit in a note').click();
+      await settle();
+      const cancelledNote = [...notesOnDisk.keys()].find((path) => path.includes('/Plans/'));
+      controller.abort();
+      await cancelled.answered;
+      await settle();
+      const cancelledGone = cancelledNote !== undefined && !notesOnDisk.has(cancelledNote);
+      delete vault.create;
+      delete vault.createFolder;
+      internals.messagesEl.empty();
+      planView.draw.turn = null;
+      const planOk =
+        planTitle === "Claude's plan" &&
+        plainResult.behavior === 'allow' &&
+        plainResult.updatedInput?.plan === plan &&
+        plainSaid === 'Plan approved' &&
+        opened &&
+        relabelled &&
+        editedResult.updatedInput?.plan === `${plan}\n3. Say PINEAPPLE.` &&
+        editedSaid === 'Plan approved, with your edits' &&
+        noteGone &&
+        feedbackResult.behavior === 'deny' &&
+        feedbackResult.message === 'The user reviewed the plan and asks for changes: Only the first step' &&
+        rejectResult.behavior === 'deny' &&
+        cancelledGone;
+      console.log(
+        `plan card: "${planTitle}"; as it is "${plainSaid}"; edited in ${notePath} (opened ${opened}) -> "${editedSaid}", note gone ${noteGone}; feedback ${feedbackResult.behavior} "${feedbackResult.message}"; reject ${rejectResult.behavior}; cancelled, note gone ${cancelledGone} -> ${planOk}`,
+      );
+      if (!planOk) process.exitCode = 1;
+    }
 
     // "Send to Claude": a folder and a PDF become @ mentions after what is typed.
     const mentionInput = root.querySelector('.vc-input') as HTMLTextAreaElement;

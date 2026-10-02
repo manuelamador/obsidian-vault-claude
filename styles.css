@@ -1042,6 +1042,17 @@
   gap: var(--size-4-2);
 }
 
+/* A plan to approve, edit in a note, or send back with feedback (see ChatView.renderPlanCard). */
+.vc-plan-feedback {
+  display: flex;
+  gap: var(--size-4-2);
+}
+
+.vc-plan-feedback input {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Claude's multiple-choice questions (see questionCard.ts): options as buttons, picked ones in the accent colour. */
 .vc-question {
   display: flex;
