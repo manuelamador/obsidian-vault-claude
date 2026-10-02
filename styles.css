@@ -1042,7 +1042,24 @@
   gap: var(--size-4-2);
 }
 
-/* A plan to approve, edit in a note, or send back with feedback (see ChatView.renderPlanCard). */
+/* A plan to approve, edit in a note, or send back with feedback (see ChatView.renderPlanCard). The
+   plan itself sits on a panel tinted with the accent colour, as expanded steps do, so it stands
+   apart from the chat in any theme. */
+.vc-plan-card .vc-plan {
+  padding: var(--size-4-2) var(--size-4-4);
+  border-left: 2px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+}
+
+.vc-plan-card .vc-plan > :first-child {
+  margin-top: 0;
+}
+
+.vc-plan-card .vc-plan > :last-child {
+  margin-bottom: 0;
+}
+
 .vc-plan-feedback {
   display: flex;
   gap: var(--size-4-2);
