@@ -28,7 +28,7 @@ import type {
   SDKUserMessage,
   SessionMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, loadTranscript, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, loadTranscript, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
   filePathOf,
@@ -215,6 +215,10 @@ interface Approval {
   /** For a plan: the note it is being edited in, kept with the request while its chat is in the background. */
   notePath?: string | null;
 }
+
+/** A plan request without the plan's text: its file is read this many times, this far apart, until it is written (see showPlan). */
+const PLAN_READ_ATTEMPTS = 40;
+const PLAN_READ_PAUSE_MS = 250;
 
 /** What a chat waiting on `request` is waiting for, after "Claude": an approval, or an answer to its questions. */
 function waitingFor(request: PermissionRequest): string {
@@ -4187,6 +4191,7 @@ export class ChatView extends ItemView {
     const { toolName, input } = request;
     const summary = summarizeTool(toolName, input, this.plugin.vaultRoot() ?? '');
     const card = this.container().createDiv({ cls: 'vc-permission' });
+    log('approval asked', { tool: toolName });
     this.openApprovals.push(approval);
     this.draw.group = null;
     this.pendingApprovals += 1;
@@ -4196,6 +4201,7 @@ export class ChatView extends ItemView {
     // card says its answers instead.
     const finish = (result: PermissionResult, label: string, said?: string) => {
       request.signal.removeEventListener('abort', onAbort);
+      log('approval answered', { tool: toolName, behavior: result.behavior, as: label });
       // A card whose chat has since moved to the background only answers the request.
       const onScreen = this.openApprovals.includes(approval);
       this.openApprovals = this.openApprovals.filter((open) => open !== approval);
@@ -4229,8 +4235,8 @@ export class ChatView extends ItemView {
     }
 
     // The plan that ends plan mode: approved as it is or as edited in a note, or sent back with feedback.
-    if (toolName === 'ExitPlanMode' && typeof input.plan === 'string') {
-      this.renderPlanCard(card, approval, input.plan, finish);
+    if (toolName === 'ExitPlanMode') {
+      this.renderPlanCard(card, approval, finish);
       this.scrollToBottom(true);
       return;
     }
@@ -4266,8 +4272,10 @@ export class ChatView extends ItemView {
    * plan with what to change, and Claude plans again; Reject declines it. The note is deleted once
    * the plan is answered, however it is.
    */
-  private renderPlanCard(card: HTMLElement, approval: Approval, plan: string, finish: (result: PermissionResult, label: string, said?: string) => void): void {
+  private renderPlanCard(card: HTMLElement, approval: Approval, finish: (result: PermissionResult, label: string, said?: string) => void): void {
     const { input, signal } = approval.request;
+    // The plan as shown: the request's own text, or else its plan file (see showPlan).
+    let plan = typeof input.plan === 'string' ? input.plan.trim() : '';
     const noteFile = (): TFile | null => {
       const file = approval.notePath ? this.app.vault.getAbstractFileByPath(approval.notePath) : null;
       return file instanceof TFile ? file : null;
@@ -4287,14 +4295,15 @@ export class ChatView extends ItemView {
 
     card.addClass('vc-plan-card');
     card.createDiv({ cls: 'vc-permission-title', text: "Claude's plan" });
-    this.renderMarkdown(plan, card.createDiv({ cls: 'vc-permission-detail vc-plan' }));
+    const body = card.createDiv({ cls: 'vc-permission-detail vc-plan' });
     const buttons = card.createDiv({ cls: 'vc-permission-buttons' });
     const approve = async () => {
       const edited = await takeNote();
       if (edited) finish({ behavior: 'allow', updatedInput: { ...input, plan: edited } }, 'Approved', 'Plan approved, with your edits');
       else finish({ behavior: 'allow', updatedInput: input }, 'Approved', 'Plan approved');
     };
-    buttons.createEl('button', { cls: 'mod-cta', text: 'Approve' }).addEventListener('click', () => void approve());
+    const approveButton = buttons.createEl('button', { cls: 'mod-cta', text: 'Approve' });
+    approveButton.addEventListener('click', () => void approve());
     const editButton = buttons.createEl('button', { text: noteFile() ? 'Open the plan note' : 'Edit in a note' });
     editButton.addEventListener('click', () => {
       void (async () => {
@@ -4332,6 +4341,39 @@ export class ChatView extends ItemView {
       evt.preventDefault();
       void sendFeedback();
     });
+    // Nothing is approved or edited unseen: until the plan is shown, only feedback and Reject answer.
+    const shown = (text: string) => {
+      plan = text.trim();
+      body.empty();
+      this.renderMarkdown(plan, body);
+      approveButton.disabled = false;
+      editButton.disabled = false;
+    };
+    if (plan) {
+      shown(plan);
+      return;
+    }
+    approveButton.disabled = true;
+    editButton.disabled = true;
+    body.setText('Reading the plan…');
+    void this.showPlan(input.planFilePath, signal, card).then((text) => {
+      if (text) shown(text);
+      else if (card.isConnected || !signal.aborted) body.setText("The plan could not be read. Send it back with feedback asking Claude to show it, or reject it.");
+    });
+  }
+
+  /**
+   * The text of the plan file a plan request names (see readPlanFile). Claude can ask to carry out
+   * its plan in the same step it writes it: the request then comes before the file is written, and
+   * without the plan's text, so it is read again for a few seconds until it is there.
+   */
+  private async showPlan(file: unknown, signal: AbortSignal, card: HTMLElement): Promise<string | null> {
+    for (let attempt = 0; attempt < PLAN_READ_ATTEMPTS && !signal.aborted && !card.hasClass('is-decided'); attempt += 1) {
+      const text = (await readPlanFile(file))?.trim();
+      if (text) return text;
+      await new Promise((resolve) => window.setTimeout(resolve, PLAN_READ_PAUSE_MS));
+    }
+    return null;
   }
 
   private renderPermissionDetail(el: HTMLElement, request: PermissionRequest): void {

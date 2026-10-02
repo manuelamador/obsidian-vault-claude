@@ -325,6 +325,20 @@ function sessionFolder(dir: string): string {
   return path.join(configDir, 'projects', projectFolder(dir));
 }
 
+/**
+ * The text of a plan Claude wrote in plan mode, from `file` as its ExitPlanMode request names it;
+ * null when it is not a Markdown file in Claude Code's plans folder (`<config>/plans`), or cannot be
+ * read. The request carries the plan's text only when Claude passed it, or wrote the file first.
+ */
+export async function readPlanFile(file: unknown): Promise<string | null> {
+  if (typeof file !== 'string' || !file.endsWith('.md')) return null;
+  const configDir = (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).normalize('NFC');
+  const folder = path.join(configDir, 'plans');
+  const resolved = path.resolve(file.normalize('NFC'));
+  if (path.dirname(resolved) !== folder) return null;
+  return fs.readFile(resolved, 'utf8').catch(() => null);
+}
+
 /** Where Claude Code keeps a session: `<config>/projects/<projectFolder>/<id>.jsonl`. */
 function sessionFile(id: string, dir: string): string {
   return path.join(sessionFolder(dir), `${id}.jsonl`);

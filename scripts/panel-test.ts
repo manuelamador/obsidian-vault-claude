@@ -1043,6 +1043,32 @@ async function main(): Promise<void> {
       await cancelled.answered;
       await settle();
       const cancelledGone = cancelledNote !== undefined && !notesOnDisk.has(cancelledNote);
+      // A request without the plan's text, sent before Claude wrote its plan file: read from the file
+      // once it is there, and nothing can be approved or edited until it is shown.
+      const { mkdtempSync: makeTemp, mkdirSync: makeDir, writeFileSync: writeFile, rmSync: removeAll } = await import('fs');
+      const { tmpdir: tempDir } = await import('os');
+      const planConfig = makeTemp(`${tempDir()}/vc-plans-`);
+      makeDir(`${planConfig}/plans`);
+      const configBefore = process.env.CLAUDE_CONFIG_DIR;
+      process.env.CLAUDE_CONFIG_DIR = planConfig;
+      internals.messagesEl.empty();
+      planView.draw.turn = null;
+      const late = planView.askPermission({ toolName: 'ExitPlanMode', input: { plan: '', planFilePath: `${planConfig}/plans/late.md` }, signal: new AbortController().signal });
+      const lateCard = internals.messagesEl.querySelector('.vc-plan-card') as HTMLElement;
+      const lateButton = (text: string) => [...lateCard.querySelectorAll('button')].find((el) => el.textContent === text) as HTMLButtonElement;
+      const lateBefore = { text: lateCard.querySelector('.vc-plan')?.textContent, approve: lateButton('Approve').disabled, edit: lateButton('Edit in a note').disabled };
+      writeFile(`${planConfig}/plans/late.md`, '## Steps\n\n1. Written late.');
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const lateAfter = { text: lateCard.querySelector('.vc-plan')?.textContent, approve: lateButton('Approve').disabled };
+      lateButton('Reject').click();
+      await late;
+      if (configBefore === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = configBefore;
+      removeAll(planConfig, { recursive: true, force: true });
+      const lateOk =
+        lateBefore.text === 'Reading the plan…' && lateBefore.approve && lateBefore.edit && lateAfter.text?.includes('Written late.') === true && !lateAfter.approve;
+      console.log(`plan written after its request: before ${JSON.stringify(lateBefore)}; after ${JSON.stringify(lateAfter)} -> ${lateOk}`);
+      if (!lateOk) process.exitCode = 1;
       delete vault.create;
       delete vault.createFolder;
       internals.messagesEl.empty();
