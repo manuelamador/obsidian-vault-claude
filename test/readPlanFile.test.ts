@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { readPlanFile } from '../src/history';
@@ -18,6 +18,17 @@ test("a plan is read only from a Markdown file in Claude Code's plans folder", a
     assert.equal(await readPlanFile(`${config}/plans/not-yet.md`), null);
     for (const file of [`${config}/plans/../secret.md`, `${config}/secret.md`, `${config}/plans/notes.txt`, 'tidy-plan.md', undefined, 5]) {
       assert.equal(await readPlanFile(file), null, String(file));
+    }
+    // A config folder reached through a symlink: the plan is named by either path.
+    const link = `${config}-link`;
+    symlinkSync(config, link);
+    try {
+      process.env.CLAUDE_CONFIG_DIR = link;
+      assert.equal(await readPlanFile(`${realpathSync(config)}/plans/tidy-plan.md`), '# Plan\n\n1. List the notes.');
+      process.env.CLAUDE_CONFIG_DIR = config;
+      assert.equal(await readPlanFile(`${link}/plans/tidy-plan.md`), '# Plan\n\n1. List the notes.');
+    } finally {
+      unlinkSync(link);
     }
   } finally {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;

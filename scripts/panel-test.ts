@@ -966,6 +966,9 @@ async function main(): Promise<void> {
       const cancel = ask([fruit], controller.signal);
       controller.abort();
       const cancelled = await cancel.answered;
+      // Questions the card cannot read are refused at once, so that Claude asks in plain text.
+      const malformed = ask(['not a question']);
+      const malformedResult = await malformed.answered;
       internals.messagesEl.empty();
       drawState.draw.turn = null;
       const questionsOk =
@@ -978,7 +981,9 @@ async function main(): Promise<void> {
         enabledWithBoth &&
         JSON.stringify(twoResult.updatedInput?.answers) === JSON.stringify({ 'Which fruit do you prefer?': 'Banana', 'Which extras?': 'Nuts, Yogurt, Cinnamon' }) &&
         skipped.behavior === 'deny' &&
-        cancelled.behavior === 'deny';
+        cancelled.behavior === 'deny' &&
+        malformedResult.behavior === 'deny' &&
+        malformedResult.message === 'The panel could not show these questions. Ask them in plain text instead.';
       console.log(
         `questions: "${oneTitle}" answered ${JSON.stringify(oneResult.updatedInput?.answers)}, "${oneDecided}"; two ${JSON.stringify(twoResult.updatedInput?.answers)} (send waited ${disabledWithOne}, preview ${previewShown}); skipped ${skipped.behavior}, cancelled ${cancelled.behavior} -> ${questionsOk}`,
       );
@@ -1024,6 +1029,25 @@ async function main(): Promise<void> {
       const editedResult = await edited.answered;
       const editedSaid = decided();
       const noteGone = notePath !== undefined && !notesOnDisk.has(notePath) && trashed.includes(notePath);
+      // The first answer holds: Approve then at once Reject approves, with the edits; and a note that is
+      // renamed while edited is still the plan.
+      const raced = propose();
+      raced.button('Edit in a note').click();
+      await settle();
+      const racedOld = [...notesOnDisk.keys()].find((path) => path.includes('/Plans/')) ?? '';
+      const racedNew = racedOld.replace('/Plans/', '/Plans/Renamed ');
+      notesOnDisk.set(racedNew, `${plan}\n3. Renamed and edited.`);
+      notesOnDisk.delete(racedOld);
+      (view as unknown as { followNote(from: string, to: string | null): void }).followNote(racedOld, racedNew);
+      raced.button('Approve').click();
+      raced.button('Reject').click();
+      const racedResult = await raced.answered;
+      const racedNoteGone = !notesOnDisk.has(racedNew);
+      // A plan refused without its card (its chat dropped from the background) takes its note too.
+      notesOnDisk.set('Claude chats/Plans/Dropped.md', plan);
+      (view as unknown as { dropPlanNote(approval: { notePath: string | null }): void }).dropPlanNote({ notePath: 'Claude chats/Plans/Dropped.md' });
+      await settle();
+      const droppedGone = !notesOnDisk.has('Claude chats/Plans/Dropped.md');
       // Feedback, and Reject.
       const sentBack = propose();
       const feedbackBox = sentBack.card.querySelector('.vc-plan-feedback input') as HTMLInputElement;
@@ -1086,9 +1110,13 @@ async function main(): Promise<void> {
         feedbackResult.behavior === 'deny' &&
         feedbackResult.message === 'The user reviewed the plan and asks for changes: Only the first step' &&
         rejectResult.behavior === 'deny' &&
-        cancelledGone;
+        cancelledGone &&
+        racedResult.behavior === 'allow' &&
+        racedResult.updatedInput?.plan === `${plan}\n3. Renamed and edited.` &&
+        racedNoteGone &&
+        droppedGone;
       console.log(
-        `plan card: "${planTitle}"; as it is "${plainSaid}"; edited in ${notePath} (opened ${opened}) -> "${editedSaid}", note gone ${noteGone}; feedback ${feedbackResult.behavior} "${feedbackResult.message}"; reject ${rejectResult.behavior}; cancelled, note gone ${cancelledGone} -> ${planOk}`,
+        `plan card: "${planTitle}"; as it is "${plainSaid}"; edited in ${notePath} (opened ${opened}) -> "${editedSaid}", note gone ${noteGone}; feedback ${feedbackResult.behavior} "${feedbackResult.message}"; reject ${rejectResult.behavior}; cancelled, note gone ${cancelledGone}; Approve then Reject ${racedResult.behavior} with the renamed note's edits ${racedResult.updatedInput?.plan?.includes('Renamed and edited') === true}; dropped note gone ${droppedGone} -> ${planOk}`,
       );
       if (!planOk) process.exitCode = 1;
     }

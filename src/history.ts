@@ -333,9 +333,12 @@ function sessionFolder(dir: string): string {
 export async function readPlanFile(file: unknown): Promise<string | null> {
   if (typeof file !== 'string' || !file.endsWith('.md')) return null;
   const configDir = (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).normalize('NFC');
-  const folder = path.join(configDir, 'plans');
   const resolved = path.resolve(file.normalize('NFC'));
-  if (path.dirname(resolved) !== folder) return null;
+  // Compared as real paths, so a config folder reached through a symlink still matches; without case on Windows.
+  const real = (where: string) => fs.realpath(where).then((found) => found.normalize('NFC'), () => where);
+  const [inFolder, plans] = await Promise.all([real(path.dirname(resolved)), real(path.join(configDir, 'plans'))]);
+  const same = process.platform === 'win32' ? inFolder.toLowerCase() === plans.toLowerCase() : inFolder === plans;
+  if (!same) return null;
   return fs.readFile(resolved, 'utf8').catch(() => null);
 }
 

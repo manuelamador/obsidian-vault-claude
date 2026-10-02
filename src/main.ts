@@ -372,6 +372,8 @@ export default class VaultClaudePlugin extends Plugin {
    * disk rather than in Obsidian's index, which learns of a note a moment after Claude writes it.
    */
   private onDisk(path: string): boolean {
+    // Obsidian's index first, which holds every note but one just written; the disk for that one.
+    if (this.app.vault?.getAbstractFileByPath(path) instanceof TFile) return true;
     const root = this.vaultRoot();
     return root === null || existsSync(joinPath(root, path));
   }

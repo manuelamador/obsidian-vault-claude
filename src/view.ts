@@ -215,6 +215,8 @@ interface Approval {
   resolve: (result: PermissionResult) => void;
   /** For a plan: the note it is being edited in, kept with the request while its chat is in the background. */
   notePath?: string | null;
+  /** Its card has been shown once: drawn again (its chat back from the background), it is not logged again. */
+  shown?: boolean;
 }
 
 /** `/plan`, offered among the slash commands: the panel handles it (see ChatView.send). */
@@ -1382,6 +1384,7 @@ export class ChatView extends ItemView {
       'abort',
       () => {
         entry.approvals = entry.approvals.filter((open) => open !== approval);
+        this.dropPlanNote(approval);
         approval.resolve({ behavior: 'deny', message: 'Cancelled.' });
       },
       { once: true },
@@ -1504,7 +1507,10 @@ export class ChatView extends ItemView {
 
   /** Stops a background chat: its approvals refused, its timer and notice gone, its process closed. */
   private dropBackground(entry: BackgroundChat): void {
-    for (const approval of entry.approvals) approval.resolve({ behavior: 'deny', message: 'Chat closed.' });
+    for (const approval of entry.approvals) {
+      this.dropPlanNote(approval);
+      approval.resolve({ behavior: 'deny', message: 'Chat closed.' });
+    }
     clearSettle(entry);
     entry.notice?.hide();
     this.background.delete(entry);
@@ -3026,6 +3032,11 @@ export class ChatView extends ItemView {
    */
   followNote(from: string, to: string | null): void {
     followDraftNotes(this.localDrafts, from, to, (key) => this.localDrafts.delete(key));
+    // A plan being edited in a note, here or in a chat in the background.
+    for (const approval of [...this.openApprovals, ...[...this.background].flatMap((entry) => entry.approvals)]) {
+      const plan = approval.notePath ? movedPath(approval.notePath, from, to) : undefined;
+      if (plan !== undefined) approval.notePath = plan;
+    }
     const attached = this.attachedNote === null ? undefined : movedPath(this.attachedNote, from, to);
     if (attached !== undefined) this.attachNote(attached);
     const draftNote = this.draftPath === null ? undefined : movedPath(this.draftPath, from, to);
@@ -4216,7 +4227,8 @@ export class ChatView extends ItemView {
     const { toolName, input } = request;
     const summary = summarizeTool(toolName, input, this.plugin.vaultRoot() ?? '');
     const card = this.container().createDiv({ cls: 'vc-permission' });
-    log('approval asked', { tool: toolName });
+    if (!approval.shown) log('approval asked', { tool: toolName });
+    approval.shown = true;
     this.openApprovals.push(approval);
     this.draw.group = null;
     this.pendingApprovals += 1;
@@ -4248,7 +4260,16 @@ export class ChatView extends ItemView {
     request.signal.addEventListener('abort', onAbort, { once: true });
 
     // Claude's multiple-choice questions: answered here, the answers going back as the tool's input.
+    // Ones the card cannot read are refused at once, and Claude asks in plain text instead.
     const questions = toolName === 'AskUserQuestion' ? readQuestions(input) : null;
+    if (toolName === 'AskUserQuestion' && !questions) {
+      finish(
+        { behavior: 'deny', message: 'The panel could not show these questions. Ask them in plain text instead.' },
+        'Not shown',
+        "Claude's questions could not be shown; it was asked to ask them in plain text",
+      );
+      return;
+    }
     if (questions) {
       renderQuestionCard(card, questions, (answers) =>
         answers
@@ -4311,8 +4332,7 @@ export class ChatView extends ItemView {
       approval.notePath = null;
       if (!file) return null;
       const text = (await this.app.vault.read(file)).trim();
-      this.closeDraftTabs(file);
-      await this.app.fileManager.trashFile(file).catch((error: unknown) => log('removing a plan note failed', error));
+      await this.discardNote(file);
       return text && text !== plan.trim() ? text : null;
     };
     // A card drawn again (its chat back from the background) listens again: taking the note twice is harmless.
@@ -4322,13 +4342,26 @@ export class ChatView extends ItemView {
     card.createDiv({ cls: 'vc-permission-title', text: "Claude's plan" });
     const body = card.createDiv({ cls: 'vc-permission-detail vc-plan' });
     const buttons = card.createDiv({ cls: 'vc-permission-buttons' });
+    // The first answer holds: the card's controls go still while the note is read and put away.
+    let deciding = false;
+    const decide = (answer: () => Promise<void>) => {
+      if (deciding) return;
+      deciding = true;
+      for (const control of card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')) control.disabled = true;
+      answer().catch((error: unknown) => {
+        log('answering a plan failed', error);
+        new Notice(`Could not answer the plan: ${errorText(error)}`);
+        deciding = false;
+        for (const control of card.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')) control.disabled = false;
+      });
+    };
     const approve = async () => {
       const edited = await takeNote();
       if (edited) finish({ behavior: 'allow', updatedInput: { ...input, plan: edited } }, 'Approved', 'Plan approved, with your edits');
       else finish({ behavior: 'allow', updatedInput: input }, 'Approved', 'Plan approved');
     };
     const approveButton = buttons.createEl('button', { cls: 'mod-cta', text: 'Approve' });
-    approveButton.addEventListener('click', () => void approve());
+    approveButton.addEventListener('click', () => decide(approve));
     const editButton = buttons.createEl('button', { text: noteFile() ? 'Open the plan note' : 'Edit in a note' });
     editButton.addEventListener('click', () => {
       void (async () => {
@@ -4348,23 +4381,28 @@ export class ChatView extends ItemView {
         }
       })();
     });
-    buttons.createEl('button', { text: 'Reject' }).addEventListener('click', () => {
-      void takeNote().then(() => finish({ behavior: 'deny', message: 'The user rejected the plan.' }, 'Rejected', 'Plan rejected'));
-    });
+    buttons.createEl('button', { text: 'Reject' }).addEventListener('click', () =>
+      decide(async () => {
+        await takeNote();
+        finish({ behavior: 'deny', message: 'The user rejected the plan.' }, 'Rejected', 'Plan rejected');
+      }),
+    );
     const feedbackRow = card.createDiv({ cls: 'vc-plan-feedback' });
     const feedback = feedbackRow.createEl('input', { attr: { type: 'text', placeholder: 'Or tell Claude what to change' } });
-    const sendFeedback = async () => {
+    const sendFeedback = () => {
       const text = feedback.value.trim();
       if (!text) return;
-      const edited = await takeNote();
-      const message = `The user reviewed the plan and asks for changes: ${text}${edited ? `\n\nTheir edited version of the plan:\n\n${edited}` : ''}`;
-      finish({ behavior: 'deny', message }, 'Sent back', `Plan sent back: “${text}”`);
+      decide(async () => {
+        const edited = await takeNote();
+        const message = `The user reviewed the plan and asks for changes: ${text}${edited ? `\n\nTheir edited version of the plan:\n\n${edited}` : ''}`;
+        finish({ behavior: 'deny', message }, 'Sent back', `Plan sent back: “${text}”`);
+      });
     };
-    feedbackRow.createEl('button', { text: 'Send feedback' }).addEventListener('click', () => void sendFeedback());
+    feedbackRow.createEl('button', { text: 'Send feedback' }).addEventListener('click', sendFeedback);
     feedback.addEventListener('keydown', (evt) => {
       if (evt.key !== 'Enter' || evt.isComposing) return;
       evt.preventDefault();
-      void sendFeedback();
+      sendFeedback();
     });
     // Nothing is approved or edited unseen: until the plan is shown, only feedback and Reject answer.
     const shown = (text: string) => {
@@ -4383,7 +4421,7 @@ export class ChatView extends ItemView {
     body.setText('Reading the plan…');
     void this.showPlan(input.planFilePath, signal, card).then((text) => {
       if (text) shown(text);
-      else if (card.isConnected || !signal.aborted) body.setText("The plan could not be read. Send it back with feedback asking Claude to show it, or reject it.");
+      else if (!card.hasClass('is-decided')) body.setText("The plan could not be read. Send it back with feedback asking Claude to show it, or reject it.");
     });
   }
 
@@ -4410,8 +4448,6 @@ export class ChatView extends ItemView {
       el.createEl('pre').createEl('code', { text: str('command') });
       const description = str('description');
       if (description) el.createDiv({ cls: 'vc-muted', text: description });
-    } else if (toolName === 'ExitPlanMode' && str('plan') !== undefined) {
-      this.renderMarkdown(str('plan') ?? '', el.createDiv({ cls: 'vc-plan' }));
     } else {
       if (summary.text) {
         const line = el.createDiv({ text: summary.text });
@@ -4620,7 +4656,7 @@ export class ChatView extends ItemView {
     const text = (await this.app.vault.read(file)).trim();
     this.draftPath = null;
     this.updateDraftLine();
-    this.closeDraftTabs(file);
+    this.closeNoteTabs(file);
     if (!text) {
       await this.app.fileManager.trashFile(file);
       new Notice('The draft was empty: nothing was sent, and the note is gone.');
@@ -4635,8 +4671,21 @@ export class ChatView extends ItemView {
     return this.draftFile()?.path === path;
   }
 
-  /** The draft is written to be sent: once it is, its tabs have nothing left to show. */
-  private closeDraftTabs(file: TFile): void {
+  /** Closes note `file`'s tabs and moves it to the trash: a plan answered, or refused. */
+  private async discardNote(file: TFile): Promise<void> {
+    this.closeNoteTabs(file);
+    await this.app.fileManager.trashFile(file).catch((error: unknown) => log('removing a note failed', error));
+  }
+
+  /** The note of a plan refused without its card (its chat dropped, or its request cancelled, in the background). */
+  private dropPlanNote(approval: Approval): void {
+    const file = approval.notePath ? this.app.vault.getAbstractFileByPath(approval.notePath) : null;
+    approval.notePath = null;
+    if (file instanceof TFile) void this.discardNote(file);
+  }
+
+  /** Closes the tabs showing note `file`: a draft sent, or a plan answered, has nothing left to show. */
+  private closeNoteTabs(file: TFile): void {
     for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
       if (leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path) leaf.detach();
     }
@@ -4664,7 +4713,7 @@ export class ChatView extends ItemView {
     this.draftPath = null;
     this.updateDraftLine();
     if (!file) return;
-    this.closeDraftTabs(file);
+    this.closeNoteTabs(file);
     await this.app.fileManager.trashFile(file);
     new Notice(`Draft “${file.basename}” thrown away.`);
   }
