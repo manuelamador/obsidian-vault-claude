@@ -1042,6 +1042,68 @@
   gap: var(--size-4-2);
 }
 
+/* Claude's multiple-choice questions (see questionCard.ts): options as buttons, picked ones in the accent colour. */
+.vc-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+}
+
+.vc-question-header {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vc-question-text {
+  font-weight: var(--font-semibold);
+}
+
+.vc-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+}
+
+.vc-question-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  height: auto;
+  padding: var(--size-4-2) var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  text-align: left;
+  white-space: normal;
+}
+
+.vc-question-option.is-picked {
+  border-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 15%, var(--background-primary));
+}
+
+.vc-question-label {
+  font-weight: var(--font-medium);
+}
+
+.vc-question-description {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-question-preview {
+  margin: 0;
+  max-height: 16em;
+  overflow: auto;
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+}
+
+.vc-question-own {
+  width: 100%;
+}
+
 .vc-diff-same {
   color: var(--text-muted);
 }

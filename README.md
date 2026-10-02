@@ -44,7 +44,8 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/reply-buttons.png" width="420" alt="The buttons under a reply — reply, copy, insert into a note, branch — shown three times with the tooltips “Reply to this”, “Insert into note” and “Branch from here”">
 
-- A system notification arrives when a long reply finishes or Claude needs approval while Obsidian is in the background.
+- **When Claude asks a multiple-choice question**, a card shows it in the chat: click an option, pick several where the question allows, or type your own answer. Skip declines.
+- A system notification arrives when a long reply finishes or Claude needs approval or an answer while Obsidian is in the background.
 
 **Working from notes**
 - **Right-clicking selected text in a note:** Ask Claude about selection, and Edit with Claude (a word diff to accept).

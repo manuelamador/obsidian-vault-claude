@@ -50,6 +50,7 @@ import { trackTask } from './backgroundTasks';
 import { followDraftNotes, movedPath, NOTE_CHAT_ICONS, type NoteChatEntry } from './noteChats';
 import { PromptNav } from './promptNav';
 import { SideChat } from './sideChat';
+import { answeredText, readQuestions, renderQuestionCard } from './questionCard';
 import { HistoryModal, RenameModal, confirmDelete } from './historyModal';
 import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
@@ -211,6 +212,11 @@ interface ToolEntry {
 interface Approval {
   request: PermissionRequest;
   resolve: (result: PermissionResult) => void;
+}
+
+/** What a chat waiting on `request` is waiting for, after "Claude": an approval, or an answer to its questions. */
+function waitingFor(request: PermissionRequest): string {
+  return request.toolName === 'AskUserQuestion' ? 'has a question for you' : 'is waiting for your approval';
 }
 
 /** A chat that was still working when another one was opened; it keeps running off screen. */
@@ -1353,7 +1359,7 @@ export class ChatView extends ItemView {
     this.sessionToken = null;
     this.session = null;
     this.updateBackgroundIndicator();
-    if (entry.approvals.length > 0) this.notifyBackground(entry, 'is waiting for your approval', true);
+    if (entry.approvals.length > 0) this.notifyBackground(entry, waitingFor(entry.approvals[0].request), true);
   }
 
   /** Keeps a permission request of a background chat open until the chat is shown again. */
@@ -1423,8 +1429,8 @@ export class ChatView extends ItemView {
       onPermission: (request) =>
         new Promise<PermissionResult>((resolve) => {
           this.adoptApproval(entry, { request, resolve });
-          this.notifyBackground(entry, 'is waiting for your approval', true);
-          this.systemNotify('Claude is waiting for your approval', entry.title ?? 'A chat', () => void this.showChat(entry));
+          this.notifyBackground(entry, waitingFor(request), true);
+          this.systemNotify(`Claude ${waitingFor(request)}`, entry.title ?? 'A chat', () => void this.showChat(entry));
         }),
       onEnd: (error) => {
         // Ended on its own (not by finishBackground or the panel closing, which remove it first).
@@ -2776,6 +2782,9 @@ export class ChatView extends ItemView {
         forkSession: this.forkOnResume,
         allowBypass: settings.allowBypass,
         denyRules: denyRuleList(settings.denyRules),
+        // Its multiple-choice questions are answered in the chat (see renderApprovalCard); a side
+        // chat leaves them off, and asks in plain text.
+        askQuestions: true,
         showThinking: true,
       },
       this.foregroundHandlers(token),
@@ -3877,7 +3886,8 @@ export class ChatView extends ItemView {
     this.updateTab();
     if (!this.activityEl || !this.activityLabel || !this.activityTime || !this.isOnScreen()) return;
     const waiting = this.pendingApprovals > 0;
-    const label = this.interrupted ? 'Stopping…' : waiting ? 'Waiting for your approval' : this.phase;
+    const asking = this.openApprovals.some((approval) => approval.request.toolName === 'AskUserQuestion');
+    const label = this.interrupted ? 'Stopping…' : waiting ? (asking ? 'Waiting for your answer' : 'Waiting for your approval') : this.phase;
     this.activityLabel.setText(label);
     this.activityLabel.setAttr('title', label);
     this.activityTime.setText(formatDuration(Date.now() - this.turnStartedAt));
@@ -4159,7 +4169,7 @@ export class ChatView extends ItemView {
   }
 
   private askPermission(request: PermissionRequest): Promise<PermissionResult> {
-    this.systemNotify('Claude is waiting for your approval', this.chatName ?? 'Chat', () => {
+    this.systemNotify(`Claude ${waitingFor(request)}`, this.chatName ?? 'Chat', () => {
       void this.app.workspace.revealLeaf(this.leaf);
     });
     return new Promise((resolve) => this.renderApprovalCard({ request, resolve }));
@@ -4180,11 +4190,9 @@ export class ChatView extends ItemView {
     this.pendingApprovals += 1;
     this.tickStatus();
 
-    card.createDiv({ cls: 'vc-permission-title', text: request.title ?? `Claude wants to use ${toolLabel(toolName)}` });
-    this.renderPermissionDetail(card.createDiv({ cls: 'vc-permission-detail' }), request);
-    if (request.decisionReason) card.createDiv({ cls: 'vc-muted', text: request.decisionReason });
-
-    const finish = (result: PermissionResult, label: string) => {
+    // `label`: what the card says once decided, before the tool and what it was for; a question's
+    // card says its answers instead.
+    const finish = (result: PermissionResult, label: string, said?: string) => {
       request.signal.removeEventListener('abort', onAbort);
       // A card whose chat has since moved to the background only answers the request.
       const onScreen = this.openApprovals.includes(approval);
@@ -4193,8 +4201,9 @@ export class ChatView extends ItemView {
         this.pendingApprovals = Math.max(0, this.pendingApprovals - 1);
         if (this.busy) this.tickStatus();
         card.empty();
+        card.removeClass('vc-question-card');
         card.addClass('is-decided');
-        card.setText(`${label}: ${toolLabel(toolName)}${summary.text ? ` ${summary.text}` : ''}`);
+        card.setText(said ?? `${label}: ${toolLabel(toolName)}${summary.text ? ` ${summary.text}` : ''}`);
         if (result.behavior === 'allow' && toolName === 'ExitPlanMode' && this.mode === 'plan') {
           this.mode = 'default';
           this.modeMenu.value = 'default';
@@ -4204,6 +4213,22 @@ export class ChatView extends ItemView {
     };
     const onAbort = () => finish({ behavior: 'deny', message: 'Cancelled.' }, 'Cancelled');
     request.signal.addEventListener('abort', onAbort, { once: true });
+
+    // Claude's multiple-choice questions: answered here, the answers going back as the tool's input.
+    const questions = toolName === 'AskUserQuestion' ? readQuestions(input) : null;
+    if (questions) {
+      renderQuestionCard(card, questions, (answers) =>
+        answers
+          ? finish({ behavior: 'allow', updatedInput: { ...input, answers } }, 'Answered', `Answered: ${answeredText(questions, answers)}`)
+          : finish({ behavior: 'deny', message: 'The user chose not to answer these questions.' }, 'Skipped', 'Questions skipped'),
+      );
+      this.scrollToBottom(true);
+      return;
+    }
+
+    card.createDiv({ cls: 'vc-permission-title', text: request.title ?? `Claude wants to use ${toolLabel(toolName)}` });
+    this.renderPermissionDetail(card.createDiv({ cls: 'vc-permission-detail' }), request);
+    if (request.decisionReason) card.createDiv({ cls: 'vc-muted', text: request.decisionReason });
 
     const buttons = card.createDiv({ cls: 'vc-permission-buttons' });
     buttons

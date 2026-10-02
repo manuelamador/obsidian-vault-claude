@@ -925,6 +925,65 @@ async function main(): Promise<void> {
     const detailOk = detailLines === 'vc-diff-same:  a | vc-diff-del:\u2212 b | vc-diff-ins:+ B | vc-diff-same:  c | vc-diff-ins:+ d';
     console.log(`approval card diff: ${detailLines} -> ${detailOk}`);
     if (!detailOk) process.exitCode = 1;
+    // Claude's multiple-choice questions: answered in a card, the answers going back as the tool's input.
+    {
+      const askView = view as unknown as { askPermission(request: unknown): Promise<{ behavior: string; updatedInput?: { answers?: Record<string, string> }; message?: string }> };
+      const fruit = { question: 'Which fruit do you prefer?', header: 'Fruit', multiSelect: false, options: [{ label: 'Apple', description: 'Crisp' }, { label: 'Banana', description: 'Soft', preview: 'a sketch' }] };
+      const extras = { question: 'Which extras?', header: 'Extras', multiSelect: true, options: [{ label: 'Nuts', description: '' }, { label: 'Honey', description: '' }, { label: 'Yogurt', description: '' }] };
+      const drawState = view as unknown as { draw: { turn: HTMLElement | null } };
+      const ask = (questions: unknown[], signal = new AbortController().signal) => {
+        internals.messagesEl.empty();
+        drawState.draw.turn = null;
+        const answered = askView.askPermission({ toolName: 'AskUserQuestion', input: { questions }, signal });
+        return { answered, card: internals.messagesEl.querySelector('.vc-question-card') as HTMLElement };
+      };
+      const option = (card: HTMLElement, label: string) => [...card.querySelectorAll<HTMLElement>('.vc-question-option')].find((el) => el.querySelector('.vc-question-label')?.textContent === label);
+      // One question, one answer: a click answers it.
+      const one = ask([fruit]);
+      const oneTitle = one.card.querySelector('.vc-permission-title')?.textContent;
+      option(one.card, 'Banana')?.click();
+      const oneResult = await one.answered;
+      const oneDecided = internals.messagesEl.querySelector('.vc-permission.is-decided')?.textContent;
+      // Two questions, one of several answers: Send waits for both; several picks and one's own answer are joined.
+      const two = ask([fruit, extras]);
+      const send = [...two.card.querySelectorAll('button')].find((el) => el.textContent === 'Send') as HTMLButtonElement;
+      option(two.card, 'Banana')?.click();
+      const previewShown = (two.card.querySelector('.vc-question-preview') as HTMLElement).isShown();
+      const disabledWithOne = send.disabled;
+      option(two.card, 'Nuts')?.click();
+      option(two.card, 'Yogurt')?.click();
+      const own = two.card.querySelectorAll<HTMLInputElement>('.vc-question-own')[1];
+      own.value = 'Cinnamon';
+      own.dispatchEvent(new dom.window.Event('input'));
+      const enabledWithBoth = !send.disabled;
+      send.click();
+      const twoResult = await two.answered;
+      // Skipped, or cancelled by Claude Code: refused, and the card says so.
+      const skip = ask([fruit]);
+      ([...skip.card.querySelectorAll('button')].find((el) => el.textContent === 'Skip') as HTMLElement).click();
+      const skipped = await skip.answered;
+      const controller = new AbortController();
+      const cancel = ask([fruit], controller.signal);
+      controller.abort();
+      const cancelled = await cancel.answered;
+      internals.messagesEl.empty();
+      drawState.draw.turn = null;
+      const questionsOk =
+        oneTitle === 'Claude has a question' &&
+        oneResult.behavior === 'allow' &&
+        JSON.stringify(oneResult.updatedInput?.answers) === JSON.stringify({ 'Which fruit do you prefer?': 'Banana' }) &&
+        oneDecided === 'Answered: Fruit → Banana' &&
+        previewShown &&
+        disabledWithOne &&
+        enabledWithBoth &&
+        JSON.stringify(twoResult.updatedInput?.answers) === JSON.stringify({ 'Which fruit do you prefer?': 'Banana', 'Which extras?': 'Nuts, Yogurt, Cinnamon' }) &&
+        skipped.behavior === 'deny' &&
+        cancelled.behavior === 'deny';
+      console.log(
+        `questions: "${oneTitle}" answered ${JSON.stringify(oneResult.updatedInput?.answers)}, "${oneDecided}"; two ${JSON.stringify(twoResult.updatedInput?.answers)} (send waited ${disabledWithOne}, preview ${previewShown}); skipped ${skipped.behavior}, cancelled ${cancelled.behavior} -> ${questionsOk}`,
+      );
+      if (!questionsOk) process.exitCode = 1;
+    }
 
     // "Send to Claude": a folder and a PDF become @ mentions after what is typed.
     const mentionInput = root.querySelector('.vc-input') as HTMLTextAreaElement;

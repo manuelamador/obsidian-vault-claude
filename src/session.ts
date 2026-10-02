@@ -47,6 +47,8 @@ export interface SessionConfig {
   allowBypass?: boolean;
   /** Permission deny rules such as `Bash(git reset:*)`; they apply in every mode, bypass included. */
   denyRules?: string[];
+  /** Claude may ask multiple-choice questions (its AskUserQuestion tool), which reach onPermission to be answered. */
+  askQuestions?: boolean;
   /** With `resume`, continue in a new session that starts as a copy, leaving the original untouched. */
   forkSession?: boolean;
   /** The new session's id, chosen here rather than by Claude Code; not with `resume` unless forking. */
@@ -376,8 +378,8 @@ export class ClaudeSession {
         resumeSessionAt: config.resume ? config.resumeSessionAt : undefined,
         includePartialMessages: true,
         abortController: this.abortController,
-        // The panel has no UI for multiple-choice questions; Claude asks in plain text instead.
-        disallowedTools: ['AskUserQuestion', ...(config.denyRules ?? [])],
+        // Without a way to answer multiple-choice questions, Claude asks in plain text instead.
+        disallowedTools: [...(config.askQuestions ? [] : ['AskUserQuestion']), ...(config.denyRules ?? [])],
         canUseTool: (toolName, input, options) =>
           this.handlers.onPermission({
             toolName,
