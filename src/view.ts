@@ -27,6 +27,7 @@ import type {
   SDKResultMessage,
   SDKUserMessage,
   SessionMessage,
+  SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
 import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, loadTranscript, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
@@ -215,6 +216,9 @@ interface Approval {
   /** For a plan: the note it is being edited in, kept with the request while its chat is in the background. */
   notePath?: string | null;
 }
+
+/** `/plan`, offered among the slash commands: the panel handles it (see ChatView.send). */
+const PLAN_COMMAND: SlashCommand = { name: 'plan', description: 'Switch this chat to Plan mode, and plan what follows', argumentHint: '<what to plan>' };
 
 /** A plan request without the plan's text: its file is read this many times, this far apart, until it is written (see showPlan). */
 const PLAN_READ_ATTEMPTS = 40;
@@ -801,7 +805,10 @@ export class ChatView extends ItemView {
       cls: 'vc-input',
       attr: { rows: '3', placeholder: this.placeholderText() },
     });
-    this.suggest = new CommandSuggest(footer, this.inputEl, () => this.plugin.commands);
+    // The panel's own `/plan` (see send) beside Claude Code's commands, which leave it out.
+    this.suggest = new CommandSuggest(footer, this.inputEl, () =>
+      this.plugin.commands.some((command) => command.name === 'plan') ? this.plugin.commands : [...this.plugin.commands, PLAN_COMMAND],
+    );
     this.registerDomEvent(this.inputEl, 'keydown', (evt) => this.onInputKeydown(evt));
     this.registerDomEvent(this.inputEl, 'input', () => {
       this.suggest.update();
@@ -2688,6 +2695,24 @@ export class ChatView extends ItemView {
   // ---- Sending -----------------------------------------------------------
 
   private async send(): Promise<void> {
+    // `/plan`, as in a terminal: the chat goes into Plan mode, and what follows is the message. Claude
+    // Code takes the command only in a terminal, and answers "/plan isn't available in this environment".
+    const plan = /^\/plan(?=\s|$)/i.exec(this.inputEl.value.trimStart());
+    if (plan) {
+      const rest = this.inputEl.value.trimStart().slice(plan[0].length).trim();
+      if (this.mode !== 'plan') {
+        this.modeMenu.value = 'plan';
+        await this.changeMode('plan');
+        // Refused (see changeMode): nothing is sent, the text stays to try again.
+        if ((this.mode as PermissionMode) !== 'plan') return;
+      }
+      this.inputEl.value = rest;
+      this.growInput();
+      if (!rest && this.attachments.length === 0) {
+        new Notice('Plan mode: Claude plans first, and asks before carrying the plan out.');
+        return;
+      }
+    }
     const text = this.inputEl.value.trim();
     if (!text && this.attachments.length === 0) return;
     const session = this.ensureSession();

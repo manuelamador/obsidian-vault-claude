@@ -3287,6 +3287,44 @@ async function main(): Promise<void> {
       if (!offerOk) process.exitCode = 1;
     }
 
+    // `/plan`, which Claude Code takes only in a terminal: the panel switches the chat to Plan mode and
+    // sends what follows; `/plan` alone only switches. It is offered among the slash commands.
+    {
+      const planInput = root.querySelector('.vc-input') as HTMLTextAreaElement;
+      planInput.value = '/pl';
+      planInput.setSelectionRange(3, 3);
+      planInput.dispatchEvent(new dom.window.Event('input'));
+      const offeredPlan = [...root.querySelectorAll('.vc-suggest-item .vc-suggest-name')].some((el) => el.textContent === '/plan');
+      const modes: string[] = [];
+      const sentPlan: unknown[] = [];
+      const planChat = view as unknown as { session: unknown; mode: string; send(): Promise<void> };
+      view.newChat();
+      planChat.mode = 'auto';
+      planChat.session = {
+        setPermissionMode: async (mode: string) => void modes.push(mode),
+        send: (content: unknown) => void sentPlan.push(content),
+        setHandlers() {},
+        close() {},
+      };
+      planInput.value = '/plan check the notes';
+      await planChat.send();
+      const afterPlan = { mode: planChat.mode, input: planInput.value };
+      planInput.value = '/plan';
+      await planChat.send();
+      const alone = { sent: sentPlan.length, input: planInput.value };
+      planChat.session = null;
+      view.newChat();
+      const slashOk =
+        offeredPlan &&
+        JSON.stringify(modes) === JSON.stringify(['plan']) &&
+        afterPlan.mode === 'plan' &&
+        JSON.stringify(sentPlan) === JSON.stringify(['check the notes']) &&
+        alone.sent === 1 &&
+        alone.input === '';
+      console.log(`/plan: offered ${offeredPlan}; modes set ${JSON.stringify(modes)}; sent ${JSON.stringify(sentPlan)}; alone sends nothing ${alone.sent === 1} -> ${slashOk}`);
+      if (!slashOk) process.exitCode = 1;
+    }
+
     const adopted: unknown[] = [];
     (plugin as { heir: unknown }).heir = { adoptBackground: (entry: unknown) => void adopted.push(entry) };
     startRunning();
