@@ -1812,6 +1812,23 @@ async function main(): Promise<void> {
     const splitOk = splitOrder === 'fold,text,fold,text';
     console.log(`steps and messages in order: ${splitOrder} (expected fold,text,fold,text) -> ${splitOk}`);
     if (!splitOk) process.exitCode = 1;
+    // Text with nothing to show between steps (white space streamed between tool calls) leaves one fold.
+    {
+      const blankTurn = document.createElement('div');
+      const step = (text: string, thinking = false) => blankTurn.createDiv({ cls: `vc-tools${thinking ? ' vc-thinking' : ''}` }).createDiv({ cls: 'vc-tool', text });
+      step('thought', true);
+      step('Bash ls');
+      blankTurn.createDiv({ cls: 'vc-text', text: '\n  ' });
+      step('Read x');
+      step('another thought', true);
+      blankTurn.createDiv({ cls: 'vc-text', text: 'Done.' });
+      (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(blankTurn);
+      const blankOrder = [...blankTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
+      const blankHeader = blankTurn.querySelector('.vc-steps-header')?.textContent;
+      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts';
+      console.log(`steps around empty text: ${blankOrder}, "${blankHeader}" -> ${blankOk}`);
+      if (!blankOk) process.exitCode = 1;
+    }
     // Steps before any message of yours (a resumed session) must still land in a turn, not loose in the chat.
     internals.messagesEl.empty();
     internals.renderTranscript([

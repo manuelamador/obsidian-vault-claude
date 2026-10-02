@@ -222,6 +222,11 @@ interface Approval {
 /** `/plan`, offered among the slash commands: the panel handles it (see ChatView.send). */
 const PLAN_COMMAND: SlashCommand = { name: 'plan', description: 'Switch this chat to Plan mode, and plan what follows', argumentHint: '<what to plan>' };
 
+/** A finished reply's step (see ChatView.foldSteps): a run of tool calls or thinking, or an approval card. */
+function isStep(el: HTMLElement): boolean {
+  return el.hasClass('vc-tools') || el.hasClass('vc-permission');
+}
+
 /** A plan request without the plan's text: its file is read this many times, this far apart, until it is written (see showPlan). */
 const PLAN_READ_ATTEMPTS = 40;
 const PLAN_READ_PAUSE_MS = 250;
@@ -2155,18 +2160,26 @@ export class ChatView extends ItemView {
    */
   private foldSteps(turn: HTMLElement): void {
     if (turn.querySelector(':scope > .vc-steps')) return;
-    const isStep = (el: HTMLElement) => el.hasClass('vc-tools') || el.hasClass('vc-permission');
+    // Something with nothing to show between two steps (text that was only white space, streamed
+    // between tool calls) does not end their run: it would split one fold into two with nothing between.
+    const blank = (el: HTMLElement) => !el.textContent?.trim() && !el.querySelector('img, svg, video, audio, iframe, canvas, input, mjx-container');
     const runs: HTMLElement[][] = [];
     let run: HTMLElement[] = [];
+    let gap: HTMLElement[] = [];
     for (const el of Array.from(turn.children) as HTMLElement[]) {
-      if (isStep(el)) run.push(el);
-      else {
+      if (isStep(el)) {
+        run.push(...gap, el);
+        gap = [];
+      } else if (run.length > 0 && blank(el)) {
+        gap.push(el);
+      } else {
         if (run.length > 0) runs.push(run);
         run = [];
+        gap = [];
       }
     }
     if (run.length > 0) runs.push(run);
-    for (const steps of runs) if (steps.length >= 2) this.foldRun(turn, steps);
+    for (const steps of runs) if (steps.filter(isStep).length >= 2) this.foldRun(turn, steps);
   }
 
   /** One run of consecutive steps, folded in place. */
@@ -2182,7 +2195,7 @@ export class ChatView extends ItemView {
     const thoughts = body.querySelectorAll(':scope > .vc-thinking').length;
     const parts = [tools && count(tools, 'tool call'), thoughts && count(thoughts, 'thought')].filter(Boolean);
     setIcon(header.createSpan({ cls: 'vc-tools-chevron' }), 'chevron-right');
-    header.createSpan({ cls: 'vc-tools-text', text: `Steps: ${parts.join(', ') || count(steps.length, 'step')}` });
+    header.createSpan({ cls: 'vc-tools-text', text: `Steps: ${parts.join(', ') || count(steps.filter(isStep).length, 'step')}` });
     const failed = body.querySelectorAll('.vc-tool.is-error').length;
     if (failed > 0) header.createSpan({ cls: 'vc-tools-failed', text: `${failed} failed` });
     header.addEventListener('click', () => fold.toggleClass('is-collapsed', !fold.hasClass('is-collapsed')));
@@ -3915,7 +3928,10 @@ export class ChatView extends ItemView {
     this.activityTime = null;
     this.inputEl.placeholder = this.placeholderText();
     this.updateStopButton();
-    this.draw.liveText?.removeClass('vc-live');
+    // A text block that streamed nothing but white space leaves no empty element behind.
+    const live = this.draw.liveText;
+    if (live && !live.textContent?.trim()) live.remove();
+    else live?.removeClass('vc-live');
     this.draw.liveText = null;
   }
 
