@@ -474,6 +474,9 @@ export class ChatView extends ItemView {
   private readonly pathOnlyMentions = new Set<string>();
   /** What the tray's mention chips show, to redraw it only when that changes (see followMentions). */
   private mentionKey = '';
+  /** The input's text when its chat came on screen, and the undos since that redo may redo (see setUndoFloor). */
+  private undoFloor = '';
+  private undosSinceFloor = 0;
   /** Slash-command suggestions above the input. */
   private suggest!: CommandSuggest;
   /** The last message sent in this chat (or the last prompt of a reopened one), for ↑ in an empty input. */
@@ -843,10 +846,21 @@ export class ChatView extends ItemView {
       this.plugin.commands.some((command) => command.name === 'plan') ? this.plugin.commands : [...this.plugin.commands, PLAN_COMMAND],
     );
     this.registerDomEvent(this.inputEl, 'keydown', (evt) => this.onInputKeydown(evt));
-    this.registerDomEvent(this.inputEl, 'input', () => {
-      this.suggest.update();
-      this.growInput();
-      this.scheduleDraftSave();
+    this.registerDomEvent(this.inputEl, 'input', () => this.inputEdited());
+    // Undo in the input stays within the chat on screen. The window keeps one undo history, and the
+    // input's text is swapped from code when the chat changes, which that history does not record:
+    // undoing past the swap would bring back, or mangle, what was typed in another chat. So undo
+    // stops at the text the chat came back with, and redo only redoes what was undone since.
+    this.registerDomEvent(this.inputEl, 'beforeinput', (evt: InputEvent) => {
+      if (evt.inputType === 'historyUndo') {
+        if (this.inputEl.value === this.undoFloor) evt.preventDefault();
+        else this.undosSinceFloor += 1;
+      } else if (evt.inputType === 'historyRedo') {
+        if (this.undosSinceFloor === 0) evt.preventDefault();
+        else this.undosSinceFloor -= 1;
+      } else {
+        this.undosSinceFloor = 0;
+      }
     });
     this.registerDomEvent(this.inputEl, 'blur', () => this.suggest.hide());
     this.registerDomEvent(this.inputEl, 'paste', (evt) => {
@@ -1166,6 +1180,7 @@ export class ChatView extends ItemView {
   private leaveDraft(): void {
     this.saveDraft();
     this.inputEl.value = '';
+    this.setUndoFloor();
     this.growInput();
   }
 
@@ -1174,6 +1189,7 @@ export class ChatView extends ItemView {
     const key = this.draftKey();
     const draft = this.readDraft(key);
     this.inputEl.value = draft?.text ?? '';
+    this.setUndoFloor();
     this.growInput();
     const fresh = draft === undefined && isLocalDraft(key);
     this.attachedNote = draft?.note ?? (fresh && this.plugin.settings.attachActiveNote ? (this.activeNote()?.file.path ?? null) : null);
@@ -1777,6 +1793,22 @@ export class ChatView extends ItemView {
    * The input grows with what you type, up to two fifths of the panel, and shrinks back when it
    * empties. A drag handle would have to grow the box downwards, off the bottom of the panel.
    */
+  /**
+   * What a change to the input's text brings, typed or put there from code (setRangeText fires no
+   * input event): command suggestions, its size, the mention chips, the draft.
+   */
+  private inputEdited(): void {
+    this.suggest.update();
+    this.growInput();
+    this.scheduleDraftSave();
+  }
+
+  /** The text the chat came back with, below which undo does not go (see the beforeinput listener). */
+  private setUndoFloor(): void {
+    this.undoFloor = this.inputEl.value;
+    this.undosSinceFloor = 0;
+  }
+
   /** Fits the input to its text, and the tray to the mentions in it (see followMentions). */
   private growInput(): void {
     this.followMentions();
@@ -2625,6 +2657,7 @@ export class ChatView extends ItemView {
         const text = item ? `@[[${this.mentionTarget(item)}]] ` : '@';
         this.inputEl.setRangeText(text, start, end, 'end');
         this.inputEl.focus();
+        this.inputEdited();
       }).open();
     }
   }
@@ -2640,8 +2673,9 @@ export class ChatView extends ItemView {
 
   /**
    * The chips above the input: the files, images and selections attached to the next message, then
-   * one for each note, file or folder its text @-mentions. A mentioned note goes with its text, which
-   * its chip sizes; its × sends only the path, and a click on it then takes the text again.
+   * one for each note, file or folder its text @-mentions, which only editing the text takes away. A
+   * mentioned note goes with its text, which its chip sizes; a click sends only its path, and another
+   * takes the text again.
    */
   private renderTray(): void {
     const mentions = this.mentionedItems(this.inputEl.value);
@@ -2670,7 +2704,7 @@ export class ChatView extends ItemView {
           detail: 'path only',
           tooltip: `${name}: only its path goes; Claude reads the note if it needs to. Click to send its text.`,
         });
-        chip.addClass('is-path-only');
+        chip.addClass('is-toggle');
         chip.addEventListener('click', () => {
           this.pathOnlyMentions.delete(item.path);
           this.renderTray();
@@ -2678,7 +2712,14 @@ export class ChatView extends ItemView {
         continue;
       }
       const size = formatTokens(estimateTokens(Math.min((item as TFile).stat?.size ?? 0, MAX_NOTE_CHARS)));
-      renderChip(this.trayEl, { label: name, icon: 'file-text', detail: size, tooltip: `${name}: its text goes with the message (${size}). × sends only its path.` }, () => {
+      const chip = renderChip(this.trayEl, {
+        label: name,
+        icon: 'file-text',
+        detail: size,
+        tooltip: `${name}: its text goes with the message (${size}). Click to send only its path.`,
+      });
+      chip.addClass('is-toggle');
+      chip.addEventListener('click', () => {
         this.pathOnlyMentions.add(item.path);
         this.renderTray();
       });
@@ -2776,6 +2817,7 @@ export class ChatView extends ItemView {
       const mention = `@[[${this.app.metadataCache.fileToLinktext(file, '', true)}]] `;
       this.inputEl.setRangeText(mention, this.inputEl.selectionStart, this.inputEl.selectionEnd, 'end');
       this.inputEl.focus();
+      this.inputEdited();
       return;
     }
     const image = await this.vaultImage(file);

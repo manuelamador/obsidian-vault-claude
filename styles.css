@@ -1751,8 +1751,8 @@ button.vc-continue-button:hover span:last-child {
   white-space: nowrap;
 }
 
-/* A mentioned note sent by its path only: a click sends its text again. */
-.vc-chip.is-path-only {
+/* A mentioned note's chip: a click switches between sending its text and only its path. */
+.vc-chip.is-toggle {
   cursor: pointer;
 }
 
