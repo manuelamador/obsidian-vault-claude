@@ -824,11 +824,12 @@
   gap: var(--size-4-2);
 }
 
-.vc-text > :first-child {
+/* Rendered Markdown (a reply, a plan, a side chat's question) sits flush in what holds it. */
+.vc-markdown > :first-child {
   margin-top: 0;
 }
 
-.vc-text > :last-child {
+.vc-markdown > :last-child {
   margin-bottom: 0;
 }
 
@@ -1116,14 +1117,6 @@
   border-left: 2px solid var(--interactive-accent);
   border-radius: var(--radius-s);
   background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
-}
-
-.vc-plan-card .vc-plan > :first-child {
-  margin-top: 0;
-}
-
-.vc-plan-card .vc-plan > :last-child {
-  margin-bottom: 0;
 }
 
 .vc-plan-feedback {
@@ -1457,7 +1450,7 @@ button.vc-continue-button:hover span:last-child {
 
 /* Where the chat was compacted, or its mode or model changed: a dashed rule on either side of the line. */
 .vc-compaction,
-.vc-mode-line {
+.vc-setting-line {
   display: flex;
   align-items: center;
   gap: var(--size-4-2);
@@ -1467,8 +1460,8 @@ button.vc-continue-button:hover span:last-child {
 
 .vc-compaction::before,
 .vc-compaction::after,
-.vc-mode-line::before,
-.vc-mode-line::after {
+.vc-setting-line::before,
+.vc-setting-line::after {
   content: '';
   flex: 1 0 1.5em;
   border-top: 1px dashed var(--background-modifier-border-hover);
@@ -1535,7 +1528,7 @@ button.vc-continue-button:hover span:last-child {
   font-size: var(--font-ui-smaller);
 }
 
-.vc-mode-line.is-plan {
+.vc-setting-line.is-plan {
   color: var(--text-accent);
 }
 

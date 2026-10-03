@@ -1038,6 +1038,8 @@ async function main(): Promise<void> {
       const answer = await asked;
       internals.messagesEl.empty();
       tripView.draw.turn = null;
+      // Drawn twice without the newChat or showChat that resets it in the panel: reset here.
+      (view as unknown as { pendingApprovals: number }).pendingApprovals = 0;
       const tripOk = whileOpen === 2 && listening.size === 0 && answer.behavior === 'allow';
       console.log(`approval listeners after a background round trip: ${whileOpen} while open, ${listening.size} once answered -> ${tripOk}`);
       if (!tripOk) process.exitCode = 1;
@@ -3543,7 +3545,7 @@ async function main(): Promise<void> {
       modeChat.session = { setPermissionMode: async (mode: string) => void changes.push(mode), setHandlers() {}, close() {} };
       const planLine = root.querySelector('.vc-plan-line') as HTMLElement;
       const inputBox = root.querySelector('.vc-input') as HTMLTextAreaElement;
-      const lines = () => [...root.querySelectorAll('.vc-mode-line')].map((el) => el.textContent);
+      const lines = () => [...root.querySelectorAll('.vc-setting-line')].map((el) => el.textContent);
       modeChat.onMessage({ type: 'system', subtype: 'status', status: null, permissionMode: 'plan', uuid: 'st1', session_id: 's' });
       const entered = { mode: modeChat.mode, menu: modeChat.modeMenu.value, cue: planLine.isShown(), tinted: inputBox.hasClass('is-plan-mode'), placeholder: inputBox.placeholder };
       (planLine.querySelector('.vc-welcome-link') as HTMLElement).click();
@@ -3578,8 +3580,11 @@ async function main(): Promise<void> {
       await settingView.changeMode('acceptEdits');
       await settingView.changeModel('claude-sonnet-5-5');
       await settingView.changeModel('claude-broken-1');
+      // Refused: the menu stays on the model that runs.
+      const refusedView = view as unknown as { modelMenu: { label: string }; modelOverride?: string };
+      const afterRefusal = `${refusedView.modelMenu.label} (${refusedView.modelOverride})`;
       const settingLines = lines();
-      const planColoured = [...root.querySelectorAll('.vc-mode-line')].map((el) => el.hasClass('is-plan'));
+      const planColoured = [...root.querySelectorAll('.vc-setting-line')].map((el) => el.hasClass('is-plan'));
       modeChat.session = null;
       view.newChat();
       plugin.settings.permissionMode = settingsMode;
@@ -3597,6 +3602,7 @@ async function main(): Promise<void> {
         !afterNew.tinted &&
         keptPlan === 'plan' &&
         JSON.stringify(settingLines) === JSON.stringify(['Permission mode: Accept edits', 'Model: Sonnet 5.5']) &&
+        afterRefusal === 'Sonnet 5.5 (claude-sonnet-5-5)' &&
         JSON.stringify(planColoured) === '[false,false]' &&
         !left.cue &&
         !left.tinted &&
@@ -3608,7 +3614,7 @@ async function main(): Promise<void> {
             'Plan mode: Claude plans, and changes nothing until you approve',
             'Left plan mode · back to Auto (classifier)',
           ]);
-      console.log(`plan mode cues: entered ${JSON.stringify(entered)}; left ${JSON.stringify(left)}; new chat ${JSON.stringify(afterNew)}, with Plan as the default ${keptPlan}; lines ${JSON.stringify(drawn)}; other settings ${JSON.stringify(settingLines)} -> ${modeOk}`);
+      console.log(`plan mode cues: entered ${JSON.stringify(entered)}; left ${JSON.stringify(left)}; new chat ${JSON.stringify(afterNew)}, with Plan as the default ${keptPlan}; lines ${JSON.stringify(drawn)}; other settings ${JSON.stringify(settingLines)}, after a refused switch ${afterRefusal} -> ${modeOk}`);
       if (!modeOk) process.exitCode = 1;
     }
 

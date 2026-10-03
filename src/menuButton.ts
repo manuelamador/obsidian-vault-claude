@@ -46,6 +46,11 @@ export class MenuButton {
     return this.current;
   }
 
+  /** The full label of the option shown, as the menu lists it. */
+  get label(): string {
+    return this.selected()?.label ?? '';
+  }
+
   set value(value: string) {
     this.current = value;
     this.render();

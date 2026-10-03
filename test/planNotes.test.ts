@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { TFile } from 'obsidian';
 import VaultClaudePlugin from '../src/main';
+import { projectFolder } from '../src/history';
 
 /** A plugin over a vault of `notes` (path → text), recording what goes to the trash. */
 function setup(notes: Record<string, string>) {
@@ -53,4 +57,30 @@ test('a plan note that moves is followed; one deleted is forgotten', () => {
   p.noteMoved('Plans/A.md', 'Plans/Renamed.md');
   p.noteMoved('Plans/B.md', null);
   assert.deepEqual(p.planNotes, { a: { path: 'Plans/Renamed.md', plan: 'x' } });
+});
+
+test("a plan note kept for a chat whose session is gone goes; one whose session is there stays", async () => {
+  const config = mkdtempSync(join(tmpdir(), 'vc-plan-config-'));
+  const vault = realpathSync(mkdtempSync(join(tmpdir(), 'vc-plan-vault-')));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  try {
+    const folder = join(config, 'projects', projectFolder(vault));
+    mkdirSync(folder, { recursive: true });
+    const live = '11111111-1111-4111-8111-111111111111';
+    const gone = '22222222-2222-4222-8222-222222222222';
+    writeFileSync(join(folder, `${live}.jsonl`), '{}\n');
+    const { p, trashed } = setup({ 'Plans/Live.md': 'edited', 'Plans/Gone.md': 'edited' });
+    p.vaultRoot = () => vault;
+    p.planNotes = { [live]: { path: 'Plans/Live.md', plan: 'Plan' }, [gone]: { path: 'Plans/Gone.md', plan: 'Plan' } };
+    await p.pruneNoteLinks();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(trashed, ['Plans/Gone.md']);
+    assert.deepEqual(Object.keys(p.planNotes), [live]);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+    rmSync(config, { recursive: true, force: true });
+    rmSync(vault, { recursive: true, force: true });
+  }
 });
