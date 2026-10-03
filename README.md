@@ -9,6 +9,49 @@ Built by **Claude Opus 5** (`claude-opus-5`) and **Claude Opus 5.5** (`claude-op
 
 <img src="docs/chat.png" width="800" alt="Obsidian with a note on the Solow model in Live Preview on the left, its callouts and equations rendered, among them a tagged equation and a folded derivation, and the Vault Claude panel on the right: the chat title with its save, side-chat and delete buttons, the usage meter, the bar over the chat naming the prompt being answered, a reply with the steady-state equations displayed, a reply embedding a figure from the vault, the note attached above the input, and under the input the notes button showing 2 beside the paperclip, then the model, effort and permission-mode menus and the fast-mode button">
 
+## Requirements
+
+- Obsidian desktop on macOS or Windows.
+- Claude Code, installed with the [native installer](https://docs.claude.com/en/docs/claude-code/setup) and signed in (run `claude` once in a terminal and log in):
+  - macOS: `curl -fsSL https://claude.ai/install.sh | bash`
+  - Windows (PowerShell): `irm https://claude.ai/install.ps1 | iex`. Claude Code on Windows also needs [Git for Windows](https://git-scm.com/downloads/win). An npm install of Claude Code (`claude.cmd`) does not work with the plugin on Windows.
+- Node.js 18 or later, only to build from source.
+
+## Installation
+
+### From a release (no build needed)
+
+1. Download `main.js`, `manifest.json` and `styles.css` from the latest [release](https://github.com/manuelamador/obsidian-vault-claude/releases).
+2. Put them in `<vault>/.obsidian/plugins/vault-claude/`, creating the folder. The `.obsidian` folder is hidden: in Finder, ⌘⇧. shows it; in File Explorer, turn on View → Show → Hidden items.
+3. In Obsidian, open **Settings → Community plugins**, turn off Restricted mode if it is on, and enable **Vault Claude**.
+4. Open the chat with the robot icon in the left ribbon, or the command **Vault Claude: Open chat**.
+
+### From source
+
+macOS:
+
+```bash
+npm install
+npm run build
+mkdir -p <vault>/.obsidian/plugins/vault-claude
+cp main.js manifest.json styles.css <vault>/.obsidian/plugins/vault-claude/
+```
+
+Windows (PowerShell):
+
+```powershell
+npm install
+npm run build
+New-Item -ItemType Directory -Force "<vault>\.obsidian\plugins\vault-claude"
+Copy-Item main.js, manifest.json, styles.css "<vault>\.obsidian\plugins\vault-claude\"
+```
+
+Then enable and open it as in steps 3 and 4.
+
+The plugin finds Claude Code in `~/.local/bin` (`%USERPROFILE%\.local\bin\claude.exe` on Windows), Homebrew's folders or PATH; otherwise set its path under **Settings → Vault Claude → Claude Code executable**.
+
+**Updating:** replace the three files with a newer release's, then switch the plugin off and on.
+
 ## Features
 
 Open the chat from the robot icon in the left ribbon.
@@ -152,49 +195,6 @@ Open the chat from the robot icon in the left ribbon.
 - **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings and each chat's title, pin, unsent text, attached note, note links and ticked checkboxes. A chat's entries go when it is deleted. Obsidian Sync copies the file if it syncs plugin settings.
 - **The diagnostic log** records process starts, stops and errors, with session ids and paths (the vault's and Claude Code's), never message text: `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
 - Nothing is sent anywhere but through Claude Code itself.
-
-## Requirements
-
-- Obsidian desktop on macOS or Windows.
-- Claude Code, installed with the [native installer](https://docs.claude.com/en/docs/claude-code/setup) and signed in (run `claude` once in a terminal and log in):
-  - macOS: `curl -fsSL https://claude.ai/install.sh | bash`
-  - Windows (PowerShell): `irm https://claude.ai/install.ps1 | iex`. Claude Code on Windows also needs [Git for Windows](https://git-scm.com/downloads/win). An npm install of Claude Code (`claude.cmd`) does not work with the plugin on Windows.
-- Node.js 18 or later, only to build from source.
-
-## Installation
-
-### From a release (no build needed)
-
-1. Download `main.js`, `manifest.json` and `styles.css` from the latest [release](https://github.com/manuelamador/obsidian-vault-claude/releases).
-2. Put them in `<vault>/.obsidian/plugins/vault-claude/`, creating the folder. The `.obsidian` folder is hidden: in Finder, ⌘⇧. shows it; in File Explorer, turn on View → Show → Hidden items.
-3. In Obsidian, open **Settings → Community plugins**, turn off Restricted mode if it is on, and enable **Vault Claude**.
-4. Open the chat with the robot icon in the left ribbon, or the command **Vault Claude: Open chat**.
-
-### From source
-
-macOS:
-
-```bash
-npm install
-npm run build
-mkdir -p <vault>/.obsidian/plugins/vault-claude
-cp main.js manifest.json styles.css <vault>/.obsidian/plugins/vault-claude/
-```
-
-Windows (PowerShell):
-
-```powershell
-npm install
-npm run build
-New-Item -ItemType Directory -Force "<vault>\.obsidian\plugins\vault-claude"
-Copy-Item main.js, manifest.json, styles.css "<vault>\.obsidian\plugins\vault-claude\"
-```
-
-Then enable and open it as in steps 3 and 4.
-
-The plugin finds Claude Code in `~/.local/bin` (`%USERPROFILE%\.local\bin\claude.exe` on Windows), Homebrew's folders or PATH; otherwise set its path under **Settings → Vault Claude → Claude Code executable**.
-
-**Updating:** replace the three files with a newer release's, then switch the plugin off and on.
 
 ## Settings
 
