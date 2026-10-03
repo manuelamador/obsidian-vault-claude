@@ -2308,8 +2308,9 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * Adds the hover buttons to a finished reply: reply to it, copy or insert its text, and branch
-   * from it if it has a branch point; in the scratch chat, the branch carries it on as a chat.
+   * Adds the hover buttons to a finished reply: reply to it, copy or insert its text, save it as a
+   * memo, and branch from it if it has a branch point; in the scratch chat, the branch carries it on
+   * as a chat.
    */
   private finishTurnActions(turn: HTMLElement, stats?: { text: string; title: string }): void {
     // A finished reply's changed files fold to their header; a click opens the list again.
@@ -2347,6 +2348,9 @@ export class ChatView extends ItemView {
       const insert = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Insert into note' } });
       setIcon(insert, 'file-input');
       insert.addEventListener('click', (evt) => this.onInsertClick(evt, this.replyMarkdown(textEls)));
+      const memo = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Save as a memo' } });
+      setIcon(memo, 'sticky-note');
+      memo.addEventListener('click', () => this.openMemoForm(this.replyPassages(turn, textEls)));
     }
     if (uuid) {
       turn.addClass('has-branch');
@@ -5149,6 +5153,22 @@ export class ChatView extends ItemView {
       for (const math of Array.from(plain.querySelectorAll('.math'))) math.replaceWith('\n');
       passages.push({ role: el.closest('.vc-user') ? 'you' : 'claude', text, needle: passageNeedle(plain.textContent ?? '') });
     }
+    return passages;
+  }
+
+  /**
+   * A whole reply as a memo's passages: the prompt it answered, as you wrote it, then the reply's
+   * text with equations as LaTeX, each with plain words to find it by.
+   */
+  private replyPassages(turn: HTMLElement, textEls: HTMLElement[]): MemoPassage[] {
+    const passages: MemoPassage[] = [];
+    let before = turn.previousElementSibling;
+    while (before && !before.hasClass('vc-user') && !before.hasClass('vc-turn')) before = before.previousElementSibling;
+    const prompt = before?.hasClass('vc-user') ? (before.querySelector('.vc-user-text')?.textContent ?? '').trim() : '';
+    if (prompt) passages.push({ role: 'you', text: prompt, needle: passageNeedle(prompt) });
+    const plain = textEls[0]?.cloneNode(true) as HTMLElement | undefined;
+    for (const math of Array.from(plain?.querySelectorAll('.math') ?? [])) math.replaceWith('\n');
+    passages.push({ role: 'claude', text: this.replyMarkdown(textEls), needle: passageNeedle(plain?.textContent ?? '') });
     return passages;
   }
 

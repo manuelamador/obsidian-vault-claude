@@ -143,6 +143,8 @@ async function main(): Promise<void> {
       this.mentionLinks.push(`${path}@${chatId}`);
     },
     drafts: {} as Record<string, { text?: string; note?: string }>,
+    memoNotes: () => [],
+    suggestMemo: async () => null,
     planNotes: {} as Record<string, { path: string; plan: string }>,
     setPlanNote(id: string, path: string, plan: string) {
       this.planNotes[id] = { path, plan };
@@ -252,7 +254,8 @@ async function main(): Promise<void> {
     const points = [...root.querySelectorAll<HTMLElement>('.vc-turn.has-branch')].map((turn) => turn.dataset.branchUuid);
     const buttons = [...root.querySelectorAll('.vc-turn-actions button')].map((button) => button.getAttribute('aria-label'));
     console.log(`branch points: ${points.join(', ')} (expected a1, a4); buttons: ${buttons.join(', ')}`);
-    if (points.join(',') !== 'a1,a4' || buttons.length !== 8) process.exitCode = 1;
+    // Reply, Copy, Insert into note, Save as a memo and Branch under each of the two replies.
+    if (points.join(',') !== 'a1,a4' || buttons.length !== 10) process.exitCode = 1;
     // Reply: the answer goes into the input as a quote, ready to be answered.
     const replyInput = (view as unknown as { inputEl: HTMLTextAreaElement }).inputEl;
     replyInput.value = '';
@@ -3256,6 +3259,38 @@ async function main(): Promise<void> {
         JSON.stringify(chosen) === JSON.stringify({ memo: null, title: 'My own title', description: 'Another description.', tags: ['todo', 'econ', 'to-read'] });
       console.log(`memo form: suggested ${JSON.stringify(suggested)}; again, with a title typed ${JSON.stringify(again)}; saved ${JSON.stringify(chosen)} -> ${formOk}`);
       if (!formOk) process.exitCode = 1;
+    }
+    // Save as a memo under a reply: the prompt it answered, then the reply, as the form's passages.
+    {
+      const replyView = view as unknown as {
+        renderUserBubble(text: string, chips: unknown[]): HTMLElement;
+        finishTurnActions(turn: HTMLElement): void;
+        markdownSource: WeakMap<HTMLElement, string>;
+        chatId: string | null;
+      };
+      const chatWas = replyView.chatId;
+      replyView.chatId = 'memo-chat';
+      const asked = replyView.renderUserBubble('Does timing matter?', []);
+      const turn = internals.messagesEl.createDiv({ cls: 'vc-turn' });
+      const text = turn.createDiv({ cls: 'vc-text' });
+      text.innerHTML = '<p>Yes: <span class="math math-inline" data-tex="q(b)"></span> moves first.</p>';
+      replyView.markdownSource.set(text, 'Yes: $q(b)$ moves first.');
+      replyView.finishTurnActions(turn);
+      const memoButton = turn.querySelector('.vc-turn-actions [aria-label="Save as a memo"]') as HTMLElement | null;
+      stub.Modal.last = null;
+      memoButton?.click();
+      const opened = stub.Modal.last as unknown as { passages?: { role: string; text: string; needle: string }[] } | null;
+      replyView.chatId = chatWas;
+      asked.remove();
+      turn.remove();
+      const replyMemoOk =
+        JSON.stringify(opened?.passages) ===
+        JSON.stringify([
+          { role: 'you', text: 'Does timing matter?', needle: 'Does timing matter?' },
+          { role: 'claude', text: 'Yes: $q(b)$ moves first.', needle: 'Yes:' },
+        ]);
+      console.log(`a reply saved as a memo: button ${memoButton !== null}; passages ${JSON.stringify(opened?.passages)} -> ${replyMemoOk}`);
+      if (!replyMemoOk) process.exitCode = 1;
     }
     // Pinned at the bottom while a reply streams, the bar is still brought up to date — spaced out,
     // not on every frame's scroll — and once more when the reply ends.
