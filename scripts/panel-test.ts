@@ -51,7 +51,7 @@ async function main(): Promise<void> {
       getMarkdownFiles: () => [],
       getAbstractFileByPath: (path: string) =>
         path === 'Notes'
-          ? Object.assign(new stub.TFolder(), { path: 'Notes' })
+          ? Object.assign(new stub.TFolder(), { path: 'Notes', name: 'Notes' })
           : notesOnDisk.has(path)
             ? Object.assign(new stub.TFile(), { path, basename: path.split('/').pop()?.replace(/\.md$/, ''), extension: path.split('.').pop() })
             : null,
@@ -68,9 +68,9 @@ async function main(): Promise<void> {
     metadataCache: {
       getFirstLinkpathDest: (link: string) =>
         link === 'paper.pdf'
-          ? { path: 'paper.pdf', extension: 'pdf' }
+          ? Object.assign(new stub.TFile(), { path: 'paper.pdf', name: 'paper.pdf', extension: 'pdf' })
           : link === 'New.md' || link === 'Linked.md'
-            ? Object.assign(new stub.TFile(), { path: link, basename: link.replace(/\.md$/, ''), extension: 'md' })
+            ? Object.assign(new stub.TFile(), { path: link, basename: link.replace(/\.md$/, ''), extension: 'md', stat: { size: notesOnDisk.get(link)?.length ?? 0 } })
             : link.endsWith('.svg')
               ? Object.assign(new stub.TFile(), { path: link, extension: 'svg' })
               : null,
@@ -448,6 +448,48 @@ async function main(): Promise<void> {
     const mentionOk = mentions.includes('Mentioned folder: /tmp/Notes') && mentions.includes('Mentioned file: /tmp/paper.pdf');
     console.log(`mentions of a folder and a PDF: ${mentionOk}`);
     if (!mentionOk) process.exitCode = 1;
+    // Each @-mention has a chip: a note with the size of its text, which goes with the message; its ×
+    // sends only the path, and a click takes the text again. A folder or file goes by path.
+    {
+      const chipView = view as unknown as { inputEl: HTMLTextAreaElement; pathOnlyMentions: Set<string>; attachments: unknown[]; renderTray(): void };
+      // Only the mentions in the tray: what earlier steps attached waits aside.
+      const attachedBefore = chipView.attachments;
+      chipView.attachments = [];
+      notesOnDisk.set('New.md', 'x'.repeat(9600));
+      const typed = 'Compare @[[New.md]] with @[[Notes/]] and @[[paper.pdf]]';
+      const type = (value: string) => {
+        chipView.inputEl.value = value;
+        chipView.inputEl.dispatchEvent(new dom.window.Event('input'));
+      };
+      const chips = () =>
+        [...root.querySelectorAll('.vc-tray .vc-chip')].map((el) => `${el.querySelector('.vc-chip-label')?.textContent} ${el.querySelector('.vc-chip-detail')?.textContent}`);
+      type(typed);
+      const shown = chips();
+      const sentWhole = String((await more.buildContent(typed, [])).content);
+      (root.querySelector('.vc-tray .vc-chip .vc-chip-remove') as HTMLElement).click();
+      const afterRemove = chips();
+      const pathOnly = new Set(chipView.pathOnlyMentions);
+      const sentPath = String((await (view as unknown as { buildContent(t: string, a: unknown[], p: Set<string>): Promise<{ content: unknown }> }).buildContent(typed, [], pathOnly)).content);
+      (root.querySelector('.vc-tray .vc-chip.is-path-only') as HTMLElement).click();
+      const afterClick = chips();
+      type('');
+      const cleared = { chips: chips().length, pathOnly: chipView.pathOnlyMentions.size, shown: (root.querySelector('.vc-tray') as HTMLElement).isShown() };
+      notesOnDisk.delete('New.md');
+      chipView.attachments = attachedBefore;
+      chipView.renderTray();
+      const chipsOk =
+        JSON.stringify(shown) === JSON.stringify(['New ~2,400 tokens', 'Notes/ path only', 'paper.pdf path only']) &&
+        sentWhole.includes('<note path="New.md">') &&
+        afterRemove[0] === 'New path only' &&
+        sentPath.includes('Mentioned note: /tmp/New.md') &&
+        !sentPath.includes('<note path=') &&
+        afterClick[0] === 'New ~2,400 tokens' &&
+        cleared.chips === 0 &&
+        cleared.pathOnly === 0 &&
+        !cleared.shown;
+      console.log(`mention chips: ${JSON.stringify(shown)}; × ${afterRemove[0]} (sends the path ${sentPath.includes('Mentioned note:')}); click ${afterClick[0]}; cleared ${JSON.stringify(cleared)} -> ${chipsOk}`);
+      if (!chipsOk) process.exitCode = 1;
+    }
 
 
 

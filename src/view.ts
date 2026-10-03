@@ -42,6 +42,7 @@ import {
   type SelectionAttachment,
 } from './attachments';
 import { chipFor, renderChip } from './chip';
+import { estimateTokens, formatTokens, mentionTargets } from './contextSize';
 import { FindBar } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -162,12 +163,20 @@ function contextLabel(note: NoteContext): string {
   return `${name} · ${note.fromLine === note.toLine ? `line ${note.fromLine}` : `lines ${note.fromLine}–${note.toLine}`}`;
 }
 
-/** What goes with a message for a note, for the chip's tooltip. */
+/** What goes with a message for the attached note, for its chip's tooltip: its path, and the text selected in it. */
 function contextWhat(note: NoteContext): string {
+  const path = "the note's path (Claude reads the note if it needs to)";
   const firstLine = note.selection.trim().split('\n')[0];
-  if (!firstLine) return 'this note';
+  if (!firstLine) return path;
   const preview = firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine;
-  return `this note and the selected text (“${preview}”)`;
+  return `${path} and the selected text, ${formatTokens(estimateTokens(note.selection.length))} (“${preview}”)`;
+}
+
+/** A note, file or folder a message @-mentions (see ChatView.mentionedItems). */
+interface Mention {
+  item: TFile | TFolder;
+  /** A note goes with its text unless sent as a path only; anything else goes as a path. */
+  note: boolean;
 }
 
 const APPEND_SYSTEM_PROMPT =
@@ -461,6 +470,10 @@ export class ChatView extends ItemView {
   private selectedMath = new Set<HTMLElement>();
   private attachments: Attachment[] = [];
   private trayEl!: HTMLElement;
+  /** Mentioned notes to send by their path only, not with their text, by path (see renderTray). */
+  private readonly pathOnlyMentions = new Set<string>();
+  /** What the tray's mention chips show, to redraw it only when that changes (see followMentions). */
+  private mentionKey = '';
   /** Slash-command suggestions above the input. */
   private suggest!: CommandSuggest;
   /** The last message sent in this chat (or the last prompt of a reopened one), for ↑ in an empty input. */
@@ -1764,7 +1777,9 @@ export class ChatView extends ItemView {
    * The input grows with what you type, up to two fifths of the panel, and shrinks back when it
    * empties. A drag handle would have to grow the box downwards, off the bottom of the panel.
    */
+  /** Fits the input to its text, and the tray to the mentions in it (see followMentions). */
   private growInput(): void {
+    this.followMentions();
     const input = this.inputEl;
     input.style.height = 'auto';
     const max = Math.max(120, this.contentEl.clientHeight * 0.4);
@@ -2623,15 +2638,79 @@ export class ChatView extends ItemView {
 
   // ---- Attachments -------------------------------------------------------
 
+  /**
+   * The chips above the input: the files, images and selections attached to the next message, then
+   * one for each note, file or folder its text @-mentions. A mentioned note goes with its text, which
+   * its chip sizes; its × sends only the path, and a click on it then takes the text again.
+   */
   private renderTray(): void {
+    const mentions = this.mentionedItems(this.inputEl.value);
+    this.mentionKey = this.mentionsKey(mentions);
     this.trayEl.empty();
-    this.trayEl.toggle(this.attachments.length > 0);
+    this.trayEl.toggle(this.attachments.length + mentions.length > 0);
     this.attachments.forEach((attachment, index) => {
       renderChip(this.trayEl, chipFor(attachment), () => {
         this.attachments.splice(index, 1);
         this.renderTray();
       });
     });
+    for (const { item, note } of mentions) {
+      if (!note) {
+        const folder = item instanceof TFolder;
+        const label = folder ? `${item.name}/` : item.name;
+        const what = folder ? 'Claude lists or reads it' : 'Claude reads the file';
+        renderChip(this.trayEl, { label, icon: folder ? 'folder' : 'file', detail: 'path only', tooltip: `${label}: only its path goes; ${what} if it needs to` });
+        continue;
+      }
+      const name = (item as TFile).basename;
+      if (this.pathOnlyMentions.has(item.path)) {
+        const chip = renderChip(this.trayEl, {
+          label: name,
+          icon: 'file-text',
+          detail: 'path only',
+          tooltip: `${name}: only its path goes; Claude reads the note if it needs to. Click to send its text.`,
+        });
+        chip.addClass('is-path-only');
+        chip.addEventListener('click', () => {
+          this.pathOnlyMentions.delete(item.path);
+          this.renderTray();
+        });
+        continue;
+      }
+      const size = formatTokens(estimateTokens(Math.min((item as TFile).stat?.size ?? 0, MAX_NOTE_CHARS)));
+      renderChip(this.trayEl, { label: name, icon: 'file-text', detail: size, tooltip: `${name}: its text goes with the message (${size}). × sends only its path.` }, () => {
+        this.pathOnlyMentions.add(item.path);
+        this.renderTray();
+      });
+    }
+  }
+
+  /** Redraws the tray when the mentions in the input change; it follows each keystroke, so only then. */
+  private followMentions(): void {
+    if (!this.trayEl) return;
+    const mentions = this.mentionedItems(this.inputEl.value);
+    // A note no longer mentioned is no longer sent as a path only: mentioned again, it goes with its text.
+    for (const path of this.pathOnlyMentions) if (!mentions.some(({ item }) => item.path === path)) this.pathOnlyMentions.delete(path);
+    if (this.mentionsKey(mentions) !== this.mentionKey) this.renderTray();
+  }
+
+  private mentionsKey(mentions: Mention[]): string {
+    return JSON.stringify([mentions.map(({ item }) => item.path), [...this.pathOnlyMentions]]);
+  }
+
+  /** The notes, files and folders `text` @-mentions that are in the vault, each once, in order. */
+  private mentionedItems(text: string): Mention[] {
+    const mentions: Mention[] = [];
+    const seen = new Set<string>();
+    for (const target of mentionTargets(text)) {
+      // Folders and files other than notes go by path; Claude lists, searches or reads them itself.
+      const item = target.endsWith('/') ? this.app.vault.getAbstractFileByPath(normalizePath(target)) : this.app.metadataCache.getFirstLinkpathDest(target, '');
+      if (!(item instanceof TFolder) && !(item instanceof TFile)) continue;
+      if (seen.has(item.path)) continue;
+      seen.add(item.path);
+      mentions.push({ item, note: item instanceof TFile && item.extension === 'md' });
+    }
+    return mentions;
   }
 
   /** `uuid`: the message's own, in the chat's file; with it, the bubble offers to copy the chat from it on. */
@@ -2806,6 +2885,8 @@ export class ChatView extends ItemView {
     }
     // ↑ brings back what was typed, `/plan` included, so it can be sent again the same way.
     if (text) this.lastSent = plan ? typed : text;
+    // Taken before the input empties, which lets them go (see followMentions).
+    const pathOnly = new Set(this.pathOnlyMentions);
     this.inputEl.value = '';
     this.growInput();
     this.saveDraft();
@@ -2830,7 +2911,7 @@ export class ChatView extends ItemView {
       this.scrollToBottom(true);
     }
     if (!this.chatName) this.setChatTitle(chatTitle(text || attachments[0]?.name || ''));
-    const { content, notes } = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments);
+    const { content, notes } = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly);
     if (session !== this.session) {
       // Another chat was opened while the mentioned notes were read.
       new Notice('The chat changed before the message was sent, so it was not sent.');
@@ -2863,11 +2944,12 @@ export class ChatView extends ItemView {
   }
 
   /** The message for Claude Code, and the vault notes it carries. */
-  private async buildContent(text: string, attachments: Attachment[]): Promise<{ content: UserContent; notes: string[] }> {
+  /** `pathOnly`: mentioned notes sent by their path only, not with their text (see renderTray). */
+  private async buildContent(text: string, attachments: Attachment[], pathOnly: ReadonlySet<string> = new Set()): Promise<{ content: UserContent; notes: string[] }> {
     const files = attachments.filter((attachment): attachment is FileAttachment => attachment.kind === 'file');
     const images = attachments.filter((attachment): attachment is ImageAttachment => attachment.kind === 'image');
     const selections = attachments.filter((attachment): attachment is SelectionAttachment => attachment.kind === 'selection');
-    const { prompt, notes } = await this.buildPrompt(text, files, selections);
+    const { prompt, notes } = await this.buildPrompt(text, files, selections, pathOnly);
     if (images.length === 0) return { content: prompt, notes };
     const blocks: Exclude<UserContent, string> = images.map(toImageBlock);
     if (prompt) blocks.push({ type: 'text', text: prompt });
@@ -2923,6 +3005,7 @@ export class ChatView extends ItemView {
     text: string,
     files: FileAttachment[] = [],
     selections: SelectionAttachment[] = [],
+    pathOnly: ReadonlySet<string> = new Set(),
   ): Promise<{ prompt: string; notes: string[] }> {
     const blocks: string[] = [];
     // The notes that go with the message: the attached note, mentioned notes, attached selections.
@@ -2941,29 +3024,23 @@ export class ChatView extends ItemView {
       }
       blocks.push(block);
     }
-    const mentioned = new Set<string>();
     const root = this.plugin.vaultRoot();
     const absolute = (vaultPath: string) => (root ? joinPath(root, vaultPath) : vaultPath);
-    for (const match of text.matchAll(/@\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]/g)) {
-      const target = match[1].trim();
-      // Folders and files other than notes go by path; Claude lists, searches or reads them itself.
-      if (target.endsWith('/')) {
-        const folder = this.app.vault.getAbstractFileByPath(normalizePath(target));
-        if (folder instanceof TFolder && !mentioned.has(folder.path)) {
-          mentioned.add(folder.path);
-          blocks.push(`Mentioned folder: ${absolute(folder.path)}`);
-        }
+    for (const { item: file, note: isNote } of this.mentionedItems(text)) {
+      if (file instanceof TFolder) {
+        blocks.push(`Mentioned folder: ${absolute(file.path)}`);
         continue;
       }
-      const file = this.app.metadataCache.getFirstLinkpathDest(target, '');
-      if (!file || mentioned.has(file.path)) continue;
-      mentioned.add(file.path);
-      if (file.extension !== 'md') {
+      if (!isNote) {
         blocks.push(`Mentioned file: ${absolute(file.path)}`);
         continue;
       }
       notes.add(file.path);
-      const content = await this.app.vault.cachedRead(file);
+      if (pathOnly.has(file.path)) {
+        blocks.push(`Mentioned note: ${absolute(file.path)}`);
+        continue;
+      }
+      const content = await this.app.vault.cachedRead(file as TFile);
       const body =
         content.length > MAX_NOTE_CHARS
           ? `${content.slice(0, MAX_NOTE_CHARS)}\n[Truncated at ${MAX_NOTE_CHARS} characters; read the file for the rest.]`

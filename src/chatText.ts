@@ -22,6 +22,10 @@ export interface Chip {
   image?: string;
   /** Icon for a chip without an image; a file icon when unset. */
   icon?: string;
+  /** Shown after the label in muted text: how much goes, or that only the path does. */
+  detail?: string;
+  /** What goes with the message for it, on hover; the label when unset. */
+  tooltip?: string;
 }
 
 /** The chat a branch was made from; the branch starts with its title shown and its settings. */

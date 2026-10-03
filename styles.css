@@ -1745,6 +1745,17 @@ button.vc-continue-button:hover span:last-child {
   text-overflow: ellipsis;
 }
 
+/* How much of it goes, or that only its path does (see renderTray). */
+.vc-chip-detail {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* A mentioned note sent by its path only: a click sends its text again. */
+.vc-chip.is-path-only {
+  cursor: pointer;
+}
+
 .vc-chip-remove {
   padding: 0 2px;
   color: var(--text-muted);

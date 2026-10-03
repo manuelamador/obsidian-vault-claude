@@ -70,7 +70,7 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/files-changed.png" width="480" alt="The card under a reply: 1 file changed, +20, opened on the note’s diff, with the added lines shaded and a Show all (29 lines) link">
 
-- **The chip above the input** holds the chat's attached note: + attaches the open note, × detaches it. Lines you select in that note go with your message. Type `@` to mention other notes, files or folders; the paperclip, paste or drag and drop attach files.
+- **The chip above the input** holds the chat's attached note: + attaches the open note, × detaches it. The attached note goes by its path, and lines you select in it go with your message. Type `@` to mention other notes, files or folders: each gets a chip above the input. A mentioned note's text goes with the message, its chip showing about how many tokens; its × sends only the path, and a click on the chip takes the text again. A folder or another file goes by its path. The paperclip, paste or drag and drop attach files; hover over any chip to see what goes with the message for it.
 
   <img src="docs/mention.png" width="480" alt="The @ picker’s input: “Mention a note, file or folder”">
 
