@@ -59,7 +59,7 @@ import type VaultClaudePlugin from './main';
 import type { ChatDraft } from './main';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
-import { SCRATCH_IDLE_CHOICES, chatModel, denyRuleList, idleLabel, permissionModes, type ToolDisplay } from './settings';
+import { SCRATCH_IDLE_CHOICES, chatModel, denyRuleList, idleLabel, modeShort, permissionModes, type ToolDisplay } from './settings';
 import { summarizeTool, toolLabel, vaultRelative } from './toolSummary';
 import { ChangesCard, agentDiffs, openFileAtLine, savedChangedFiles, toolDiffs, type EditDiff } from './editDiff';
 import { linkFileNames } from './fileLinks';
@@ -219,6 +219,8 @@ interface Approval {
   shown?: boolean;
   /** For a plan: its text as shown, against which its note is found edited or not. */
   plan?: string;
+  /** The chat it was asked in, whose plan note it keeps (see ChatView.withdrawPlanNote). */
+  chatKey: string | null;
 }
 
 /** `/plan`, offered among the slash commands: the panel handles it (see ChatView.send). */
@@ -268,10 +270,7 @@ interface BackgroundChat {
   turnPrompts: string[];
 }
 
-/** Short labels for the header's menu buttons; the menus show the full ones. */
-/** The modes as the line where plan mode ends names them (see renderModeLine). */
-const MODE_RETURN: Record<string, string> = { default: 'Ask first', acceptEdits: 'Accept edits', auto: 'Auto', bypassPermissions: 'Bypass' };
-const MODE_SHORT: Record<string, string> = { default: 'Ask', acceptEdits: 'Edits', auto: 'Auto', plan: 'Plan', bypassPermissions: 'Bypass' };
+/** Short labels for the effort menu's button; the menu shows the full ones. */
 const EFFORT_SHORT: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-high', max: 'Max' };
 /** `Opus 5 · 1M` → `Opus 5`: the context size is in the menu and the meter. */
 const shortModel = (label: string) => label.replace(/ · 1M$/, '');
@@ -346,8 +345,6 @@ export class ChatView extends ItemView {
   private modeBeforePlan: PermissionMode = 'default';
   /** The line above the input while in Plan mode, with a way out (see updatePlanCue). */
   private planEl!: HTMLElement;
-  /** Plan notes holding edits, kept from a plan withdrawn in a chat for that chat's next plan, by chat id (see withdrawPlanNote). */
-  private readonly keptPlanNotes = new Map<string, string>();
   private modelOverride: string | undefined;
   /** Whether this panel is showing the scratch chat, which starts over when it has been idle. */
   private scratch = false;
@@ -458,6 +455,8 @@ export class ChatView extends ItemView {
   /** The last selection made in reading view, kept after the click into the panel clears the page's. */
   private readingSelection: { view: MarkdownView; file: TFile; text: string; fromLine: number; toLine: number } | null = null;
   private selectionTimer: number | null = null;
+  /** Equations shown as selected (see markSelectedMath). */
+  private selectedMath = new Set<HTMLElement>();
   private attachments: Attachment[] = [];
   private trayEl!: HTMLElement;
   /** Slash-command suggestions above the input. */
@@ -923,6 +922,7 @@ export class ChatView extends ItemView {
     this.registerEvent(this.app.workspace.on('file-open', () => this.followActiveLeaf()));
     // Selections in the editor and in reading view; redrawn shortly after the selection settles.
     this.registerDomEvent(document, 'selectionchange', () => {
+      this.markSelectedMath();
       if (this.selectionTimer !== null) window.clearTimeout(this.selectionTimer);
       this.selectionTimer = window.setTimeout(() => {
         this.selectionTimer = null;
@@ -1063,7 +1063,7 @@ export class ChatView extends ItemView {
     // new chats start in Plan mode by the settings. Other modes stay with the panel, as before.
     if (this.mode === 'plan' && this.plugin.settings.permissionMode !== 'plan') {
       this.mode = this.modeBeforePlan === 'plan' ? this.plugin.settings.permissionMode : this.modeBeforePlan;
-      this.populateModeSelect();
+      this.showMode();
     }
     this.draftPath = null;
     this.updateDraftLine();
@@ -1407,7 +1407,6 @@ export class ChatView extends ItemView {
       'abort',
       () => {
         entry.approvals = entry.approvals.filter((open) => open !== approval);
-        void this.withdrawPlanNote(approval, entry.chatId);
         approval.resolve({ behavior: 'deny', message: 'Cancelled.' });
       },
       { once: true },
@@ -1467,7 +1466,7 @@ export class ChatView extends ItemView {
       },
       onPermission: (request) =>
         new Promise<PermissionResult>((resolve) => {
-          this.adoptApproval(entry, { request, resolve });
+          this.adoptApproval(entry, this.newApproval(request, resolve, entry.chatId));
           this.notifyBackground(entry, waitingFor(request), true);
           this.systemNotify(`Claude ${waitingFor(request)}`, entry.title ?? 'A chat', () => void this.showChat(entry));
         }),
@@ -1531,7 +1530,7 @@ export class ChatView extends ItemView {
   /** Stops a background chat: its approvals refused, its timer and notice gone, its process closed. */
   private dropBackground(entry: BackgroundChat): void {
     for (const approval of entry.approvals) {
-      this.dropPlanNote(approval);
+      void this.withdrawPlanNote(approval, false);
       approval.resolve({ behavior: 'deny', message: 'Chat closed.' });
     }
     clearSettle(entry);
@@ -2750,7 +2749,6 @@ export class ChatView extends ItemView {
       }
       const rest = typed.slice(plan[0].length).trim();
       if (this.mode !== 'plan') {
-        this.modeMenu.value = 'plan';
         await this.changeMode('plan');
         // Refused (see changeMode): nothing is sent, the text stays to try again.
         if ((this.mode as PermissionMode) !== 'plan') return;
@@ -2794,7 +2792,7 @@ export class ChatView extends ItemView {
       // Claude Code holds it and folds it in at its next pause; this ends the step so it is read now.
       const now = label.createSpan({ cls: 'vc-welcome-link', text: 'send now' });
       now.setAttr('aria-label', 'End the current step so this message is read now');
-      this.registerDomEvent(now, 'click', () => this.interruptTurn());
+      now.addEventListener('click', () => this.interruptTurn());
       this.pending.set(uuid, { bubble, running: false, id: uuid });
       this.draw.group = null;
       this.scrollToBottom(true);
@@ -3332,7 +3330,12 @@ export class ChatView extends ItemView {
       this.session?.setPermissionMode('default').catch((error) => log('setPermissionMode failed', error));
     }
     this.modeMenu.clear();
-    for (const [value, label] of Object.entries(modes)) this.modeMenu.add(value, label, MODE_SHORT[value] ?? label);
+    for (const [value, label] of Object.entries(modes)) this.modeMenu.add(value, label, modeShort(value));
+    this.showMode();
+  }
+
+  /** The mode menu, its bypass warning and the plan cue, as the chat's mode is. */
+  private showMode(): void {
     this.modeMenu.value = this.mode;
     this.modeMenu.el.toggleClass('is-bypass', this.mode === 'bypassPermissions');
     this.updatePlanCue();
@@ -3343,8 +3346,7 @@ export class ChatView extends ItemView {
     // What an approved plan returns to (see renderApprovalCard).
     if (mode === 'plan' && previous !== 'plan') this.modeBeforePlan = previous;
     this.mode = mode;
-    this.modeMenu.el.toggleClass('is-bypass', mode === 'bypassPermissions');
-    this.updatePlanCue();
+    this.showMode();
     if (!this.session) {
       this.renderModeLine(previous, mode);
       return;
@@ -3360,9 +3362,7 @@ export class ChatView extends ItemView {
           : 'Could not change the permission mode.',
       );
       this.mode = previous;
-      this.modeMenu.value = previous;
-      this.modeMenu.el.toggleClass('is-bypass', previous === 'bypassPermissions');
-      this.updatePlanCue();
+      this.showMode();
     }
   }
 
@@ -3375,9 +3375,7 @@ export class ChatView extends ItemView {
     if (mode === previous) return;
     if (mode === 'plan') this.modeBeforePlan = previous;
     this.mode = mode;
-    this.modeMenu.value = mode;
-    this.modeMenu.el.toggleClass('is-bypass', mode === 'bypassPermissions');
-    this.updatePlanCue();
+    this.showMode();
     this.renderModeLine(previous, mode);
   }
 
@@ -3392,9 +3390,7 @@ export class ChatView extends ItemView {
     this.planEl.createSpan({ text: 'Plan mode: Claude plans, and changes nothing until you approve · ' });
     const leave = this.planEl.createSpan({ cls: 'vc-welcome-link', text: 'Leave plan mode' });
     leave.addEventListener('click', () => {
-      const back = this.modeBeforePlan === 'plan' ? 'default' : this.modeBeforePlan;
-      this.modeMenu.value = back;
-      void this.changeMode(back);
+      void this.changeMode(this.modeBeforePlan === 'plan' ? 'default' : this.modeBeforePlan);
     });
   }
 
@@ -3402,7 +3398,7 @@ export class ChatView extends ItemView {
   private renderModeLine(from: PermissionMode, to: PermissionMode): void {
     if (from === to || (from !== 'plan' && to !== 'plan')) return;
     const text =
-      to === 'plan' ? 'Plan mode: Claude plans, and changes nothing until you approve' : `Left plan mode · back to ${MODE_RETURN[to] ?? permissionModes(true)[to] ?? to}`;
+      to === 'plan' ? 'Plan mode: Claude plans, and changes nothing until you approve' : `Left plan mode · back to ${permissionModes(true)[to] ?? to}`;
     (this.busy ? this.container() : this.messagesEl).createDiv({ cls: 'vc-notice vc-muted vc-mode-line', text });
     this.scrollToBottom();
   }
@@ -4314,7 +4310,26 @@ export class ChatView extends ItemView {
     this.systemNotify(`Claude ${waitingFor(request)}`, this.chatName ?? 'Chat', () => {
       void this.app.workspace.revealLeaf(this.leaf);
     });
-    return new Promise((resolve) => this.renderApprovalCard({ request, resolve }));
+    return new Promise((resolve) => this.renderApprovalCard(this.newApproval(request, resolve, this.chatId ?? this.resumeId)));
+  }
+
+  /**
+   * A permission request of chat `chatKey`, as the panel holds it. Withdrawn before it is answered
+   * (Esc, or the chat closing), a plan's note is kept or put away (see withdrawPlanNote): once,
+   * whether the request is on screen or in the background, and not listened for once answered.
+   */
+  private newApproval(request: PermissionRequest, resolve: (result: PermissionResult) => void, chatKey: string | null): Approval {
+    const withdraw = () => void this.withdrawPlanNote(approval);
+    const approval: Approval = {
+      request,
+      chatKey,
+      resolve: (result) => {
+        request.signal.removeEventListener('abort', withdraw);
+        resolve(result);
+      },
+    };
+    request.signal.addEventListener('abort', withdraw, { once: true });
+    return approval;
   }
 
   /** Shows an approval card; also re-shows one that waited while its chat was in the background. */
@@ -4441,26 +4456,24 @@ export class ChatView extends ItemView {
       await this.discardNote(file);
       return text && text !== plan.trim() ? text : null;
     };
-    // A plan note kept, with its edits, from a plan withdrawn in this chat carries over to this one.
-    const chatKey = this.chatId ?? this.resumeId;
-    const kept = chatKey ? this.keptPlanNotes.get(chatKey) : undefined;
-    if (chatKey) this.keptPlanNotes.delete(chatKey);
-    if (kept && !approval.notePath && this.app.vault.getAbstractFileByPath(kept) instanceof TFile) approval.notePath = kept;
-    // Withdrawn (Esc, or the chat closing): edits in its note are kept for the chat's next plan. A card
-    // drawn again (its chat back from the background) listens again, which is harmless.
-    signal.addEventListener('abort', () => void this.withdrawPlanNote(approval, chatKey), { once: true });
+    // A plan note kept, with its edits, from a plan withdrawn in this chat carries over to this one
+    // (not to a card drawn again, its chat back from the background, which has its own).
+    const { chatKey } = approval;
+    const kept = chatKey && !approval.notePath ? this.plugin.planNotes[chatKey]?.path : undefined;
+    const carried = kept !== undefined && this.app.vault.getAbstractFileByPath(kept) instanceof TFile;
+    if (carried) approval.notePath = kept;
 
     card.addClass('vc-plan-card');
     card.createDiv({ cls: 'vc-permission-title', text: "Claude's plan" });
-    if (kept && approval.notePath === kept) {
-      const carried = card.createDiv({ cls: 'vc-muted vc-plan-carried' });
-      carried.appendText('Your edits to the plan you withdrew are in the plan note, and Approve sends them. ');
-      carried.createSpan({ cls: 'vc-welcome-link', text: "Use Claude's plan instead" }).addEventListener('click', () => {
+    if (carried) {
+      const line = card.createDiv({ cls: 'vc-muted vc-plan-carried' });
+      line.appendText('Your edits to the plan you withdrew are in the plan note, and Approve sends them. ');
+      line.createSpan({ cls: 'vc-welcome-link', text: "Use Claude's plan instead" }).addEventListener('click', () => {
         const file = noteFile();
         approval.notePath = null;
         if (file) void this.discardNote(file);
         editButton.setText('Edit in a note');
-        carried.remove();
+        line.remove();
       });
     }
     const body = card.createDiv({ cls: 'vc-permission-detail vc-plan' });
@@ -4502,6 +4515,7 @@ export class ChatView extends ItemView {
             const path = await this.savedNotePath(formatDate(Date.now()).slice(0, 10), `Plan — ${this.chatName ?? 'New chat'}`, '', 'Plans');
             file = await this.app.vault.create(path, plan);
             approval.notePath = file.path;
+            if (chatKey) this.plugin.setPlanNote(chatKey, file.path, plan);
             editButton.setText('Open the plan note');
           }
           await this.app.workspace.getLeaf('tab').openFile(file);
@@ -4540,6 +4554,8 @@ export class ChatView extends ItemView {
       planShown = true;
       plan = text.trim();
       approval.plan = plan;
+      // A note carried over is now told edited or not against this plan.
+      if (chatKey && approval.notePath) this.plugin.setPlanNote(chatKey, approval.notePath, plan);
       body.empty();
       this.renderMarkdown(plan, body);
       approveButton.disabled = false;
@@ -4564,7 +4580,8 @@ export class ChatView extends ItemView {
    * without the plan's text, so it is read again for a few seconds until it is there.
    */
   private async showPlan(file: unknown, signal: AbortSignal, card: HTMLElement): Promise<string | null> {
-    for (let attempt = 0; attempt < PLAN_READ_ATTEMPTS && !signal.aborted && !card.hasClass('is-decided'); attempt += 1) {
+    // Until the plan is answered, withdrawn, or its card taken off the screen (its chat in the background, drawn again on its return).
+    for (let attempt = 0; attempt < PLAN_READ_ATTEMPTS && !signal.aborted && !card.hasClass('is-decided') && this.messagesEl.contains(card); attempt += 1) {
       const text = (await readPlanFile(file))?.trim();
       if (text) return text;
       await new Promise((resolve) => window.setTimeout(resolve, PLAN_READ_PAUSE_MS));
@@ -4791,12 +4808,12 @@ export class ChatView extends ItemView {
     this.updateDraftLine();
     this.closeNoteTabs(file);
     if (!text) {
-      await this.app.fileManager.trashFile(file);
+      await this.discardNote(file);
       new Notice('The draft was empty: nothing was sent, and the note is gone.');
       return;
     }
     await this.sendText(text);
-    await this.app.fileManager.trashFile(file);
+    await this.discardNote(file);
   }
 
   /** Whether this chat's draft is that note, so sending the note goes through the draft. */
@@ -4804,30 +4821,24 @@ export class ChatView extends ItemView {
     return this.draftFile()?.path === path;
   }
 
-  /** Closes note `file`'s tabs and moves it to the trash: a plan answered, or refused. */
+  /** Closes note `file`'s tabs and moves it to the trash: a draft sent or thrown away, a plan answered or refused. */
   private async discardNote(file: TFile): Promise<void> {
     this.closeNoteTabs(file);
+    this.plugin.forgetPlanNote(file.path);
     await this.app.fileManager.trashFile(file).catch((error: unknown) => log('removing a note failed', error));
   }
 
   /**
    * A withdrawn plan's note (its request cancelled: Esc, or Claude Code): kept, still open, for the
-   * chat's next plan when it holds edits (see renderPlanCard), else deleted.
+   * chat's next plan when it holds edits (see renderPlanCard), else deleted; deleted too when the
+   * chat is let go of (`keep` false).
    */
-  private async withdrawPlanNote(approval: Approval, chatKey: string | null): Promise<void> {
+  private async withdrawPlanNote(approval: Approval, keep = true): Promise<void> {
     const file = approval.notePath ? this.app.vault.getAbstractFileByPath(approval.notePath) : null;
     approval.notePath = null;
     if (!(file instanceof TFile)) return;
-    const text = (await this.app.vault.read(file)).trim();
-    if (chatKey && text && text !== (approval.plan ?? '').trim()) this.keptPlanNotes.set(chatKey, file.path);
-    else await this.discardNote(file);
-  }
-
-  /** The note of a plan refused without its card (its chat dropped from the background). */
-  private dropPlanNote(approval: Approval): void {
-    const file = approval.notePath ? this.app.vault.getAbstractFileByPath(approval.notePath) : null;
-    approval.notePath = null;
-    if (file instanceof TFile) void this.discardNote(file);
+    const text = keep && approval.chatKey ? (await this.app.vault.read(file)).trim() : '';
+    if (!text || text === (approval.plan ?? '').trim()) await this.discardNote(file);
   }
 
   /** Closes the tabs showing note `file`: a draft sent, or a plan answered, has nothing left to show. */
@@ -4859,8 +4870,7 @@ export class ChatView extends ItemView {
     this.draftPath = null;
     this.updateDraftLine();
     if (!file) return;
-    this.closeNoteTabs(file);
-    await this.app.fileManager.trashFile(file);
+    await this.discardNote(file);
     new Notice(`Draft “${file.basename}” thrown away.`);
   }
 
@@ -5018,6 +5028,23 @@ export class ChatView extends ItemView {
     }
   }
 
+  /**
+   * Marks the equations a selection in the panel takes in, which a quote carries whole (see
+   * selectionWithMath): MathJax draws them in glyphs the browser does not highlight as selected.
+   */
+  private markSelectedMath(): void {
+    const selection = this.contentEl.ownerDocument.getSelection();
+    const range = selection && selection.rangeCount > 0 && !selection.isCollapsed ? selection.getRangeAt(0) : null;
+    const common = range?.commonAncestorContainer;
+    const root = common && this.contentEl.contains(common) ? (common.nodeType === Node.ELEMENT_NODE ? (common as Element) : common.parentElement) : null;
+    const inside = root?.closest<HTMLElement>('.math');
+    const marked = new Set<HTMLElement>();
+    for (const el of inside ? [inside] : Array.from(root?.querySelectorAll<HTMLElement>('.math') ?? [])) if (range?.intersectsNode(el)) marked.add(el);
+    for (const el of this.selectedMath) if (!marked.has(el)) el.removeClass('vc-math-selected');
+    for (const el of marked) el.addClass('vc-math-selected');
+    this.selectedMath = marked;
+  }
+
   /** The selection, when it is inside the messages and not empty. */
   private chatSelection(): Selection | null {
     const selection = this.messagesEl.ownerDocument.getSelection();
@@ -5165,7 +5192,7 @@ export class ChatView extends ItemView {
       const line = el.createDiv({ cls: 'vc-muted vc-welcome-scratch' });
       const link = line.createSpan({ cls: 'vc-welcome-link', text: 'Open the scratch chat' });
       line.appendText(' for daily odds and ends');
-      this.registerDomEvent(link, 'click', () => void this.openScratch());
+      link.addEventListener('click', () => void this.openScratch());
     }
   }
 

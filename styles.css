@@ -1745,6 +1745,11 @@ button.vc-continue-button:hover span:last-child {
   height: 13px;
 }
 
+/* An equation in a selection (see ChatView.markSelectedMath): MathJax's glyphs take no selection highlight. */
+.vc-math-selected mjx-math {
+  background-color: var(--text-selection);
+}
+
 /* Side chat: a pane over the right of the messages, with its own replies and input. */
 .vc-side-chat {
   position: absolute;

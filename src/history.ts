@@ -109,6 +109,8 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
   ]);
   const interactiveIds = new Set(interactive.map((session) => session.sessionId));
   const byId = new Map(records.map((record) => [record.id, record]));
+  const existing = new Set(sessions.map((session) => session.sessionId));
+  for (const id of unrecorded.keys()) if (!existing.has(id)) unrecorded.delete(id);
   // The unrecorded sessions not read before, a few at a time: the SDK's, to find the panel chats
   // among them, and the command line's small ones, which may hold no prompt at all.
   const unread = sessions.filter(

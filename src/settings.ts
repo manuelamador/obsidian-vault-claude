@@ -7,16 +7,23 @@ import { prettyModel } from './usageDisplay';
 
 export type ToolDisplay = 'summary' | 'lines' | 'hidden';
 
-const BASE_MODES: Record<string, string> = {
-  default: 'Ask first',
-  acceptEdits: 'Accept edits',
-  auto: 'Auto (classifier)',
-  plan: 'Plan only',
+/** Each permission mode's name in menus, and its short name on the panel's mode button. */
+const MODES: Record<string, { label: string; short: string }> = {
+  default: { label: 'Ask first', short: 'Ask' },
+  acceptEdits: { label: 'Accept edits', short: 'Edits' },
+  auto: { label: 'Auto (classifier)', short: 'Auto' },
+  plan: { label: 'Plan only', short: 'Plan' },
+  bypassPermissions: { label: 'Bypass permissions', short: 'Bypass' },
 };
 
 /** Permission modes offered in menus; `bypassPermissions` only when enabled in settings. */
 export function permissionModes(allowBypass: boolean): Record<string, string> {
-  return allowBypass ? { ...BASE_MODES, bypassPermissions: 'Bypass permissions' } : BASE_MODES;
+  return Object.fromEntries(Object.entries(MODES).filter(([mode]) => allowBypass || mode !== 'bypassPermissions').map(([mode, { label }]) => [mode, label]));
+}
+
+/** Mode `mode`'s short name, as the mode button shows it. */
+export function modeShort(mode: string): string {
+  return MODES[mode]?.short ?? mode;
 }
 
 /** Commands the vault's CLAUDE.md forbids without an explicit request, plus recursive deletion. */
@@ -72,7 +79,7 @@ export interface VaultClaudeSettings {
 
 /** The times, in hours, the scratch chat can be left alone before it starts over. */
 /** The `model` setting that leaves the model to Claude Code's own settings: chats then send none. */
-export const CLAUDE_CODE_MODEL = 'claude-code';
+const CLAUDE_CODE_MODEL = 'claude-code';
 
 /**
  * The model new chats ask for, from the `model` setting: Default when it is empty (sent as such,

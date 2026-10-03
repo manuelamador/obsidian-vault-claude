@@ -143,6 +143,13 @@ async function main(): Promise<void> {
       this.mentionLinks.push(`${path}@${chatId}`);
     },
     drafts: {} as Record<string, { text?: string; note?: string }>,
+    planNotes: {} as Record<string, { path: string; plan: string }>,
+    setPlanNote(id: string, path: string, plan: string) {
+      this.planNotes[id] = { path, plan };
+    },
+    forgetPlanNote(path: string) {
+      for (const id of Object.keys(this.planNotes)) if (this.planNotes[id].path === path) delete this.planNotes[id];
+    },
     unseen: {} as Record<string, 'done' | 'error'>,
     // The panel another one hands its running chats to when it closes; none by default.
     heir: null as { adoptBackground(entry: unknown): void } | null,
@@ -1054,9 +1061,13 @@ async function main(): Promise<void> {
       const racedNoteGone = !notesOnDisk.has(racedNew);
       // A plan refused without its card (its chat dropped from the background) takes its note too.
       notesOnDisk.set('Claude chats/Plans/Dropped.md', plan);
-      (view as unknown as { dropPlanNote(approval: { notePath: string | null }): void }).dropPlanNote({ notePath: 'Claude chats/Plans/Dropped.md' });
+      plugin.planNotes['dropped-chat'] = { path: 'Claude chats/Plans/Dropped.md', plan: 'other' };
+      void (view as unknown as { withdrawPlanNote(approval: { notePath: string | null; chatKey: string }, keep: boolean): Promise<void> }).withdrawPlanNote(
+        { notePath: 'Claude chats/Plans/Dropped.md', chatKey: 'dropped-chat' },
+        false,
+      );
       await settle();
-      const droppedGone = !notesOnDisk.has('Claude chats/Plans/Dropped.md');
+      const droppedGone = !notesOnDisk.has('Claude chats/Plans/Dropped.md') && plugin.planNotes['dropped-chat'] === undefined;
       // Withdrawn (Esc) with edits in its note: the note stays for the chat's next plan, whose card says so
       // and whose Approve sends the edits; unedited, it goes. "Use Claude's plan instead" drops it.
       const keepChat = view as unknown as { chatId: string | null; interrupted: boolean };
@@ -1073,13 +1084,14 @@ async function main(): Promise<void> {
       await first.answered;
       keepChat.interrupted = false;
       await settle();
-      const keptAfterEsc = notesOnDisk.has(keptPath);
+      // Kept in the plugin's data, so that a restart or the chat's deletion finds it.
+      const keptAfterEsc = notesOnDisk.has(keptPath) && plugin.planNotes['plan-chat']?.path === keptPath;
       const next = propose();
       const carriedLine = next.card.querySelector('.vc-plan-carried')?.textContent ?? '';
       const carriedButton = next.button('Open the plan note') !== undefined;
       next.button('Approve').click();
       const nextResult = await next.answered;
-      const keptGoneAfter = !notesOnDisk.has(keptPath);
+      const keptGoneAfter = !notesOnDisk.has(keptPath) && plugin.planNotes['plan-chat'] === undefined;
       // Again, but Claude's plan is chosen instead: the kept note goes, and the plan is sent as Claude wrote it.
       const againController = new AbortController();
       const again = propose(againController.signal);
@@ -2893,6 +2905,38 @@ async function main(): Promise<void> {
       plainText === null;
     console.log(`quote with equations: ${JSON.stringify(partialText)} | ${JSON.stringify(acrossText)} | ${plainText} -> ${mathQuoteOk}`);
     if (!mathQuoteOk) process.exitCode = 1;
+    // Equations a selection in the chat takes in are marked as selected, and unmarked when it moves off them.
+    {
+      const shown = internals.messagesEl.createDiv();
+      shown.innerHTML =
+        '<p>the factor is <span class="math math-inline" data-tex="a"><mjx-container>a</mjx-container></span>, so</p>' +
+        '<div class="math math-block" data-tex="b"><mjx-container>b</mjx-container></div><p>after it</p>';
+      const [inline, block] = Array.from(shown.querySelectorAll<HTMLElement>('.math'));
+      const select = (range: Range) => {
+        dom.window.getSelection()?.removeAllRanges();
+        dom.window.getSelection()?.addRange(range);
+        document.dispatchEvent(new dom.window.Event('selectionchange'));
+      };
+      const marks = () => [inline, block].map((el) => el.classList.contains('vc-math-selected'));
+      const across = document.createRange();
+      across.setStart(shown.firstChild?.firstChild as Text, 4);
+      across.setEnd(shown.lastChild?.firstChild as Text, 3);
+      select(across);
+      const acrossMarks = marks();
+      const textOnly = document.createRange();
+      textOnly.setStart(shown.lastChild?.firstChild as Text, 0);
+      textOnly.setEnd(shown.lastChild?.firstChild as Text, 5);
+      select(textOnly);
+      const textMarks = marks();
+      dom.window.getSelection()?.removeAllRanges();
+      document.dispatchEvent(new dom.window.Event('selectionchange'));
+      const clearedMarks = marks();
+      shown.remove();
+      const markOk =
+        JSON.stringify(acrossMarks) === '[true,true]' && JSON.stringify(textMarks) === '[false,false]' && JSON.stringify(clearedMarks) === '[false,false]';
+      console.log(`equations marked as selected: across ${acrossMarks}, text only ${textMarks}, cleared ${clearedMarks} -> ${markOk}`);
+      if (!markOk) process.exitCode = 1;
+    }
     // Pinned at the bottom while a reply streams, the bar is still brought up to date — spaced out,
     // not on every frame's scroll — and once more when the reply ends.
     {
@@ -3474,9 +3518,9 @@ async function main(): Promise<void> {
         JSON.stringify(drawn) ===
           JSON.stringify([
             'Plan mode: Claude plans, and changes nothing until you approve',
-            'Left plan mode · back to Auto',
+            'Left plan mode · back to Auto (classifier)',
             'Plan mode: Claude plans, and changes nothing until you approve',
-            'Left plan mode · back to Auto',
+            'Left plan mode · back to Auto (classifier)',
           ]);
       console.log(`plan mode cues: entered ${JSON.stringify(entered)}; left ${JSON.stringify(left)}; new chat ${JSON.stringify(afterNew)}, with Plan as the default ${keptPlan}; lines ${JSON.stringify(drawn)} -> ${modeOk}`);
       if (!modeOk) process.exitCode = 1;

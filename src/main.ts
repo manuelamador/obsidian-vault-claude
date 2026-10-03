@@ -7,7 +7,7 @@ import { patchSetMaxListenersForRenderer } from './electronCompat';
 import { deleteSessionIfAny, deleteSessions, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, type ChatRecord, type HistoryItem } from './history';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
-import { followDraftNotes, followNote, forgetChat, linkNote, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
+import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
@@ -52,6 +52,12 @@ export interface ChatDraft {
 /** A chat outside the panel's list (a session run elsewhere, opened here) keeps its draft this long. */
 const DRAFT_DAYS = 30;
 
+/** A plan edited in a note (see ChatView.renderPlanCard): the note, and the plan as Claude wrote it. */
+interface PlanNote {
+  path: string;
+  plan: string;
+}
+
 interface PluginData {
   settings?: Partial<VaultClaudeSettings>;
   chats?: ChatRecord[];
@@ -66,6 +72,7 @@ interface PluginData {
   noteMentions?: NoteChats;
   noteRemoved?: NoteChats;
   drafts?: Record<string, ChatDraft>;
+  planNotes?: Record<string, PlanNote>;
   unseen?: Record<string, 'done' | 'error'>;
   scratch?: { id: string; usedAt: number };
   sideSessions?: string[];
@@ -101,6 +108,11 @@ export default class VaultClaudePlugin extends Plugin {
   noteRemoved: NoteChats = {};
   /** Each chat's unsent text and attached note, by chat id. */
   drafts: Record<string, ChatDraft> = {};
+  /**
+   * Each chat's plan note, by chat id: one being edited, or one kept with its edits from a plan
+   * withdrawn, for the chat's next plan. Deleted with the chat's other data (see forgetChatData).
+   */
+  planNotes: Record<string, PlanNote> = {};
   /** Chats that finished while not on screen, and how, until they are shown. */
   unseen: Record<string, 'done' | 'error'> = {};
   /** The scratch chat: one chat that starts over when it has been idle, kept out of the history list. */
@@ -331,6 +343,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       if (this.settings.phoneAccessAtStartup) this.startRemote();
       void this.sweepSideSessions(leftover);
+      void this.tidyPlanNotes();
       // Listed once soon after starting, so that even the first history opened shows its rows at once;
       // and the note links of sessions Claude Code has since deleted are let go.
       const timer = window.setTimeout(() => {
@@ -398,6 +411,9 @@ export default class VaultClaudePlugin extends Plugin {
         const found = new Set(listed.map((item) => item.id));
         for (const id of this.unlisted) if (!found.has(id)) this.unlisted.delete(id);
         const items = listed.filter((item) => !this.unlisted.has(item.id));
+        // Search texts only of chats the history can still show.
+        const searchable = new Set(items.flatMap((item) => [item.id, ...(item.copies ?? []).map((copy) => copy.id)]));
+        for (const id of this.searchTexts.keys()) if (!searchable.has(id)) this.searchTexts.delete(id);
         log(`history listed: ${items.length} chats in ${Math.round(performance.now() - started)} ms`);
         this.lastListing = items;
         return items;
@@ -629,6 +645,13 @@ export default class VaultClaudePlugin extends Plugin {
     changed = followNote(this.noteMentions, from, to) || changed;
     changed = followNote(this.noteRemoved, from, to) || changed;
     changed = followDraftNotes(Object.entries(this.drafts), from, to, (id) => delete this.drafts[id]) || changed;
+    for (const [id, note] of Object.entries(this.planNotes)) {
+      const moved = movedPath(note.path, from, to);
+      if (moved === undefined) continue;
+      if (moved === null) delete this.planNotes[id];
+      else note.path = moved;
+      changed = true;
+    }
     // Moving or deleting a folder is one event per file: saved once for them all.
     if (changed) this.saveSoon();
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
@@ -867,11 +890,47 @@ export default class VaultClaudePlugin extends Plugin {
     void this.saveSettings();
   }
 
-  /** Forgets what the plugin keeps for chat `id` beside its record: pin, ticks, draft, mark and note links. */
+  /** Records chat `id`'s plan note, at `path`, made from `plan`. */
+  setPlanNote(id: string, path: string, plan: string): void {
+    this.planNotes[id] = { path, plan };
+    void this.saveSettings();
+  }
+
+  /** Forgets the plan note at `path`, whichever chat it was kept for: it has been answered, or put away. */
+  forgetPlanNote(path: string): void {
+    const ids = Object.keys(this.planNotes).filter((id) => this.planNotes[id].path === path);
+    for (const id of ids) delete this.planNotes[id];
+    if (ids.length > 0) void this.saveSettings();
+  }
+
+  /**
+   * No plan is waiting when Obsidian starts: a plan note left as Claude wrote it (by a quit while its
+   * plan was open) goes, and one holding edits stays for its chat's next plan.
+   */
+  private async tidyPlanNotes(): Promise<void> {
+    for (const [id, note] of Object.entries(this.planNotes)) {
+      const file = this.app.vault.getAbstractFileByPath(note.path);
+      try {
+        if (file instanceof TFile && (await this.app.vault.read(file)).trim() !== note.plan.trim()) continue;
+        if (file instanceof TFile) await this.app.fileManager.trashFile(file);
+      } catch (error) {
+        log('tidying a plan note failed', error);
+        continue;
+      }
+      delete this.planNotes[id];
+      this.saveSoon();
+    }
+  }
+
+  /** Forgets what the plugin keeps for chat `id` beside its record: pin, ticks, draft, plan note, mark and note links. */
   private forgetChatData(id: string): void {
     this.pinned = this.pinned.filter((other) => other !== id);
     delete this.ticks[id];
     delete this.drafts[id];
+    const planNote = this.planNotes[id];
+    delete this.planNotes[id];
+    const planFile = planNote ? this.app.vault.getAbstractFileByPath(planNote.path) : null;
+    if (planFile instanceof TFile) void this.app.fileManager.trashFile(planFile).catch((error: unknown) => log('removing a plan note failed', error));
     delete this.unseen[id];
     for (const index of [this.noteChats, this.noteRefs, this.noteMentions, this.noteRemoved]) forgetChat(index, id);
   }
@@ -1211,6 +1270,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.noteMentions = raw.noteMentions && typeof raw.noteMentions === 'object' ? raw.noteMentions : {};
     this.noteRemoved = raw.noteRemoved && typeof raw.noteRemoved === 'object' ? raw.noteRemoved : {};
     this.drafts = raw.drafts && typeof raw.drafts === 'object' ? raw.drafts : {};
+    this.planNotes = raw.planNotes && typeof raw.planNotes === 'object' ? raw.planNotes : {};
     // A draft of a chat in the panel's list goes with the chat (deleted with it, or dropped with
     // the oldest records); one of a session opened from elsewhere has no such end, so it ages out.
     const listed = new Set(this.chats.map((chat) => chat.id));
@@ -1239,6 +1299,7 @@ export default class VaultClaudePlugin extends Plugin {
       noteMentions: this.noteMentions,
       noteRemoved: this.noteRemoved,
       drafts: this.drafts,
+      planNotes: this.planNotes,
       unseen: this.unseen,
       models: this.models,
       modelsFetchedAt: this.modelsFetchedAt,
