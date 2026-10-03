@@ -1231,7 +1231,8 @@ export default class VaultClaudePlugin extends Plugin {
   private async writeMemosBase(chatId: string, chatTitle: string): Promise<TFile> {
     const path = await this.memosPath('Memos.base');
     const existing = this.app.vault.getAbstractFileByPath(path);
-    if (!(existing instanceof TFile)) return this.app.vault.create(path, memoBaseYaml(chatId, chatTitle));
+    const vault = this.app.vault.getName();
+    if (!(existing instanceof TFile)) return this.app.vault.create(path, memoBaseYaml(chatId, chatTitle, vault));
     const before = await this.app.vault.read(existing);
     let parsed: unknown = null;
     try {
@@ -1239,8 +1240,8 @@ export default class VaultClaudePlugin extends Plugin {
     } catch {
       // Not YAML any more: written anew below.
     }
-    const turned = retargetMemoBase(parsed, chatId, chatTitle);
-    const text = turned ? stringifyYaml(turned) : memoBaseYaml(chatId, chatTitle);
+    const turned = retargetMemoBase(parsed, chatId, chatTitle, vault);
+    const text = turned ? stringifyYaml(turned) : memoBaseYaml(chatId, chatTitle, vault);
     if (text !== before) await this.app.vault.modify(existing, text);
     return existing;
   }

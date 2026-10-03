@@ -83,13 +83,15 @@ test('the suggestion request names who wrote each passage, and the reply is read
 });
 
 test("the Memos base opens on the chat's memos, then all, those about the note in front, and each kind", () => {
-  const base = memoBaseYaml('chat-1', 'Debt model [v2] #draft');
+  const base = memoBaseYaml('chat-1', 'Debt model [v2] #draft', 'My vault');
   const views = [...base.matchAll(/^    name: "(.*)"$/gm)].map((match) => match[1]);
   assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas']);
   assert.ok(base.includes('        - "claude_chats.contains(\\"chat-1\\")"'));
   assert.ok(base.includes('        - "file.hasLink(this.file)"'));
-  // Memos wherever they are, by their type.
+  // Memos wherever they are, by their type; their chats as links that open them.
   assert.ok(!base.includes('inFolder'));
+  assert.ok(base.startsWith('formulas:\n  chat: "claude_chats.map(link(\\"obsidian://vault-claude?vault=My%20vault&chat=\\" + value, chats[index]))"'));
+  assert.ok(base.includes('      - formula.chat'));
 });
 
 test("turning the base to another chat changes its chat view only, and keeps what was changed in the table", () => {
@@ -100,16 +102,20 @@ test("turning the base to another chat changes its chat view only, and keeps wha
       { type: 'table', name: 'My own view', filters: { and: ['file.hasTag("todo")'] } },
     ],
   };
-  const turned = retargetMemoBase(base, 'chat-2', 'Second') as { views: { name: string; filters: unknown; columnSize?: unknown }[]; properties: unknown };
+  const turned = retargetMemoBase(base, 'chat-2', 'Second', 'V') as { views: { name: string; filters: unknown; columnSize?: unknown; order?: string[] }[]; properties: Record<string, unknown>; formulas: Record<string, string> };
   assert.equal(turned.views[0].name, 'Chat: Second');
   assert.deepEqual(turned.views[0].filters, { and: ['type == "memo"', 'claude_chats.contains("chat-2")'] });
   assert.deepEqual(turned.views[0].columnSize, { 'file.name': 320 });
   assert.equal(turned.views[1].name, 'My own view');
-  assert.deepEqual(turned.properties, base.properties);
+  assert.deepEqual(turned.properties.send, base.properties.send);
+  // A base from before chats were links gets the formula, and its views the column.
+  assert.ok(turned.formulas.chat.startsWith('claude_chats.map(link('));
+  assert.deepEqual(turned.views[0].order, ['file.name']);
   // A base whose chat view was removed gets one again, first; something else is not a base.
-  const without = retargetMemoBase({ views: [{ name: 'Only mine' }] }, 'chat-3', 'Third') as { views: { name: string }[] };
+  const without = retargetMemoBase({ views: [{ name: 'Only mine', order: ['chats'] }] }, 'chat-3', 'Third', 'V') as { views: { name: string; order?: string[] }[] };
   assert.deepEqual(without.views.map((view) => view.name), ['Chat: Third', 'Only mine']);
-  assert.equal(retargetMemoBase('not a base', 'c', 't'), null);
+  assert.deepEqual(without.views[1].order, ['formula.chat']);
+  assert.equal(retargetMemoBase('not a base', 'c', 't', 'V'), null);
 });
 
 test("a memo's Send box puts it in the input when ticked, takes it out when cleared, and only a change counts", async () => {
@@ -137,6 +143,7 @@ test('a Memos base open in a tab follows the chat on the panel; one closed is le
   (p as unknown as { app: unknown }).app = {
     workspace: { getLeavesOfType: (type: string) => (type === 'bases' && open ? [{ view: { file: base } }] : []) },
     vault: {
+      getName: () => 'Obsidian',
       getAbstractFileByPath: (path: string) => (path === base.path ? base : { path }),
       read: async () => text,
       modify: async (_file: unknown, value: string) => void (text = value),

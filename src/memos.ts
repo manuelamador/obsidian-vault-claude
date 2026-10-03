@@ -190,8 +190,17 @@ export function chatMemosView(chatTitle: string): string {
 /** The name of the Memos base's view of every memo. */
 export const ALL_MEMOS_VIEW = 'All memos';
 
-/** The columns of the Memos base's views. */
-const BASE_COLUMNS = ['send', 'file.name', 'tags', 'chats', 'notes', 'updated'];
+/** The columns of the Memos base's views: its chats as links that open them (see chatLinksFormula). */
+const BASE_COLUMNS = ['send', 'file.name', 'tags', 'formula.chat', 'notes', 'updated'];
+
+/**
+ * The Memos base's formula for a memo's chats as links, each showing the chat's title and opening
+ * the chat in the panel (see chatLink): Bases makes a link with display text of a URL, `obsidian://`
+ * ones included.
+ */
+export function chatLinksFormula(vault: string): string {
+  return `claude_chats.map(link("obsidian://${PROTOCOL_ACTION}?vault=${encodeURIComponent(vault)}&chat=" + value, chats[index]))`;
+}
 
 /** The filter that picks chat `chatId`'s memos, by which the base's view of one chat is known. */
 function chatFilter(chatId: string): string {
@@ -214,7 +223,7 @@ function chatView(chatId: string, chatTitle: string): Record<string, unknown> {
  * those about the note in front (the note it is embedded in, or the active one when it is open in a
  * sidebar), all memos, and those of each kind. Memos are found by `type: memo` wherever they are.
  */
-export function memoBaseYaml(chatId: string, chatTitle: string): string {
+export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): string {
   const view = (name: string, filters: string[], sort: { property: string; direction: 'ASC' | 'DESC' }) =>
     [
       '  - type: table',
@@ -231,6 +240,8 @@ export function memoBaseYaml(chatId: string, chatTitle: string): string {
   const newest = { property: 'updated', direction: 'DESC' } as const;
   const oldest = { property: 'created', direction: 'ASC' } as const;
   return [
+    'formulas:',
+    `  chat: ${JSON.stringify(chatLinksFormula(vault))}`,
     'properties:',
     '  send:',
     '    displayName: Send to chat',
@@ -238,7 +249,7 @@ export function memoBaseYaml(chatId: string, chatTitle: string): string {
     '    displayName: Memo',
     '  tags:',
     '    displayName: Tags',
-    '  chats:',
+    '  formula.chat:',
     '    displayName: Chats',
     '  notes:',
     '    displayName: Notes',
@@ -269,9 +280,20 @@ function picksChat(value: unknown): boolean {
  * memos gets the chat's name and filter, and everything else in it (columns, sorts, widths, views of
  * the user's own) stays. A base with no such view gets one, first. Null when `base` is not a base.
  */
-export function retargetMemoBase(base: unknown, chatId: string, chatTitle: string): Record<string, unknown> | null {
+export function retargetMemoBase(base: unknown, chatId: string, chatTitle: string, vault: string): Record<string, unknown> | null {
   if (typeof base !== 'object' || base === null || !Array.isArray((base as { views?: unknown }).views)) return null;
-  const views = [...((base as { views: unknown[] }).views)];
+  // Chats as links that open them, in a base written before they were: the formula, and in each
+  // view the column of chat titles swapped for it.
+  const record = base as Record<string, unknown>;
+  const formulas = { ...(typeof record.formulas === 'object' && record.formulas !== null ? (record.formulas as Record<string, unknown>) : {}) };
+  formulas.chat ??= chatLinksFormula(vault);
+  const properties = { ...(typeof record.properties === 'object' && record.properties !== null ? (record.properties as Record<string, unknown>) : {}) };
+  properties['formula.chat'] ??= { displayName: 'Chats' };
+  const views = (record.views as unknown[]).map((view) => {
+    if (typeof view !== 'object' || view === null || !Array.isArray((view as { order?: unknown }).order)) return view;
+    const order = (view as { order: unknown[] }).order.map((column) => (column === 'chats' ? 'formula.chat' : column));
+    return { ...(view as Record<string, unknown>), order };
+  });
   const at = views.findIndex((view) => typeof view === 'object' && view !== null && picksChat((view as { filters?: unknown }).filters));
   if (at === -1) views.unshift(chatView(chatId, chatTitle));
   else {
@@ -280,5 +302,5 @@ export function retargetMemoBase(base: unknown, chatId: string, chatTitle: strin
       typeof value === 'string' ? (picksChat(value) ? chatFilter(chatId) : value) : Array.isArray(value) ? value.map(retarget) : typeof value === 'object' && value !== null ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, retarget(inner)])) : value;
     views[at] = { ...view, name: chatMemosView(chatTitle), filters: retarget(view.filters) };
   }
-  return { ...(base as Record<string, unknown>), views };
+  return { ...record, formulas, properties, views };
 }
