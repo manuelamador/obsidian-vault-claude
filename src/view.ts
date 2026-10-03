@@ -29,7 +29,7 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, loadTranscript, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, loadTranscript, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
   filePathOf,
@@ -2307,7 +2307,12 @@ export class ChatView extends ItemView {
    * stays where it is and stays open, so a reply that speaks between steps can still be read.
    */
   private foldSteps(turn: HTMLElement): void {
-    if (turn.querySelector(':scope > .vc-steps')) return;
+    if (turn.hasClass('has-folded-steps')) return;
+    turn.addClass('has-folded-steps');
+    // Steps folded early, above a plan or questions (see foldStepsBefore), fold again with the rest.
+    for (const early of Array.from(turn.querySelectorAll<HTMLElement>(':scope > .vc-steps'))) {
+      early.replaceWith(...Array.from(early.querySelector('.vc-steps-body')?.children ?? []));
+    }
     // Text that was only white space between two steps does not end their run, which would split one
     // fold into two with nothing between: it is removed. Judged by its source, not by what is on
     // screen, since a reply's Markdown is still being rendered when a chat opened from the history folds.
@@ -2333,6 +2338,24 @@ export class ChatView extends ItemView {
     }
     if (run.length > 0) runs.push(run);
     for (const steps of runs) if (steps.length >= 2) this.foldRun(turn, steps);
+  }
+
+  /**
+   * The run of steps just before `card` (a plan, or questions, waiting on you), folded into one line
+   * so the card stands out while the reply is still going; at its end they fold again with the rest
+   * of its steps (see foldSteps). A lone step is already one line.
+   */
+  private foldStepsBefore(card: HTMLElement): void {
+    const turn = card.parentElement;
+    if (!turn?.hasClass('vc-turn') || turn.hasClass('has-folded-steps')) return;
+    const run: HTMLElement[] = [];
+    for (let el = card.previousElementSibling as HTMLElement | null; el; el = el.previousElementSibling as HTMLElement | null) {
+      if (el.hasClass('vc-changes') || el.hasClass('vc-turn-actions')) continue;
+      if (isStep(el)) run.unshift(el);
+      // Text with nothing in it (white space between steps) is passed over, left where it is.
+      else if (!(el.hasClass('vc-text') && !(this.markdownSource.get(el) ?? el.textContent ?? '').trim())) break;
+    }
+    if (run.length >= 2) this.foldRun(turn, run);
   }
 
   /** One run of consecutive steps, folded in place. */
@@ -4540,7 +4563,8 @@ export class ChatView extends ItemView {
    */
   private renderEdit(name: string, input: Record<string, unknown>, structured: unknown, saved: boolean): void {
     const root = this.plugin.vaultRoot() ?? '';
-    const diffs = toolDiffs(name, input, structured);
+    // The plan Claude Code writes in plan mode is shown by its card, not as a changed file.
+    const diffs = toolDiffs(name, input, structured).filter((diff) => !isPlanFile(diff.file));
     for (const diff of diffs) {
       const vaultPath = vaultRelative(diff.file, root);
       // The note remembers the chats that changed it, and offers them when you open it again. An
@@ -4676,6 +4700,8 @@ export class ChatView extends ItemView {
     const { toolName, input } = request;
     const summary = summarizeTool(toolName, input, this.plugin.vaultRoot() ?? '');
     const card = this.container().createDiv({ cls: 'vc-permission' });
+    // A plan or questions wait on you: the steps that led to them fold into one line above them.
+    if (toolName === 'ExitPlanMode' || toolName === 'AskUserQuestion') this.foldStepsBefore(card);
     if (!approval.shown) log('approval asked', { tool: toolName });
     approval.shown = true;
     this.openApprovals.push(approval);
@@ -4796,8 +4822,8 @@ export class ChatView extends ItemView {
     const carried = kept !== undefined && this.app.vault.getAbstractFileByPath(kept) instanceof TFile;
     if (carried) approval.notePath = kept;
 
+    // No title: the plan's own heading names it, and the tinted panel and its buttons say what it is.
     card.addClass('vc-plan-card');
-    card.createDiv({ cls: 'vc-permission-title', text: "Claude's plan" });
     if (carried) {
       const line = card.createDiv({ cls: 'vc-muted vc-plan-carried' });
       line.appendText('Your edits to the plan you withdrew are in the plan note, and Approve sends them. ');

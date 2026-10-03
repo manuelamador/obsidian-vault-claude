@@ -344,6 +344,24 @@ export async function readPlanFile(file: unknown): Promise<string | null> {
   return fs.readFile(resolved, 'utf8').catch(() => null);
 }
 
+/**
+ * Whether `file` is in Claude Code's plans folder (`<config>/plans`), where it writes the plan it
+ * shows for approval: compared as real paths, as readPlanFile does, without case on Windows.
+ */
+export function isPlanFile(file: string): boolean {
+  const configDir = (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).normalize('NFC');
+  const real = (where: string) => {
+    try {
+      return realpathSync(where).normalize('NFC');
+    } catch {
+      return where;
+    }
+  };
+  const inFolder = real(path.dirname(path.resolve(file.normalize('NFC'))));
+  const plans = real(path.join(configDir, 'plans'));
+  return process.platform === 'win32' ? inFolder.toLowerCase() === plans.toLowerCase() : inFolder === plans;
+}
+
 /** Where Claude Code keeps a session: `<config>/projects/<projectFolder>/<id>.jsonl`. */
 function sessionFile(id: string, dir: string): string {
   return path.join(sessionFolder(dir), `${id}.jsonl`);

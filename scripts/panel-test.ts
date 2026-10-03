@@ -1237,6 +1237,32 @@ async function main(): Promise<void> {
         return { answered, card, button };
       };
       const decided = () => internals.messagesEl.querySelector('.vc-permission.is-decided')?.textContent;
+      // The steps before a plan fold into one line above it; at the reply's end they fold again with the
+      // rest. The plan Claude Code writes is not listed among the reply's changed files.
+      {
+        internals.messagesEl.empty();
+        planView.draw.turn = null;
+        const steps = view as unknown as { container(): HTMLElement; foldSteps(turn: HTMLElement): void; renderEdit(name: string, input: Record<string, unknown>, structured: unknown, saved: boolean): void };
+        const foldTurn = steps.container();
+        foldTurn.createDiv({ cls: 'vc-tools vc-thinking' });
+        foldTurn.createDiv({ cls: 'vc-tools' });
+        const os = await import('node:os');
+        steps.renderEdit('Write', { file_path: `${os.homedir()}/.claude/plans/a-test-plan.md`, content: '# Plan' }, undefined, false);
+        const planListed = foldTurn.querySelector('.vc-changes') !== null;
+        const foldAsked = planView.askPermission({ toolName: 'ExitPlanMode', input: { plan, planFilePath: '/tmp/plan.md' }, signal: new AbortController().signal });
+        const foldedBefore = foldTurn.querySelectorAll(':scope > .vc-steps > .vc-steps-body > .vc-tools').length;
+        const cardAfterFold = foldTurn.querySelector(':scope > .vc-steps + .vc-plan-card') !== null;
+        ([...foldTurn.querySelectorAll('button')].find((el) => el.textContent === 'Reject') as HTMLElement).click();
+        await foldAsked;
+        steps.foldSteps(foldTurn);
+        const foldsAtEnd = foldTurn.querySelectorAll(':scope > .vc-steps').length;
+        const stepsAtEnd = foldTurn.querySelectorAll(':scope > .vc-steps > .vc-steps-body > *').length;
+        internals.messagesEl.empty();
+        planView.draw.turn = null;
+        const foldOk = !planListed && foldedBefore === 2 && cardAfterFold && foldsAtEnd === 1 && stepsAtEnd === 3;
+        console.log(`steps before a plan: folded ${foldedBefore}, card after the fold ${cardAfterFold}; at the end ${foldsAtEnd} fold of ${stepsAtEnd}; plan file listed ${planListed} -> ${foldOk}`);
+        if (!foldOk) process.exitCode = 1;
+      }
       const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
       // Approved in Plan mode entered from Auto: back to Auto, and Claude Code is told so.
       const modeView = view as unknown as { mode: string; modeBeforePlan: string };
@@ -1249,7 +1275,8 @@ async function main(): Promise<void> {
       Object.assign(modeView, modeWas);
       // As it is.
       const plain = propose();
-      const planTitle = plain.card.querySelector('.vc-permission-title')?.textContent;
+      // No title of its own: the plan's heading names it.
+      const planTitle = plain.card.querySelector('.vc-permission-title')?.textContent ?? null;
       // Styled as any rendered Markdown (its tables, say).
       const planMarkdown = plain.card.querySelector('.vc-plan')?.classList.contains('vc-markdown') === true;
       plain.button('Approve').click();
@@ -1395,7 +1422,7 @@ async function main(): Promise<void> {
       internals.messagesEl.empty();
       planView.draw.turn = null;
       const planOk =
-        planTitle === "Claude's plan" &&
+        planTitle === null &&
         planMarkdown &&
         plainResult.behavior === 'allow' &&
         plainResult.updatedInput?.plan === plan &&

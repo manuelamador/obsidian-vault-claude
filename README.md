@@ -99,9 +99,9 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/reply-buttons.png" width="420" alt="The buttons under a reply — reply, copy, insert into a note, branch — shown three times with the tooltips “Reply to this”, “Insert into note” and “Branch from here”">
 
-- **When Claude finishes a plan** (Plan mode, from the mode menu or `/plan` followed by what to plan), its card offers **Approve**, **Edit in a note** (approving then sends your edited version, and the note is deleted; if Esc withdraws the plan, edits in the note carry over to Claude's next plan in the chat), feedback to send it back, or **Reject**.
+- **When Claude finishes a plan** (Plan mode, from the mode menu or `/plan` followed by what to plan), the steps that led to it fold into one line and its card offers **Approve**, **Edit in a note** (approving then sends your edited version, and the note is deleted; if Esc withdraws the plan, edits in the note carry over to Claude's next plan in the chat), feedback to send it back, or **Reject**.
 
-  <img src="docs/plan-card.png" width="560" alt="A chat in Plan mode: the line “Plan mode: Claude plans, and changes nothing until you approve” above the request, then Claude’s plan on a tinted panel, with Approve, Edit in a note and Reject, a box to tell Claude what to change, and “Waiting for your approval” below">
+  <img src="docs/plan-card.png" width="560" alt="Claude’s plan on a tinted panel: its title, Context, Steps with commands and file names as inline code, and Verification, with Approve, Edit in a note and Reject below it, a box to tell Claude what to change, and “Waiting for your approval”">
 
 - **When Claude asks a multiple-choice question**, a card shows it in the chat: click an option, pick several where the question allows, or type your own answer. Skip declines.
 

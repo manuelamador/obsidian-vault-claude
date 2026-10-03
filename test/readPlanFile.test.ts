@@ -36,3 +36,21 @@ test("a plan is read only from a Markdown file in Claude Code's plans folder", a
     rmSync(config, { recursive: true, force: true });
   }
 });
+
+test("a file is a plan when it is in Claude Code's plans folder, named by either path", async () => {
+  const { isPlanFile } = await import('../src/history');
+  const config = mkdtempSync(`${tmpdir()}/vault-claude-plans-`);
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  mkdirSync(`${config}/plans`);
+  try {
+    assert.equal(isPlanFile(`${config}/plans/a-plan.md`), true);
+    assert.equal(isPlanFile(`${realpathSync(config)}/plans/a-plan.md`), true);
+    assert.equal(isPlanFile(`${config}/plans/../notes.md`), false);
+    assert.equal(isPlanFile(`${config}/other/a-plan.md`), false);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+    rmSync(config, { recursive: true, force: true });
+  }
+});
