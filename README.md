@@ -43,7 +43,7 @@ Open the chat from the robot icon in the left ribbon.
 
 - **Select text in a reply** for a **Quote** button; equations are quoted as LaTeX.
 
-  <img src="docs/quote-button.png" width="480" alt="Text selected in a reply, with an equation in it, and the Quote button just above it">
+  <img src="docs/quote-button.png" width="480" alt="Text and equations selected in a reply, the equations shown as selected too, with the Quote and Side chat buttons just above them">
 
 - **Side chat:** ask about the chat without changing it, from the button beside Quote or beside the chat title. Paste or drop images on it to ask about them. It knows the conversation so far, runs in Plan mode so it changes nothing, and is deleted when closed unless you choose **Keep as a chat**.
 
