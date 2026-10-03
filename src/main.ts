@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { PROTOCOL_ACTION } from './ideas';
+import { MEMO_SUGGESTION_SYSTEM, PROTOCOL_ACTION, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -161,7 +161,7 @@ export default class VaultClaudePlugin extends Plugin {
     // Links in replies show Obsidian's page preview, with the modifier key held unless the Page preview settings say otherwise.
     this.registerHoverLinkSource(VIEW_TYPE, { display: 'Vault Claude', defaultMod: true });
     this.addRibbonIcon('bot', 'Open Claude', () => void this.activateView());
-    // Links in idea notes back to the passages they came from (see ideas.ts).
+    // Links in memo notes back to the passages they came from (see memos.ts).
     this.registerObsidianProtocolHandler(PROTOCOL_ACTION, (params) => void this.openChatLink(params));
     this.addCommand({ id: 'open-chat', name: 'Open chat', callback: () => void this.activateView() });
     this.addCommand({
@@ -1112,7 +1112,7 @@ export default class VaultClaudePlugin extends Plugin {
 
   /**
    * Opens a chat by its session id in the panel, as listed when it was (its copies with it): a kept
-   * side chat whose panel has closed, a passage an idea came from. The panel that shows it, once
+   * side chat whose panel has closed, a passage a memo came from. The panel that shows it, once
    * shown; null when it could not be.
    */
   async openChatById(id: string, title: string): Promise<ChatView | null> {
@@ -1123,7 +1123,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * A link from an idea note (see ideas.ts chatLink): opens its chat, then finds the passage in it
+   * A link from a memo note (see memos.ts chatLink): opens its chat, then finds the passage in it
    * (`find`) or quotes it in the input to carry on from it (`quote`).
    */
   private async openChatLink(params: Record<string, string>): Promise<void> {
@@ -1132,21 +1132,39 @@ export default class VaultClaudePlugin extends Plugin {
     const title = this.chats.find((chat) => chat.id === id)?.title ?? this.lastListing?.find((item) => item.id === id)?.title ?? 'Chat';
     const view = await this.openChatById(id, title);
     if (!view) {
-      new Notice('That chat could not be opened: it may have been deleted. The passage is kept in the idea note.');
+      new Notice('That chat could not be opened: it may have been deleted. The passage is kept in the memo note.');
       return;
     }
     if (params.quote) view.quote(params.quote);
     else if (params.find) await view.findPassage(params.find);
   }
 
-  /** The idea notes in the ideas folder (see CaptureIdeaModal), the most recently changed first. */
-  ideaNotes(): TFile[] {
-    const folder = normalizePath(this.settings.ideasFolder || '/');
+  /** The memo notes in the memos folder (see MemoModal), the most recently changed first; `chat`: only those saved from that chat. */
+  memoNotes(chat?: string): TFile[] {
+    const folder = normalizePath(this.settings.memosFolder || '/');
     const inside = (file: TFile) => folder === '/' || file.path.startsWith(`${folder}/`);
     return this.app.vault
       .getMarkdownFiles()
-      .filter((file) => inside(file) && this.app.metadataCache.getFileCache(file)?.frontmatter?.type === 'idea')
+      .filter((file) => {
+        if (!inside(file)) return false;
+        const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+        if (frontmatter?.type !== 'memo') return false;
+        return chat === undefined || (Array.isArray(frontmatter.claude_chats) && frontmatter.claude_chats.includes(chat));
+      })
       .sort((a, b) => b.stat.mtime - a.stat.mtime);
+  }
+
+  /**
+   * A title and description for a memo of `passages`, suggested on the model for small jobs (see
+   * MemoModal): one request with no tools. Null when Claude Code cannot run or no suggestion came.
+   */
+  async suggestMemo(chatTitle: string, passages: MemoPassage[], signal: AbortSignal): Promise<{ title: string; description: string } | null> {
+    const launch = this.claudeLaunch();
+    if (typeof launch === 'string') return null;
+    if (!this.configured.model) await this.loadConfigured();
+    const model = this.settings.smallJobModel || chatModel(this.settings.model);
+    const reply = await runOneShot(launch, { system: MEMO_SUGGESTION_SYSTEM, prompt: memoSuggestionPrompt(chatTitle, passages), model, effort: 'low' }, () => undefined, signal);
+    return readMemoSuggestion(reply);
   }
 
   async deleteChat(id: string): Promise<boolean> {

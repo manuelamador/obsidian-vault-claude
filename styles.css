@@ -1825,16 +1825,6 @@ button.vc-continue-button:hover span:last-child {
   display: none;
 }
 
-.vc-quote-button-icon {
-  display: inline-flex;
-  color: var(--text-muted);
-}
-
-.vc-quote-button-icon .svg-icon {
-  width: 13px;
-  height: 13px;
-}
-
 /* An equation in a selection (see ChatView.markSelectedMath): MathJax's glyphs take no selection highlight. */
 .vc-math-selected mjx-math {
   background-color: var(--text-selection);
@@ -1927,25 +1917,25 @@ button.vc-continue-button:hover span:last-child {
   font-size: var(--font-ui-small);
 }
 
-/* The form for capturing an idea (see CaptureIdeaModal). */
-.vc-idea-field {
+/* The form for saving a memo (see MemoModal). */
+.vc-memo-field {
   display: flex;
   flex-direction: column;
   gap: var(--size-4-1);
   margin-bottom: var(--size-4-3);
 }
 
-.vc-idea-field label {
+.vc-memo-field label {
   font-size: var(--font-ui-small);
   color: var(--text-muted);
 }
 
-.vc-idea-field input,
-.vc-idea-field textarea {
+.vc-memo-field input,
+.vc-memo-field textarea {
   width: 100%;
 }
 
-.vc-idea-passages {
+.vc-memo-passages {
   display: flex;
   flex-direction: column;
   gap: var(--size-4-2);
@@ -1954,21 +1944,38 @@ button.vc-continue-button:hover span:last-child {
   margin-bottom: var(--size-4-3);
 }
 
-.vc-idea-passages-title,
-.vc-idea-role {
+.vc-memo-passages-title,
+.vc-memo-role {
   font-size: var(--font-ui-small);
   color: var(--text-muted);
 }
 
-.vc-idea-excerpt {
+.vc-memo-excerpt {
   padding-left: var(--size-4-2);
   border-left: 2px solid var(--background-modifier-border-hover);
   font-size: var(--font-ui-small);
   white-space: pre-wrap;
 }
 
-.vc-idea-problem {
+.vc-memo-problem {
   margin-bottom: var(--size-4-2);
   color: var(--text-error);
   font-size: var(--font-ui-small);
+}
+
+.vc-memo-status {
+  margin: calc(-1 * var(--size-4-2)) 0 var(--size-4-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-memo-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-1);
+}
+
+.vc-memo-kind.is-on {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
 }

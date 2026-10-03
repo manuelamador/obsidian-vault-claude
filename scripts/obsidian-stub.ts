@@ -140,6 +140,9 @@ export class Setting {}
 export class Modal {
   /** The modal opened last, so a test can answer it. */
   static last: Modal | null = null;
+  /** As Obsidian's: where a modal draws its title and contents, for a test that draws one with onOpen. */
+  titleEl = document.createElement('div');
+  contentEl = document.createElement('div');
   constructor(public app?: unknown) {}
   open(): void {
     Modal.last = this;

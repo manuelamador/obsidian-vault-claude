@@ -3000,9 +3000,9 @@ async function main(): Promise<void> {
     const quoteBtnOk = quoteShown && quotedInput.startsWith('> A sentence worth asking about.') && !quoteBtn.isShown();
     console.log(`Quote button: shown over a selection ${quoteShown}; input "${quotedInput.trim()}"; hidden after ${!quoteBtn.isShown()} -> ${quoteBtnOk}`);
     if (!quoteBtnOk) process.exitCode = 1;
-    // Side chat and Idea sit just after Quote, all inside the panel, even for a selection at its right edge.
-    const sideBtn = root.querySelector('.vc-side-button:not(.vc-idea-button)') as HTMLElement;
-    const ideaBtn = root.querySelector('.vc-idea-button') as HTMLElement;
+    // Side chat and Memo sit just after Quote, all inside the panel, even for a selection at its right edge.
+    const sideBtn = root.querySelector('.vc-side-button:not(.vc-memo-button)') as HTMLElement;
+    const ideaBtn = root.querySelector('.vc-memo-button') as HTMLElement;
     Object.defineProperty(quoteBtn, 'offsetWidth', { configurable: true, value: 70 });
     Object.defineProperty(sideBtn, 'offsetWidth', { configurable: true, value: 90 });
     Object.defineProperty(ideaBtn, 'offsetWidth', { configurable: true, value: 60 });
@@ -3011,11 +3011,11 @@ async function main(): Promise<void> {
       (view as unknown as { placeQuoteButton(): void }).placeQuoteButton();
       return `${parseFloat(quoteBtn.style.left)}/${parseFloat(sideBtn.style.left)}/${parseFloat(ideaBtn.style.left)}${sideBtn.isShown() && ideaBtn.isShown() ? '' : ' (hidden)'}`;
     };
-    // 300 px wide: Quote 70, Side chat 90 and Idea 60, 6 apart, 4 from the edge.
+    // 300 px wide: Quote 70, Side chat 90 and Memo 60, 6 apart, 4 from the edge.
     const placements = [placed(40), placed(280)];
     (quoteRange as unknown as { getClientRects(): unknown[] }).getClientRects = () => [box];
     const placeOk = JSON.stringify(placements) === JSON.stringify(['40/116/212', '64/140/236']);
-    console.log(`Side chat and Idea buttons beside Quote: ${placements.join(', ')} (expected 40/116/212, 64/140/236) -> ${placeOk}`);
+    console.log(`Side chat and Memo buttons beside Quote: ${placements.join(', ')} (expected 40/116/212, 64/140/236) -> ${placeOk}`);
     if (!placeOk) process.exitCode = 1;
     // A link out of the vault opens through window.open, as a note's reading view opens one, so that
     // Obsidian asks before opening a file; a link whose scheme runs script is refused.
@@ -3136,12 +3136,12 @@ async function main(): Promise<void> {
       console.log(`equations marked as selected: across ${acrossMarks}, text only ${textMarks}, cleared ${clearedMarks}; alone quotes ${JSON.stringify(aloneQuote)}, a click ${clickQuote} -> ${markOk}`);
       if (!markOk) process.exitCode = 1;
     }
-    // Ideas: a selection across messages is one passage for each, in order, with who wrote it, its
-    // equations as LaTeX and plain words to find it by; saved as a new idea note, or added to one.
+    // Memos: a selection across messages is one passage for each, in order, with who wrote it, its
+    // equations as LaTeX and plain words to find it by; saved as a new memo note, or added to one.
     {
       const ideaView = view as unknown as {
-        selectedExcerpts(): { role: string; text: string; needle: string }[];
-        saveIdea(choice: { idea: unknown; title: string; description: string }, sources: unknown): Promise<{ path: string } | null>;
+        selectedPassages(): { role: string; text: string; needle: string }[];
+        saveMemo(choice: { memo: unknown; title: string; description: string; tags: string[] }, sources: unknown): Promise<{ path: string } | null>;
         findPassage(needle: string): Promise<void>;
         quote(text: string): void;
         chatId: string | null;
@@ -3158,7 +3158,7 @@ async function main(): Promise<void> {
       across.setEnd(refinement.querySelector('.vc-user-text')?.firstChild as Text, 9);
       dom.window.getSelection()?.removeAllRanges();
       dom.window.getSelection()?.addRange(across);
-      const excerpts = ideaView.selectedExcerpts();
+      const excerpts = ideaView.selectedPassages();
       dom.window.getSelection()?.removeAllRanges();
       const vault = app.vault as unknown as Record<string, unknown>;
       const fileManager = app.fileManager as unknown as Record<string, unknown>;
@@ -3170,19 +3170,19 @@ async function main(): Promise<void> {
       vault.createFolder = async () => undefined;
       vault.process = async (file: { path: string }, change: (text: string) => string) => void notesOnDisk.set(file.path, change(notesOnDisk.get(file.path) ?? ''));
       fileManager.processFrontMatter = async (_file: unknown, change: (frontmatter: Record<string, unknown>) => void) => {
-        const frontmatter: Record<string, unknown> = { claude_chats: ['idea-chat'] };
+        const frontmatter: Record<string, unknown> = { claude_chats: ['idea-chat'], tags: ['memo', 'idea'] };
         change(frontmatter);
         frontmatters.push(frontmatter);
       };
       const chatWas = ideaView.chatId;
       ideaView.chatId = 'idea-chat';
-      const sources = { vault: 'Obsidian', chatId: 'idea-chat', chatTitle: 'Debt model', date: '2026-10-03', excerpts };
+      const sources = { vault: 'Obsidian', chatId: 'idea-chat', chatTitle: 'Debt model', date: '2026-10-03', passages: excerpts };
       const linksBefore = plugin.noteLinks.length;
-      const created = await ideaView.saveIdea({ idea: null, title: 'Repayment timing: selection', description: 'Test it.' }, sources);
+      const created = await ideaView.saveMemo({ memo: null, title: 'Repayment timing: selection', description: 'Test it.', tags: ['idea'] }, sources);
       const ideaPath = created?.path ?? '';
       const ideaText = notesOnDisk.get(ideaPath) ?? '';
       const linked = plugin.noteLinks.slice(linksBefore);
-      await ideaView.saveIdea({ idea: created, title: '', description: '' }, { ...sources, chatId: 'later-chat', chatTitle: 'Later', excerpts: [excerpts[0]] });
+      await ideaView.saveMemo({ memo: created, title: '', description: '', tags: ['read'] }, { ...sources, chatId: 'later-chat', chatTitle: 'Later', passages: [excerpts[0]] });
       const addedText = notesOnDisk.get(ideaPath) ?? '';
       // Back in the chat: Find goes to the passage, and a passage carried on from is quoted in the input.
       await ideaView.findPassage(excerpts[2]?.needle ?? '');
@@ -3205,16 +3205,57 @@ async function main(): Promise<void> {
         excerpts[1]?.text === 'A mechanism: $q(b)$ falls with debt.' &&
         excerpts[1]?.needle === 'A mechanism:' &&
         excerpts[2]?.text === 'Refine it' &&
-        ideaPath === 'Claude chats/Ideas/Repayment timing selection.md' &&
+        ideaPath === 'Claude chats/Memos/Repayment timing selection.md' &&
         ideaText.includes('# Repayment timing: selection') &&
+        ideaText.includes('tags: [memo, idea]') &&
         ideaText.includes('> A mechanism: $q(b)$ falls with debt.') &&
         JSON.stringify(linked) === JSON.stringify([`${ideaPath}@idea-chat`]) &&
         addedText.includes('### Later · 2026-10-03') &&
-        JSON.stringify(frontmatters[0]) === JSON.stringify({ claude_chats: ['idea-chat', 'later-chat'], updated: '2026-10-03' }) &&
+        JSON.stringify(frontmatters[0]) === JSON.stringify({ claude_chats: ['idea-chat', 'later-chat'], tags: ['memo', 'idea', 'read'], updated: '2026-10-03' }) &&
         found > 0 &&
         quoted.includes('> A mechanism: $q(b)$ falls');
-      console.log(`ideas: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${ideaPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${ideaOk}`);
+      console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${ideaPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${ideaOk}`);
       if (!ideaOk) process.exitCode = 1;
+    }
+    // The memo form: Claude's suggestion fills the title and description, never over what was typed;
+    // the tags picked and typed go with the memo.
+    {
+      const { MemoModal } = await import('../src/memoModal');
+      let chosen: { memo: unknown; title: string; description: string; tags: string[] } | null = null;
+      const replies = [
+        { title: 'Repayment timing and selection', description: 'Asked whether timing changes selection.' },
+        { title: 'Another title', description: 'Another description.' },
+      ];
+      let asked = 0;
+      const form = new MemoModal(
+        app as never,
+        [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.' }],
+        [],
+        () => null,
+        (choice) => void (chosen = choice),
+        async () => replies[Math.min(asked++, replies.length - 1)],
+      );
+      const formEl = (form as unknown as { contentEl: HTMLElement }).contentEl;
+      document.body.appendChild(formEl);
+      form.onOpen();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const [titleBox] = Array.from(formEl.querySelectorAll<HTMLInputElement>('.vc-memo-field input[type="text"]'));
+      const descriptionBox = formEl.querySelector('textarea') as HTMLTextAreaElement;
+      const suggested = [titleBox.value, descriptionBox.value];
+      titleBox.value = 'My own title';
+      ([...formEl.querySelectorAll('button')].find((el) => el.textContent === 'Suggest again') as HTMLElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const again = [titleBox.value, descriptionBox.value];
+      ([...formEl.querySelectorAll('.vc-memo-kind')].find((el) => el.textContent === 'todo') as HTMLElement).click();
+      (formEl.querySelectorAll<HTMLInputElement>('.vc-memo-field input[type="text"]')[1]).value = 'econ, #to read';
+      ([...formEl.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLElement).click();
+      formEl.remove();
+      const formOk =
+        JSON.stringify(suggested) === JSON.stringify(['Repayment timing and selection', 'Asked whether timing changes selection.']) &&
+        JSON.stringify(again) === JSON.stringify(['My own title', 'Another description.']) &&
+        JSON.stringify(chosen) === JSON.stringify({ memo: null, title: 'My own title', description: 'Another description.', tags: ['todo', 'econ', 'to-read'] });
+      console.log(`memo form: suggested ${JSON.stringify(suggested)}; again, with a title typed ${JSON.stringify(again)}; saved ${JSON.stringify(chosen)} -> ${formOk}`);
+      if (!formOk) process.exitCode = 1;
     }
     // Pinned at the bottom while a reply streams, the bar is still brought up to date — spaced out,
     // not on every frame's scroll — and once more when the reply ends.

@@ -43,8 +43,8 @@ import {
 } from './attachments';
 import { chipFor, renderChip } from './chip';
 import { estimateTokens, formatTokens, mentionTargets } from './contextSize';
-import { CaptureIdeaModal, type IdeaChoice } from './captureIdeaModal';
-import { addIdeaSources, ideaNoteMarkdown, ideaNoteName, passageNeedle, type IdeaExcerpt, type IdeaSources } from './ideas';
+import { MemoModal, type MemoChoice } from './memoModal';
+import { addMemoSources, cleanTags, memoNoteMarkdown, memoNoteName, passageNeedle, type MemoPassage, type MemoSources } from './memos';
 import { FindBar } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -488,8 +488,8 @@ export class ChatView extends ItemView {
   /** Counts the chats opened or started in this panel: an open still reading its file gives way when it changes. */
   private chatGeneration = 0;
   private findBar!: FindBar;
-  /** "Idea" beside Quote and Side chat over a selection in the chat (see captureIdea). */
-  private ideaButton!: HTMLButtonElement;
+  /** "Memo" beside Quote and Side chat over a selection in the chat (see saveMemoFromSelection). */
+  private memoButton!: HTMLButtonElement;
   /** A question asked beside the chat, in a pane over its messages (see SideChat). */
   private sideChat!: SideChat;
   /** Beside the Quote button over a selection: asks about the selection in the side chat. */
@@ -733,9 +733,7 @@ export class ChatView extends ItemView {
     this.messagesEl = messagesWrap.createDiv({ cls: 'vc-messages' });
     this.draw = this.liveDraw = { parent: this.messagesEl, turn: null, group: null, liveText: null, turnHadText: false };
     this.promptNav = new PromptNav(messagesWrap, this.messagesEl, () => this.earlier?.listed() ?? []);
-    this.quoteButton = messagesWrap.createEl('button', { cls: 'vc-quote-button', attr: { 'aria-label': 'Quote the selected text in your next message' } });
-    setIcon(this.quoteButton.createSpan({ cls: 'vc-quote-button-icon' }), 'quote');
-    this.quoteButton.createSpan({ text: 'Quote' });
+    this.quoteButton = messagesWrap.createEl('button', { cls: 'vc-quote-button', text: 'Quote', attr: { 'aria-label': 'Quote the selected text in your next message' } });
     this.quoteButton.hide();
     // Pressing it must not clear the selection it is about to quote.
     this.registerDomEvent(this.quoteButton, 'mousedown', (evt) => evt.preventDefault());
@@ -743,18 +741,14 @@ export class ChatView extends ItemView {
       this.quoteSelection();
       this.hideSelectionButtons();
     });
-    this.sideButton = messagesWrap.createEl('button', { cls: 'vc-quote-button vc-side-button', attr: { 'aria-label': 'Ask about the selected text in a side chat' } });
-    setIcon(this.sideButton.createSpan({ cls: 'vc-quote-button-icon' }), 'messages-square');
-    this.sideButton.createSpan({ text: 'Side chat' });
+    this.sideButton = messagesWrap.createEl('button', { cls: 'vc-quote-button vc-side-button', text: 'Side chat', attr: { 'aria-label': 'Ask about the selected text in a side chat' } });
     this.sideButton.hide();
     this.registerDomEvent(this.sideButton, 'mousedown', (evt) => evt.preventDefault());
     this.registerDomEvent(this.sideButton, 'click', () => this.openSideChat());
-    this.ideaButton = messagesWrap.createEl('button', { cls: 'vc-quote-button vc-side-button vc-idea-button', attr: { 'aria-label': 'Record the selected passages as the source of an idea' } });
-    setIcon(this.ideaButton.createSpan({ cls: 'vc-quote-button-icon' }), 'lightbulb');
-    this.ideaButton.createSpan({ text: 'Idea' });
-    this.ideaButton.hide();
-    this.registerDomEvent(this.ideaButton, 'mousedown', (evt) => evt.preventDefault());
-    this.registerDomEvent(this.ideaButton, 'click', () => this.captureIdea());
+    this.memoButton = messagesWrap.createEl('button', { cls: 'vc-quote-button vc-side-button vc-memo-button', text: 'Memo', attr: { 'aria-label': 'Save the selected passages as a memo' } });
+    this.memoButton.hide();
+    this.registerDomEvent(this.memoButton, 'mousedown', (evt) => evt.preventDefault());
+    this.registerDomEvent(this.memoButton, 'click', () => this.saveMemoFromSelection());
     this.sideChat = new SideChat(messagesWrap, {
       startSession: (handlers, id, own) => this.startSideSession(handlers, id, own),
       renderMarkdown: (markdown, el, component) => void this.renderMarkdown(markdown, el, component),
@@ -3383,8 +3377,13 @@ export class ChatView extends ItemView {
   /** The notes button's menu: what this chat changed, then what it mentioned. */
   private openNotesMenu(evt: MouseEvent): void {
     const { changed, mentioned } = this.notesInChat();
+    // The memos saved from this chat (see saveMemo), which its replies do not show.
+    const chatId = this.chatId ?? this.resumeId;
+    const memos: NoteLink[] = (chatId ? this.plugin.memoNotes(chatId) : []).map((file) => ({ target: file.path, label: file.basename, path: file.path }));
+    const listed = new Set(memos.map((memo) => memo.target));
+    const others = (entries: NoteLink[]) => entries.filter((entry) => !listed.has(entry.target));
     const menu = new Menu();
-    if (changed.length === 0 && mentioned.length === 0) {
+    if (changed.length === 0 && mentioned.length === 0 && memos.length === 0) {
       menu.addItem((item) => item.setTitle('No notes in this chat').setDisabled(true));
     } else {
       // A heading naming the menu, with its hint once, above the sections.
@@ -3406,8 +3405,9 @@ export class ChatView extends ItemView {
         );
       }
     };
-    section('Changed', changed, 'file-pen');
-    section('Mentioned', mentioned, 'file-text');
+    section('Memos', memos, 'sticky-note');
+    section('Changed', others(changed), 'file-pen');
+    section('Mentioned', others(mentioned), 'file-text');
     menu.showAtMouseEvent(evt);
   }
 
@@ -5091,16 +5091,16 @@ export class ChatView extends ItemView {
       return;
     }
     const side = this.sideButton;
-    const idea = this.ideaButton;
+    const memo = this.memoButton;
     button.show();
     side.show();
-    idea.show();
+    memo.show();
     const width = button.offsetWidth;
     const height = button.offsetHeight;
     // Quote over the start of the selection, where reading began, and Side chat just after it: the
     // two kept inside the panel together.
     const gap = 6;
-    const left = Math.max(4, Math.min(first.left - wrap.left, wrap.width - width - gap - side.offsetWidth - gap - idea.offsetWidth - 4));
+    const left = Math.max(4, Math.min(first.left - wrap.left, wrap.width - width - gap - side.offsetWidth - gap - memo.offsetWidth - 4));
     // Above the selection when there is room, below it otherwise.
     // 8 px: room for the pointer between the button and the text it points at.
     const above = top - wrap.top - height - 8;
@@ -5111,30 +5111,30 @@ export class ChatView extends ItemView {
     button.style.top = `${buttonTop}px`;
     side.style.left = `${left + width + gap}px`;
     side.style.top = `${buttonTop}px`;
-    idea.style.left = `${left + width + gap + side.offsetWidth + gap}px`;
-    idea.style.top = `${buttonTop}px`;
+    memo.style.left = `${left + width + gap + side.offsetWidth + gap}px`;
+    memo.style.top = `${buttonTop}px`;
   }
 
   private hideSelectionButtons(): void {
     this.quoteButton?.hide();
     this.sideButton?.hide();
-    this.ideaButton?.hide();
+    this.memoButton?.hide();
   }
 
-  // ---- Ideas -------------------------------------------------------------
+  // ---- Memos -------------------------------------------------------------
 
   /**
    * The selection in the chat as passages, one for each message it takes in, in the conversation's
    * order: who wrote the message, the selected part of it with equations as LaTeX, and plain words
    * from it to find it again by. Empty when nothing in the chat is selected.
    */
-  selectedExcerpts(): IdeaExcerpt[] {
+  selectedPassages(): MemoPassage[] {
     const selection = this.chatSelection();
     if (!selection || selection.rangeCount === 0) return [];
     const range = selection.getRangeAt(0);
     const doc = this.messagesEl.ownerDocument;
     const messages = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user-text, .vc-text')].filter((el) => range.intersectsNode(el));
-    const excerpts: IdeaExcerpt[] = [];
+    const passages: MemoPassage[] = [];
     for (const el of messages) {
       // A message inside another taken whole (a background agent's result) is the outer one's.
       if (messages.some((other) => other !== el && other.contains(el))) continue;
@@ -5147,63 +5147,77 @@ export class ChatView extends ItemView {
       // Words outside the equations: the chat's Find searches the text as drawn, without their LaTeX.
       const plain = part.cloneContents();
       for (const math of Array.from(plain.querySelectorAll('.math'))) math.replaceWith('\n');
-      excerpts.push({ role: el.closest('.vc-user') ? 'you' : 'claude', text, needle: passageNeedle(plain.textContent ?? '') });
+      passages.push({ role: el.closest('.vc-user') ? 'you' : 'claude', text, needle: passageNeedle(plain.textContent ?? '') });
     }
-    return excerpts;
+    return passages;
   }
 
-  /** "Idea" over a selection in the chat: the form for recording the selected passages as the source of an idea (see CaptureIdeaModal). */
-  captureIdea(): void {
-    const excerpts = this.selectedExcerpts();
+  /** "Memo" over a selection in the chat: the form for saving the selected passages as a memo (see MemoModal). */
+  saveMemoFromSelection(): void {
+    const passages = this.selectedPassages();
     this.hideSelectionButtons();
+    if (passages.length === 0) {
+      new Notice('Select the passages of the chat to save first.');
+      return;
+    }
+    this.openMemoForm(passages);
+  }
+
+  /** The memo form for `passages` of the chat on screen, with Claude's suggestion of a title and description. */
+  private openMemoForm(passages: MemoPassage[]): void {
     const chatId = this.chatId ?? this.resumeId;
-    if (excerpts.length === 0) {
-      new Notice('Select the passages of the chat the idea came from first.');
-      return;
-    }
     if (!chatId) {
-      new Notice('This chat has not started yet: there is nothing to link the idea to.');
+      new Notice('This chat has not started yet: there is nothing to link a memo to.');
       return;
     }
-    const sources: IdeaSources = {
+    const sources: MemoSources = {
       vault: this.app.vault.getName(),
       chatId,
       chatTitle: this.chatName ?? 'Chat',
       date: formatDate(Date.now()).slice(0, 10),
-      excerpts,
+      passages,
     };
-    new CaptureIdeaModal(this.app, excerpts, this.plugin.ideaNotes(), (title) => this.ideaTitleProblem(title), (choice) => void this.saveIdea(choice, sources)).open();
+    new MemoModal(
+      this.app,
+      passages,
+      this.plugin.memoNotes(),
+      (title) => this.memoTitleProblem(title),
+      (choice) => void this.saveMemo(choice, sources),
+      (signal) => this.plugin.suggestMemo(sources.chatTitle, passages, signal),
+    ).open();
   }
 
-  /** Why a new idea cannot be called `title`: note names are unique in the vault, and a link to the idea must find it. */
-  private ideaTitleProblem(title: string): string | null {
-    const name = ideaNoteName(title);
-    if (!name) return 'Give the idea a title with letters or numbers in it.';
+  /** Why a new memo cannot be called `title`: note names are unique in the vault, and a link to the memo must find it. */
+  private memoTitleProblem(title: string): string | null {
+    const name = memoNoteName(title);
+    if (!name) return 'Give the memo a title with letters or numbers in it.';
     const taken = this.app.metadataCache.getFirstLinkpathDest(name, '');
-    return taken ? `A note named “${name}” already exists: add the passages to it, or give the idea another title.` : null;
+    return taken ? `A note named “${name}” already exists: add the passages to it, or give the memo another title.` : null;
   }
 
-  /** Writes the passages to a new idea note, or to the end of the one chosen, and links the note to the chat. */
-  async saveIdea(choice: IdeaChoice, sources: IdeaSources): Promise<TFile | null> {
+  /** Writes the passages to a new memo note, or to the end of the one chosen with its tags added, and links the note to the chat. */
+  async saveMemo(choice: MemoChoice, sources: MemoSources): Promise<TFile | null> {
     try {
-      let file = choice.idea;
+      let file = choice.memo;
       if (file) {
-        await this.app.vault.process(file, (text) => addIdeaSources(text, sources));
+        await this.app.vault.process(file, (text) => addMemoSources(text, sources));
         await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
           const chats = Array.isArray(frontmatter.claude_chats) ? frontmatter.claude_chats : [];
           if (!chats.includes(sources.chatId)) frontmatter.claude_chats = [...chats, sources.chatId];
+          const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags.map(String) : typeof frontmatter.tags === 'string' ? [frontmatter.tags] : [];
+          if (choice.tags.some((tag) => !tags.includes(tag))) frontmatter.tags = cleanTags([...tags, ...choice.tags]);
           frontmatter.updated = sources.date;
         });
       } else {
-        const folder = normalizePath(this.plugin.settings.ideasFolder || '/');
+        const folder = normalizePath(this.plugin.settings.memosFolder || '/');
         if (folder !== '/' && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
-        const path = `${folder === '/' ? '' : `${folder}/`}${ideaNoteName(choice.title)}.md`;
-        file = await this.app.vault.create(path, ideaNoteMarkdown({ title: choice.title, description: choice.description, sources }));
+        const path = `${folder === '/' ? '' : `${folder}/`}${memoNoteName(choice.title)}.md`;
+        file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, tags: choice.tags, sources }));
       }
       this.plugin.linkNoteChat(file.path, sources.chatId);
       const saved = file;
       const frag = createFragment((parts) => {
-        parts.appendText(`${choice.idea ? 'Added to' : 'Saved'} “${saved.basename}”. `);
+        parts.appendText(`${choice.memo ? 'Added to' : 'Saved'} “${saved.basename}”. `);
         parts.createEl('a', { text: 'Open it', href: '#' }).addEventListener('click', (evt) => {
           evt.preventDefault();
           void this.app.workspace.getLeaf('tab').openFile(saved);
@@ -5212,20 +5226,20 @@ export class ChatView extends ItemView {
       new Notice(frag, 8000);
       return saved;
     } catch (error) {
-      log('saving an idea failed', error);
-      new Notice(`Could not save the idea: ${errorText(error)}`);
+      log('saving a memo failed', error);
+      new Notice(`Could not save the memo: ${errorText(error)}`);
       return null;
     }
   }
 
-  /** Puts `text` in the input as a quote, to carry on from it (a link from an idea note). */
+  /** Puts `text` in the input as a quote, to carry on from it (a link from a memo note). */
   quote(text: string): void {
     this.quoteText(text);
   }
 
-  /** Finds `needle` in the chat on screen with Find, drawing earlier turns back to it (a link from an idea note). */
+  /** Finds `needle` in the chat on screen with Find, drawing earlier turns back to it (a link from a memo note). */
   async findPassage(needle: string): Promise<void> {
-    if (!(await this.findBar.find(needle))) new Notice('The passage was not found in this chat: it may have been compacted away. It is kept in the idea note.');
+    if (!(await this.findBar.find(needle))) new Notice('The passage was not found in this chat: it may have been compacted away. It is kept in the memo note.');
   }
 
   /** Opens the side chat, with `quote` (or the text selected in the chat) quoted in its input. */
