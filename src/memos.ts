@@ -109,6 +109,8 @@ export function memoNoteMarkdown(memo: { title: string; description: string; tag
     // A box in the Memos base, in step with the chat's input: ticked while the memo is mentioned in it
     // (see VaultClaudePlugin.followMemoBox and ChatView.followMemoBoxes).
     'send: false',
+    // A box in the Memos base: ticked, the memo is finished with, and shows only in the Done view.
+    'done: false',
     `claude_chats: [${chatId}]`,
     '---',
   ];
@@ -131,9 +133,32 @@ export function addMemoSources(note: string, sources: MemoSources): string {
   return `${`${text.slice(0, at).trimEnd()}\n\n${section.trimEnd()}\n${next ? `\n${text.slice(at)}` : ''}`.trimEnd()}\n`;
 }
 
-/** A note name made from a memo's title: what file names cannot hold is dropped, and it is kept short. */
+/**
+ * A note name made from a memo's title: what file names cannot hold is dropped, and what would end or
+ * garble a value in a link's query (`&`, `%`, `+`, as the table's chat links carry the path), and it
+ * is kept short.
+ */
 export function memoNoteName(title: string): string {
-  return title.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  return title.replace(/[\\/:*?"<>|#^[\]&%+]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+}
+
+/**
+ * The words by which the memo `note` finds its first passage from chat `chatId`: the `find` of that
+ * chat's first "Go to the passage" link in it. Null when it has none (a passage of an equation alone).
+ */
+export function firstPassageNeedle(note: string, chatId: string): string | null {
+  const chat = `chat=${encodeURIComponent(chatId)}&find=`;
+  for (const match of note.matchAll(/obsidian:\/\/vault-claude\?([^)\s]+)/g)) {
+    const at = match[1].indexOf(chat);
+    if (at === -1) continue;
+    const value = match[1].slice(at + chat.length).split('&')[0];
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 /**
@@ -191,7 +216,13 @@ export function chatMemosView(chatTitle: string): string {
 export const ALL_MEMOS_VIEW = 'All memos';
 
 /** The columns of the Memos base's views: its chats as links that open them (see chatLinksFormula). */
-const BASE_COLUMNS = ['send', 'file.name', 'tags', 'formula.chat', 'notes', 'updated'];
+const BASE_COLUMNS = ['send', 'done', 'file.name', 'tags', 'formula.chat', 'notes', 'updated'];
+
+/** Every view of the Memos base but Done leaves out the memos finished with. */
+const NOT_DONE = 'done != true';
+
+/** The name of the Memos base's view of the memos finished with. */
+const DONE_VIEW = 'Done';
 
 /**
  * The Memos base's formula for a memo's chats as links, each showing the chat's title and opening
@@ -199,7 +230,8 @@ const BASE_COLUMNS = ['send', 'file.name', 'tags', 'formula.chat', 'notes', 'upd
  * ones included.
  */
 function chatLinksFormula(vault: string): string {
-  return `${CHAT_LINKS_START}${encodeURIComponent(vault)}&chat=" + value, chats[index]))`;
+  // The memo's path goes with it, so that the chat opens at the memo's first passage from it.
+  return `${CHAT_LINKS_START}${encodeURIComponent(vault)}&chat=" + value + "&memo=" + file.path, chats[index]))`;
 }
 
 /** How the plugin's chat-link formula starts, by which a formula of its own is told from one of the user's. */
@@ -229,7 +261,7 @@ function chatView(chatId: string, chatTitle: string): Record<string, unknown> {
   return {
     type: 'table',
     name: chatMemosView(chatTitle),
-    filters: { and: ['type == "memo"', chatFilter(chatId)] },
+    filters: { and: ['type == "memo"', NOT_DONE, chatFilter(chatId)] },
     order: BASE_COLUMNS,
     sort: [{ property: 'updated', direction: 'DESC' }],
   };
@@ -248,7 +280,7 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
       `    name: ${JSON.stringify(name)}`,
       '    filters:',
       '      and:',
-      ...['type == "memo"', ...filters].map((filter) => `        - ${JSON.stringify(filter)}`),
+      ...['type == "memo"', ...(name === DONE_VIEW ? [] : [NOT_DONE]), ...filters].map((filter) => `        - ${JSON.stringify(filter)}`),
       ...(group ? ['    groupBy:', `      property: ${group}`, '      direction: ASC'] : []),
       '    order:',
       ...BASE_COLUMNS.filter((column) => !(group === 'chats' && column === 'formula.chat') && column !== group).map((column) => `      - ${column}`),
@@ -264,6 +296,8 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
     'properties:',
     '  send:',
     '    displayName: Send to chat',
+    '  done:',
+    '    displayName: Done',
     '  file.name:',
     '    displayName: Memo',
     '  tags:',
@@ -284,6 +318,7 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
     view('Ideas', ['file.hasTag("idea")'], newest),
     view('By chat', [], newest, 'chats'),
     view('By note', [], newest, 'notes'),
+    view(DONE_VIEW, ['done == true'], newest),
     '',
   ].join('\n');
 }
@@ -326,5 +361,25 @@ export function retargetMemoBase(base: unknown, chatId: string, chatTitle: strin
       typeof value === 'string' ? (picksChat(value) ? chatFilter(chatId) : value) : Array.isArray(value) ? value.map(retarget) : typeof value === 'object' && value !== null ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, retarget(inner)])) : value;
     views[at] = { ...view, name: chatMemosView(chatTitle), filters: retarget(view.filters) };
   }
-  return { ...record, formulas, properties, views };
+  return addDoneBoxes({ ...record, formulas, properties, views });
+}
+
+/**
+ * A Memos base from before the Done box, given it once: the column beside Send and the filter that
+ * leaves finished memos out in each of the plugin's views (those that pick memos by type), and a
+ * Done view at the end. One that has it is returned as it is.
+ */
+function addDoneBoxes(base: Record<string, unknown>): Record<string, unknown> {
+  const properties = base.properties as Record<string, unknown>;
+  if (properties.done !== undefined) return base;
+  const views = (base.views as unknown[]).map((view) => {
+    if (typeof view !== 'object' || view === null) return view;
+    const record = view as Record<string, unknown>;
+    const order = Array.isArray(record.order) ? record.order.flatMap((column) => (column === 'send' ? ['send', 'done'] : [column])) : record.order;
+    const and = (record.filters as { and?: unknown } | undefined)?.and;
+    const ours = Array.isArray(and) && and.includes('type == "memo"');
+    return { ...record, order, ...(ours ? { filters: { ...(record.filters as object), and: [...and, NOT_DONE] } } : {}) };
+  });
+  views.push({ type: 'table', name: DONE_VIEW, filters: { and: ['type == "memo"', 'done == true'] }, order: BASE_COLUMNS, sort: [{ property: 'updated', direction: 'DESC' }] });
+  return { ...base, properties: { ...properties, done: { displayName: 'Done' } }, views };
 }

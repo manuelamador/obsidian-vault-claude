@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, PROTOCOL_ACTION, memoBaseYaml, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, firstPassageNeedle, PROTOCOL_ACTION, memoBaseYaml, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -1156,8 +1156,9 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * A link from a memo note (see memos.ts chatLink): opens its chat, then finds the passage in it
-   * (`find`) or quotes it in the input to carry on from it (`quote`).
+   * A link from a memo note (see memos.ts chatLink) or the Memos table: opens its chat, then finds the
+   * passage in it (`find`), quotes it in the input to carry on from it (`quote`), or finds the memo's
+   * first passage from that chat (`memo`, the memo's path).
    */
   private async openChatLink(params: Record<string, string>): Promise<void> {
     const id = params.chat;
@@ -1170,6 +1171,12 @@ export default class VaultClaudePlugin extends Plugin {
     }
     if (params.quote) view.quote(params.quote);
     else if (params.find) await view.findPassage(params.find);
+    else if (params.memo) {
+      // From the Memos table: the memo's first passage from this chat.
+      const memo = this.app.vault.getAbstractFileByPath(params.memo);
+      const needle = memo instanceof TFile ? firstPassageNeedle(await this.app.vault.cachedRead(memo), id) : null;
+      if (needle) await view.findPassage(needle);
+    }
   }
 
   /** The memo notes (`type: memo`, see MemoModal), the most recently changed first; `chat`: only those saved from that chat. */

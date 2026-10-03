@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { TFile } from 'obsidian';
 import {
   addMemoSources,
   chatLink,
@@ -8,6 +9,7 @@ import {
   retargetMemoBase,
   memoNoteMarkdown,
   memoNoteName,
+  firstPassageNeedle,
   memoSuggestionPrompt,
   pairChat,
   passageNeedle,
@@ -30,7 +32,7 @@ test('a new memo note: frontmatter with its tags, title, description, and each p
   const note = memoNoteMarkdown({ title: 'Repayment timing may change equilibrium selection', description: 'Test it under other continuation choices.', tags: ['idea', 'read'], notes: ['[[Model setup]]'], sources });
   assert.match(
     note,
-    /^---\ntype: memo\ntags: \[idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
+    /^---\ntype: memo\ntags: \[idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\ndone: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
   );
   assert.ok(note.includes('**You** · [Go to the passage](obsidian://vault-claude?vault=Obsidian&chat=chat-1&find=Does%20the%20result%20survive)'));
   assert.ok(note.includes('> Does the result survive\n> recursive repayment?'));
@@ -69,6 +71,7 @@ test('a passage is found by its first line of words, cut at a word', () => {
 
 test("a memo's note name drops what file names cannot hold", () => {
   assert.equal(memoNoteName('Debt: timing / selection?'), 'Debt timing selection');
+  assert.equal(memoNoteName('Prices & signals: 50% + noise'), 'Prices signals 50 noise');
 });
 
 test('the suggestion request names who wrote each passage, and the reply is read from its JSON', () => {
@@ -86,14 +89,17 @@ test('the suggestion request names who wrote each passage, and the reply is read
 test("the Memos base opens on the chat's memos, then all, those about the note in front, and each kind", () => {
   const base = memoBaseYaml('chat-1', 'Debt model [v2] #draft', 'My vault');
   const views = [...base.matchAll(/^    name: "(.*)"$/gm)].map((match) => match[1]);
-  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas', 'By chat', 'By note']);
+  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas', 'By chat', 'By note', 'Done']);
+  // Finished memos only in Done.
+  assert.equal(base.split('"done != true"').length - 1, 9);
+  assert.ok(base.includes('        - "done == true"'));
   assert.ok(base.includes('    groupBy:\n      property: chats\n      direction: ASC'));
   assert.ok(base.includes('    groupBy:\n      property: notes\n      direction: ASC'));
   assert.ok(base.includes('        - "claude_chats.contains(\\"chat-1\\")"'));
   assert.ok(base.includes('        - "file.hasLink(this.file)"'));
   // Memos wherever they are, by their type; their chats as links that open them.
   assert.ok(!base.includes('inFolder'));
-  assert.ok(base.startsWith('formulas:\n  chat: "claude_chats.map(link(\\"obsidian://vault-claude?vault=My%20vault&chat=\\" + value, chats[index]))"'));
+  assert.ok(base.startsWith('formulas:\n  chat: "claude_chats.map(link(\\"obsidian://vault-claude?vault=My%20vault&chat=\\" + value + \\"&memo=\\" + file.path, chats[index]))"'));
   assert.ok(base.includes('      - formula.chat'));
 });
 
@@ -107,7 +113,7 @@ test("turning the base to another chat changes its chat view only, and keeps wha
   };
   const turned = retargetMemoBase(base, 'chat-2', 'Second', 'V') as { views: { name: string; filters: unknown; columnSize?: unknown; order?: string[] }[]; properties: Record<string, unknown>; formulas: Record<string, string> };
   assert.equal(turned.views[0].name, 'Chat: Second');
-  assert.deepEqual(turned.views[0].filters, { and: ['type == "memo"', 'claude_chats.contains("chat-2")'] });
+  assert.deepEqual(turned.views[0].filters, { and: ['type == "memo"', 'claude_chats.contains("chat-2")', 'done != true'] });
   assert.deepEqual(turned.views[0].columnSize, { 'file.name': 320 });
   assert.equal(turned.views[1].name, 'My own view');
   assert.deepEqual(turned.properties.send, base.properties.send);
@@ -116,7 +122,7 @@ test("turning the base to another chat changes its chat view only, and keeps wha
   assert.deepEqual(turned.views[0].order, ['file.name']);
   // A base whose chat view was removed gets one again, first; something else is not a base.
   const without = retargetMemoBase({ views: [{ name: 'Only mine', order: ['chats'] }] }, 'chat-3', 'Third', 'V') as { views: { name: string; order?: string[] }[] };
-  assert.deepEqual(without.views.map((view) => view.name), ['Chat: Third', 'Only mine']);
+  assert.deepEqual(without.views.map((view) => view.name), ['Chat: Third', 'Only mine', 'Done']);
   assert.deepEqual(without.views[1].order, ['formula.chat']);
   assert.equal(retargetMemoBase('not a base', 'c', 't', 'V'), null);
 });
@@ -175,7 +181,15 @@ test('a link from a memo opens its chat, then finds the passage or quotes it; a 
   await open({ chat: 'c1', quote: 'A mechanism: $q(b)$' });
   await open({ chat: 'gone', find: 'x' });
   await open({ find: 'no chat' });
-  assert.deepEqual(done, ['open c1 Debt model', 'find A mechanism:', 'open c1 Debt model', 'quote A mechanism: $q(b)$', 'open gone Chat']);
+  // From the table: the memo's first passage from that chat.
+  (p as unknown as { app: unknown }).app = {
+    vault: {
+      getAbstractFileByPath: (path: string) => Object.assign(new TFile(), { path }),
+      cachedRead: async () => '**You** · [Go to the passage](obsidian://vault-claude?vault=V&chat=c1&find=First%20words)',
+    },
+  };
+  await open({ chat: 'c1', memo: 'Claude chats/Memos/M.md' });
+  assert.deepEqual(done, ['open c1 Debt model', 'find A mechanism:', 'open c1 Debt model', 'quote A mechanism: $q(b)$', 'open gone Chat', 'open c1 Debt model', 'find First words']);
 });
 
 test("a memo's Send box cleared in the base takes its mention out of every panel's input", async () => {
@@ -230,4 +244,32 @@ test("renaming a chat renames it in the memos saved from it", async () => {
   p.memoNotes = (chat?: string) => (chat === 'b' ? [{ path: 'Claude chats/Memos/M.md' } as never] : []);
   await p.renameChatTitle('b', 'New title');
   assert.deepEqual(frontmatter.chats, ['First', 'New title']);
+});
+
+test('a table from before the Done box gets it once: the column, the filter in its memo views, a Done view', () => {
+  const old = {
+    formulas: { chat: 'claude_chats.map(link("obsidian://vault-claude?vault=V&chat=" + value, chats[index]))' },
+    properties: { send: { displayName: 'Send to chat' } },
+    views: [
+      { type: 'table', name: 'Chat: A', filters: { and: ['type == "memo"', 'claude_chats.contains("a")'] }, order: ['send', 'file.name'] },
+      { type: 'table', name: 'Mine', filters: { and: ['file.hasTag("x")'] }, order: ['file.name'] },
+    ],
+  };
+  const once = retargetMemoBase(old, 'a', 'A', 'V') as { properties: Record<string, unknown>; views: { name: string; order: string[]; filters: { and: string[] } }[] };
+  assert.deepEqual(once.views.map((view) => view.name), ['Chat: A', 'Mine', 'Done']);
+  assert.deepEqual(once.views[0].order, ['send', 'done', 'file.name']);
+  assert.ok(once.views[0].filters.and.includes('done != true'));
+  assert.deepEqual(once.views[1].filters.and, ['file.hasTag("x")']);
+  // Again: nothing more is added.
+  const twice = retargetMemoBase(once, 'a', 'A', 'V') as { views: { name: string; order: string[] }[] };
+  assert.deepEqual(twice.views.map((view) => view.name), ['Chat: A', 'Mine', 'Done']);
+  assert.deepEqual(twice.views[0].order, ['send', 'done', 'file.name']);
+});
+
+test("a link from the table finds the memo's first passage from its chat", () => {
+  const note = memoNoteMarkdown({ title: 'Memo', description: '', tags: [], notes: [], sources });
+  assert.equal(firstPassageNeedle(note, 'chat-1'), 'Does the result survive');
+  assert.equal(firstPassageNeedle(note, 'other-chat'), null);
+  const base = memoBaseYaml('chat-1', 'Debt model', 'V');
+  assert.ok(base.includes('+ \\"&memo=\\" + file.path, chats[index]'));
 });
