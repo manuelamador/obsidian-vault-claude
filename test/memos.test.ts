@@ -82,9 +82,9 @@ test('the suggestion request names who wrote each passage, and the reply is read
 });
 
 test("the Memos base opens on the chat's memos, then those about the note in front, all, and each kind", () => {
-  const base = memoBaseYaml('Claude chats/Memos', 'chat-1', 'Debt model');
+  const base = memoBaseYaml('Claude chats/Memos', 'chat-1', 'Debt model [v2] #draft');
   const views = [...base.matchAll(/^    name: "(.*)"$/gm)].map((match) => match[1]);
-  assert.deepEqual(views, ['This chat', 'About this note', 'All memos', 'To do', 'To read', 'To explore', 'Ideas']);
+  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'About this note', 'All memos', 'To do', 'To read', 'To explore', 'Ideas']);
   assert.ok(base.includes('        - "claude_chats.contains(\\"chat-1\\")"'));
   assert.ok(base.includes('        - "file.hasLink(this.file)"'));
   assert.ok(base.includes('        - "file.inFolder(\\"Claude chats/Memos\\")"'));

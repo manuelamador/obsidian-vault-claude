@@ -175,8 +175,15 @@ export function readMemoSuggestion(reply: string): { title: string; description:
   }
 }
 
-/** The name of the Memos base's view of one chat's memos, which the panel opens (see memoBaseYaml). */
-export const CHAT_MEMOS_VIEW = 'This chat';
+/**
+ * The name of the Memos base's view of one chat's memos, which the panel opens (see memoBaseYaml):
+ * the chat's title, so that a table left open still says whose memos it lists after the panel moves
+ * on to another chat. What would end a link to the view (`#`, `|`, brackets, `^`) is left out.
+ */
+export function chatMemosView(chatTitle: string): string {
+  const title = chatTitle.replace(/[#|[\]^\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+  return `Chat: ${title || 'untitled'}`;
+}
 
 /**
  * The Memos base the panel writes and opens, in the memos folder: first the memos of chat `chatId`,
@@ -217,7 +224,7 @@ export function memoBaseYaml(folder: string, chatId: string, chatTitle: string):
     '  updated:',
     '    displayName: Updated',
     'views:',
-    view(CHAT_MEMOS_VIEW, [`claude_chats.contains(${JSON.stringify(chatId)})`], newest),
+    view(chatMemosView(chatTitle), [`claude_chats.contains(${JSON.stringify(chatId)})`], newest),
     view('About this note', ['file.hasLink(this.file)'], newest),
     view('All memos', [], newest),
     view('To do', ['file.hasTag("todo")'], oldest),
