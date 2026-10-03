@@ -1055,6 +1055,12 @@ export class ChatView extends ItemView {
     this.effortOverride = this.plugin.settings.effort || undefined;
     this.fastMode = false;
     this.fastState = null;
+    // Plan mode belongs to the chat it was entered in: a new chat starts in the mode before it, unless
+    // new chats start in Plan mode by the settings. Other modes stay with the panel, as before.
+    if (this.mode === 'plan' && this.plugin.settings.permissionMode !== 'plan') {
+      this.mode = this.modeBeforePlan === 'plan' ? this.plugin.settings.permissionMode : this.modeBeforePlan;
+      this.populateModeSelect();
+    }
     this.draftPath = null;
     this.updateDraftLine();
     this.populateModelSelect();

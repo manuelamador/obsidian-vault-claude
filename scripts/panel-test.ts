@@ -3389,8 +3389,17 @@ async function main(): Promise<void> {
       modeChat.onMessage({ type: 'system', subtype: 'status', status: null, permissionMode: 'plan', uuid: 'st3', session_id: 's' });
       modeChat.onMessage({ type: 'system', subtype: 'status', status: null, permissionMode: 'auto', uuid: 'st4', session_id: 's' });
       const drawn = lines();
+      // A new chat does not inherit Plan mode: it starts in the mode before it, unless new chats start in Plan mode.
+      modeChat.onMessage({ type: 'system', subtype: 'status', status: null, permissionMode: 'plan', uuid: 'st5', session_id: 's' });
       modeChat.session = null;
       view.newChat();
+      const afterNew = { mode: modeChat.mode, cue: planLine.isShown(), tinted: inputBox.hasClass('is-plan-mode') };
+      const settingsMode = plugin.settings.permissionMode;
+      plugin.settings.permissionMode = 'plan';
+      modeChat.mode = 'plan';
+      view.newChat();
+      const keptPlan = modeChat.mode;
+      plugin.settings.permissionMode = settingsMode;
       modeChat.mode = modeWas;
       (view as unknown as { populateModeSelect(): void }).populateModeSelect();
       const modeOk =
@@ -3400,6 +3409,10 @@ async function main(): Promise<void> {
         entered.tinted &&
         entered.placeholder === 'Describe what to plan…' &&
         left.mode === 'auto' &&
+        afterNew.mode === 'auto' &&
+        !afterNew.cue &&
+        !afterNew.tinted &&
+        keptPlan === 'plan' &&
         !left.cue &&
         !left.tinted &&
         JSON.stringify(left.changes) === JSON.stringify(['auto']) &&
@@ -3410,7 +3423,7 @@ async function main(): Promise<void> {
             'Plan mode: Claude plans, and changes nothing until you approve',
             'Left plan mode · back to Auto',
           ]);
-      console.log(`plan mode cues: entered ${JSON.stringify(entered)}; left ${JSON.stringify(left)}; lines ${JSON.stringify(drawn)} -> ${modeOk}`);
+      console.log(`plan mode cues: entered ${JSON.stringify(entered)}; left ${JSON.stringify(left)}; new chat ${JSON.stringify(afterNew)}, with Plan as the default ${keptPlan}; lines ${JSON.stringify(drawn)} -> ${modeOk}`);
       if (!modeOk) process.exitCode = 1;
     }
 
