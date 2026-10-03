@@ -1847,9 +1847,21 @@ async function main(): Promise<void> {
       pendingStep('Bash pwd');
       pendingStep('Read y');
       (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(pendingTurn);
+      // The card of changed files sits where the first file changed but shows at the reply's end: it does not split the steps.
+      const cardTurn = document.createElement('div');
+      const cardStep = (text: string, thinking = false) => cardTurn.createDiv({ cls: `vc-tools${thinking ? ' vc-thinking' : ''}` }).createDiv({ cls: 'vc-tool', text });
+      cardStep('thought', true);
+      cardStep('Write plan');
+      cardTurn.createDiv({ cls: 'vc-changes', text: '1 file changed +5' });
+      cardStep('another thought', true);
+      cardStep('ExitPlanMode');
+      cardTurn.createDiv({ cls: 'vc-text', text: 'Done.' });
+      (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(cardTurn);
+      const cardFolds = [...cardTurn.querySelectorAll('.vc-steps-header')].map((el) => el.textContent);
+      const cardKept = cardTurn.querySelector(':scope > .vc-changes') !== null;
       const pendingOrder = [...pendingTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
-      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts' && pendingOrder === 'fold,text,fold' && rendering.parentElement === pendingTurn;
-      console.log(`steps around empty text: ${blankOrder}, "${blankHeader}"; around text still rendering: ${pendingOrder} -> ${blankOk}`);
+      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts' && pendingOrder === 'fold,text,fold' && rendering.parentElement === pendingTurn && JSON.stringify(cardFolds) === JSON.stringify(['Steps: 2 tool calls, 2 thoughts']) && cardKept;
+      console.log(`steps around empty text: ${blankOrder}, "${blankHeader}"; around text still rendering: ${pendingOrder}; around the changed-files card: ${JSON.stringify(cardFolds)} -> ${blankOk}`);
       if (!blankOk) process.exitCode = 1;
     }
     // Steps before any message of yours (a resumed session) must still land in a turn, not loose in the chat.

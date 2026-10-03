@@ -2177,6 +2177,9 @@ export class ChatView extends ItemView {
     let run: HTMLElement[] = [];
     let gap: HTMLElement[] = [];
     for (const el of Array.from(turn.children) as HTMLElement[]) {
+      // Shown at the reply's end whatever its place among the steps (CSS order): the card of changed
+      // files, created where the first file changed, and the reply's buttons.
+      if (el.hasClass('vc-changes') || el.hasClass('vc-turn-actions')) continue;
       if (isStep(el)) {
         for (const empty of gap) empty.remove();
         run.push(el);
