@@ -100,14 +100,18 @@ export class MemoModal extends Modal {
     // A suggestion fills a field only while it is empty or holds the last suggestion: never what was typed.
     const filled = { title: '', description: '' };
     const fillable = (field: HTMLInputElement | HTMLTextAreaElement, last: string) => !field.value.trim() || field.value === last;
+    // Only the latest request fills the form or gives back the button: an older one, let go or
+    // overtaken, answers into nothing.
+    let asked = 0;
     const askClaude = async () => {
       if (!this.suggest) return;
+      const ask = (asked += 1);
       const signal = this.suggesting.signal;
       status.setText('Claude is suggesting a title and description…');
       if (again) again.disabled = true;
       try {
         const suggestion = await this.suggest(signal);
-        if (signal.aborted) return;
+        if (signal.aborted || ask !== asked) return;
         if (!suggestion) {
           status.setText('No suggestion came back.');
           return;
@@ -116,11 +120,11 @@ export class MemoModal extends Modal {
         if (suggestion.description && fillable(description, filled.description)) description.value = filled.description = suggestion.description;
         status.setText('Suggested by Claude: edit as you like.');
       } catch (error) {
-        if (signal.aborted) return;
+        if (signal.aborted || ask !== asked) return;
         log('suggesting a memo failed', error);
         status.setText(`No suggestion: ${errorText(error)}`);
       } finally {
-        if (again) again.disabled = false;
+        if (again && ask === asked) again.disabled = false;
       }
     };
     again?.addEventListener('click', () => void askClaude());

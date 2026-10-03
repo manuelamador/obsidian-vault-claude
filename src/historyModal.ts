@@ -52,8 +52,11 @@ function snippetAround(text: string, at: number, length: number): string {
 
 /** Previous chats: pinned first, then newest; the query matches titles, then prompts and replies. */
 export class HistoryModal extends SuggestModal<Match> {
-  /** The listed chats' texts by id, for searching inside chats; read in the background from the moment the history opens. */
-  private readonly texts = new Map<string, string>();
+  /**
+   * The listed chats' texts by id, for searching inside chats, each with its lowercase form made once
+   * rather than at every key typed; read in the background from the moment the history opens.
+   */
+  private readonly texts = new Map<string, { text: string; lower: string }>();
   /** Closed: the texts not read yet are left unread. */
   private dismissed = false;
   /** The reading of the texts not read yet, while it runs (see readTexts). */
@@ -136,9 +139,9 @@ export class HistoryModal extends SuggestModal<Match> {
     const byContent: Match[] = [];
     for (const item of ordered) {
       if (inTitle.has(item)) continue;
-      const text = texts.get(item.id) ?? '';
-      const at = text.toLowerCase().indexOf(needle);
-      if (at !== -1) byContent.push({ kind: 'chat', item, snippet: snippetAround(text, at, needle.length) });
+      const read = texts.get(item.id);
+      const at = read ? read.lower.indexOf(needle) : -1;
+      if (read && at !== -1) byContent.push({ kind: 'chat', item, snippet: snippetAround(read.text, at, needle.length) });
     }
     return [...byTitle, ...byContent];
   }
@@ -200,7 +203,10 @@ export class HistoryModal extends SuggestModal<Match> {
     this.reading ??= eachInParallel(
       this.items.filter((item) => !this.texts.has(item.id)),
       async (item) => {
-        if (!this.dismissed) this.texts.set(item.id, await this.actions.searchText(item).catch(() => ''));
+        if (this.dismissed) return;
+        // Nothing read (a chat with no text) is searched as empty.
+        const text = (await this.actions.searchText(item).catch(() => '')) ?? '';
+        if (!this.dismissed) this.texts.set(item.id, { text, lower: text.toLowerCase() });
       },
     ).finally(() => {
       this.reading = null;

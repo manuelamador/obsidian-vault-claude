@@ -18,6 +18,9 @@ export const LOG_PATH = process.env.VAULT_CLAUDE_LOG || join(logDir(), 'vault-cl
 /** Past this size the log is moved to `vault-claude.log.1` (replacing the previous one). */
 const MAX_BYTES = 1_000_000;
 
+/** Lines waiting to be written; past this many (the log cannot be written), the oldest go. */
+const MAX_QUEUED = 1000;
+
 let queue: string[] = [];
 let flushing = false;
 
@@ -48,7 +51,8 @@ async function flush(): Promise<void> {
       await fs.appendFile(LOG_PATH, chunk);
     }
   } catch {
-    // Logging must never break the chat.
+    // Logging must never break the chat: what could not be written is let go, not kept in memory.
+    queue = [];
   } finally {
     flushing = false;
   }
@@ -56,7 +60,13 @@ async function flush(): Promise<void> {
 
 export function log(...parts: unknown[]): void {
   queue.push(`${new Date().toISOString()} ${parts.map(format).join(' ')}\n`);
+  if (queue.length > MAX_QUEUED) queue.splice(0, queue.length - MAX_QUEUED);
   if (!flushing) void flush();
+}
+
+/** How many lines wait to be written: never more than MAX_QUEUED (for the tests). */
+export function queuedLines(): number {
+  return queue.length;
 }
 
 /** An error's message, for a notice or a status line. */

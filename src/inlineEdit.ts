@@ -1,4 +1,4 @@
-import { Modal, Notice, Platform, type App, type Editor, type EditorPosition, type TFile } from 'obsidian';
+import { MarkdownView, Modal, Notice, Platform, type App, type Editor, type EditorPosition, type TFile } from 'obsidian';
 import { cleanReplacement, inlineEditPrompt } from './inlineEditPrompt';
 import { errorText, log } from './log';
 import { wordDiff } from './wordDiff';
@@ -140,8 +140,15 @@ export class InlineEditModal extends Modal {
    */
   private accept(): void {
     if (this.replacement === null) return;
-    const { editor, from, to, original, before, after } = this.target;
+    const { editor, file, from, to, original, before, after } = this.target;
     const near = 200;
+    // The editor still shows the note the edit was asked for: one turned to another note with the
+    // same text around the selection must not take it.
+    const sameNote = this.app.workspace.getLeavesOfType('markdown').some((leaf) => leaf.view instanceof MarkdownView && leaf.view.editor === editor && leaf.view.file?.path === file.path);
+    if (!sameNote) {
+      new Notice('The note is no longer open where the edit was asked for; nothing was replaced.');
+      return;
+    }
     try {
       const text = editor.getValue();
       const start = editor.posToOffset(from);

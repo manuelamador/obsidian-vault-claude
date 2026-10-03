@@ -3381,8 +3381,60 @@ async function main(): Promise<void> {
       ([...quickEl.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLElement).click();
       quickEl.remove();
       const quickOk = JSON.stringify(quick) === JSON.stringify({ memo: null, title: '', description: '', tags: [] }) && abandoned;
-      console.log(`memo form: suggested ${JSON.stringify(suggested)}; again, with a title typed ${JSON.stringify(again)}; saved ${JSON.stringify(chosen)}; saved at once ${JSON.stringify(quick)}, suggestion let go ${abandoned} -> ${formOk && quickOk}`);
-      if (!formOk || !quickOk) process.exitCode = 1;
+      // A suggestion let go (another memo chosen, then a new one again) does not give the button back
+      // while the newer one is on its way, nor fill the form.
+      const pending: { resolve: (value: { title: string; description: string }) => void }[] = [];
+      const earlier = Object.assign(new stub.TFile(), { path: 'Claude chats/Memos/Earlier.md', basename: 'Earlier' });
+      const raceForm = new MemoModal(
+        app as never,
+        [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.' }],
+        [earlier as never],
+        () => null,
+        () => undefined,
+        () => new Promise((resolve) => pending.push({ resolve })),
+      );
+      const raceEl = (raceForm as unknown as { contentEl: HTMLElement }).contentEl;
+      document.body.appendChild(raceEl);
+      raceForm.onOpen();
+      const raceSelect = raceEl.querySelector('select') as HTMLSelectElement;
+      const raceAgain = [...raceEl.querySelectorAll('button')].find((el) => el.textContent === 'Suggest again') as HTMLButtonElement;
+      raceSelect.value = earlier.path;
+      raceSelect.dispatchEvent(new dom.window.Event('change'));
+      raceSelect.value = '';
+      raceSelect.dispatchEvent(new dom.window.Event('change'));
+      pending[0]?.resolve({ title: 'Older', description: 'Older.' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const heldWhileNewer = raceAgain.disabled;
+      const raceTitle = raceEl.querySelector('.vc-memo-field input[type="text"]') as HTMLInputElement;
+      const notFilledByOlder = raceTitle.value === '';
+      pending[1]?.resolve({ title: 'Newer', description: 'Newer.' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const raceOk = pending.length === 2 && heldWhileNewer && notFilledByOlder && raceTitle.value === 'Newer' && !raceAgain.disabled;
+      raceForm.close();
+      raceEl.remove();
+      console.log(`memo form: suggested ${JSON.stringify(suggested)}; again, with a title typed ${JSON.stringify(again)}; saved ${JSON.stringify(chosen)}; saved at once ${JSON.stringify(quick)}, suggestion let go ${abandoned}; an older suggestion held back ${heldWhileNewer && notFilledByOlder}, the newer fills ${raceTitle.value} -> ${formOk && quickOk && raceOk}`);
+      if (!formOk || !quickOk || !raceOk) process.exitCode = 1;
+      // An inline edit is put only in the note it was asked for: an editor since turned to another note does not take it.
+      {
+        const { InlineEditModal } = await import('../src/inlineEdit');
+        const replaced: string[] = [];
+        const editor = { getValue: () => 'aa sel bb', posToOffset: (pos: { ch: number }) => pos.ch, getRange: () => 'sel', replaceRange: (text: string) => void replaced.push(text) };
+        const shown = Object.assign(new stub.MarkdownView(), { editor, file: { path: 'Note.md' } });
+        const editApp = { workspace: { getLeavesOfType: () => [{ view: shown }] } };
+        const target = { editor, file: { path: 'Note.md' }, from: { line: 0, ch: 3 }, to: { line: 0, ch: 6 }, original: 'sel', before: 'aa ', after: ' bb' };
+        const accept = (modal: unknown) => {
+          (modal as { replacement: string }).replacement = 'NEW';
+          (modal as { accept(): void }).accept();
+        };
+        shown.file = { path: 'Other.md' };
+        accept(new InlineEditModal(editApp as never, target as never, 'system', async () => ''));
+        const intoOther = replaced.length;
+        shown.file = { path: 'Note.md' };
+        accept(new InlineEditModal(editApp as never, target as never, 'system', async () => ''));
+        const editOk = intoOther === 0 && JSON.stringify(replaced) === '["NEW"]';
+        console.log(`inline edit: into another note ${intoOther}, into its own ${JSON.stringify(replaced)} -> ${editOk}`);
+        if (!editOk) process.exitCode = 1;
+      }
     }
     // Save as a memo under a reply: the prompt it answered, then the reply, as the form's passages.
     {
