@@ -49,6 +49,9 @@ Open the chat from the robot icon in the left ribbon.
   <img src="docs/plan-card.png" width="560" alt="A chat in Plan mode: the line “Plan mode: Claude plans, and changes nothing until you approve” above the request, then Claude’s plan on a tinted panel, with Approve, Edit in a note and Reject, a box to tell Claude what to change, and “Waiting for your approval” below">
 
 - **When Claude asks a multiple-choice question**, a card shows it in the chat: click an option, pick several where the question allows, or type your own answer. Skip declines.
+
+  <img src="docs/question-card.png" width="560" alt="Claude’s question in the chat: its label “Test action”, the question, three options as buttons each with a description, a box to type an answer of your own, Send and Skip, and “Waiting for your answer” below">
+
 - A system notification arrives when a long reply finishes or Claude needs approval or an answer while Obsidian is in the background.
 
 **Working from notes**
