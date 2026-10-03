@@ -105,6 +105,8 @@ export function memoNoteMarkdown(memo: { title: string; description: string; tag
     `updated: ${date}`,
     `chats: ${yamlList([chatTitle])}`,
     ...(memo.notes.length > 0 ? [`notes: ${yamlList(memo.notes)}`] : []),
+    // A box in the Memos base: ticked, the memo goes to the chat's input (see VaultClaudePlugin.sendMemo).
+    'send: false',
     `claude_chats: [${chatId}]`,
     '---',
   ];
@@ -183,7 +185,7 @@ export const CHAT_MEMOS_VIEW = 'This chat';
  */
 export function memoBaseYaml(folder: string, chatId: string, chatTitle: string): string {
   const where = folder === '/' ? [] : [`file.inFolder(${JSON.stringify(folder)})`];
-  const columns = ['file.name', 'tags', 'chats', 'notes', 'updated'];
+  const columns = ['send', 'file.name', 'tags', 'chats', 'notes', 'updated'];
   const view = (name: string, filters: string[], sort: { property: string; direction: 'ASC' | 'DESC' }) =>
     [
       '  - type: table',
@@ -202,6 +204,8 @@ export function memoBaseYaml(folder: string, chatId: string, chatTitle: string):
   return [
     `# Written by Vault Claude when a chat's memos are shown (now: ${chatTitle.replace(/\n/g, ' ')}); copy it to keep changes of your own.`,
     'properties:',
+    '  send:',
+    '    displayName: Send to chat',
     '  file.name:',
     '    displayName: Memo',
     '  tags:',

@@ -28,7 +28,7 @@ test('a new memo note: frontmatter with its tags, title, description, and each p
   const note = memoNoteMarkdown({ title: 'Repayment timing may change equilibrium selection', description: 'Test it under other continuation choices.', tags: ['idea', 'read'], notes: ['[[Model setup]]'], sources });
   assert.match(
     note,
-    /^---\ntype: memo\ntags: \[memo, idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
+    /^---\ntype: memo\ntags: \[memo, idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
   );
   assert.ok(note.includes('**You** · [Go to the passage](obsidian://vault-claude?vault=Obsidian&chat=chat-1&find=Does%20the%20result%20survive)'));
   assert.ok(note.includes('> Does the result survive\n> recursive repayment?'));
@@ -89,4 +89,21 @@ test("the Memos base opens on the chat's memos, then those about the note in fro
   assert.ok(base.includes('        - "file.hasLink(this.file)"'));
   assert.ok(base.includes('        - "file.inFolder(\\"Claude chats/Memos\\")"'));
   assert.ok(base.startsWith('# Written by Vault Claude when a chat'));
+});
+
+test("a memo's Send box sends it to the chat once and is cleared", async () => {
+  const { default: VaultClaudePlugin } = await import('../src/main');
+  const p = new (VaultClaudePlugin as unknown as new () => InstanceType<typeof VaultClaudePlugin>)();
+  const frontmatter: Record<string, unknown> = { type: 'memo', send: true };
+  const sent: string[][] = [];
+  (p as unknown as { app: unknown }).app = {
+    fileManager: {
+      processFrontMatter: async (_file: unknown, change: (fm: Record<string, unknown>) => void) => change(frontmatter),
+    },
+  };
+  p.attachToClaude = async (items) => void sent.push(items.map((item) => item.path));
+  const memo = { path: 'Claude chats/Memos/A memo.md' } as never;
+  await Promise.all([p.sendMemo(memo), p.sendMemo(memo)]);
+  assert.equal(frontmatter.send, false);
+  assert.deepEqual(sent, [['Claude chats/Memos/A memo.md']]);
 });

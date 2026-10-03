@@ -5443,7 +5443,7 @@ export class ChatView extends ItemView {
     if (mentions.length === 0) return;
     const current = this.inputEl.value.replace(/\s*$/, '');
     this.inputEl.value = `${current ? `${current} ` : ''}${mentions.join(' ')} `;
-    this.growInput();
+    this.inputEdited();
     const end = this.inputEl.value.length;
     this.inputEl.setSelectionRange(end, end);
     this.inputEl.focus();

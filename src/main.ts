@@ -327,6 +327,12 @@ export default class VaultClaudePlugin extends Plugin {
     );
     this.registerNoteEvents();
     this.registerEvent(this.app.workspace.on('files-menu', (menu, files) => attachItem(menu, files)));
+    // A memo's Send box ticked, in the Memos base: the memo goes to the chat's input (see sendMemo).
+    this.registerEvent(
+      this.app.metadataCache.on('changed', (file, _data, cache) => {
+        if (cache.frontmatter?.type === 'memo' && cache.frontmatter.send === true) void this.sendMemo(file);
+      }),
+    );
     this.registerEvent(
       this.app.workspace.on('editor-menu', (menu, editor, info) => {
         const file = info.file;
@@ -994,6 +1000,29 @@ export default class VaultClaudePlugin extends Plugin {
     const drift = versionDrift(running, CLAUDE_CODE_TARGET);
     log('claude code version', { running, sdkTarget: CLAUDE_CODE_TARGET, drift: drift !== null });
     if (drift) new Notice(drift, 15_000);
+  }
+
+  /** Memos being sent, so that the change clearing a box does not send one twice. */
+  private readonly sendingMemos = new Set<string>();
+
+  /**
+   * A memo whose Send box was ticked (a button in the Memos base): its box is cleared, and it goes to
+   * the chat's input as an `@` mention, whose chip shows what of it goes with the message.
+   */
+  async sendMemo(file: TFile): Promise<void> {
+    if (this.sendingMemos.has(file.path)) return;
+    this.sendingMemos.add(file.path);
+    try {
+      await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+        frontmatter.send = false;
+      });
+      await this.attachToClaude([file]);
+    } catch (error) {
+      log('sending a memo failed', error);
+      new Notice(`Could not send the memo: ${errorText(error)}`);
+    } finally {
+      this.sendingMemos.delete(file.path);
+    }
   }
 
   async attachToClaude(items: TAbstractFile[]): Promise<void> {
