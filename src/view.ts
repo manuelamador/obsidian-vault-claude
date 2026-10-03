@@ -659,9 +659,16 @@ export class ChatView extends ItemView {
     this.registerDomEvent(memosButton, 'click', (evt) => {
       const chatId = this.chatId ?? this.resumeId ?? '';
       // All memos; this chat's with the modifier, for a chat that has started.
-      const all = Keymap.isModEvent(evt) === false || !chatId;
-      void this.plugin.openChatMemos(chatId, this.chatName ?? 'New chat', all);
-      new Notice(all ? `All memos. ${chatHint} the memo button for this chat's.` : "This chat's memos. Click the memo button for all of them.", 4000);
+      const forChat = Keymap.isModEvent(evt) !== false;
+      void this.plugin.openChatMemos(chatId, this.chatName ?? 'New chat', !forChat || !chatId);
+      const said = !chatId
+        ? forChat
+          ? 'This chat has no memos yet: all memos are shown.'
+          : 'All memos.'
+        : forChat
+          ? "This chat's memos. Click the memo button for all of them."
+          : `All memos. ${chatHint} the memo button for this chat's.`;
+      new Notice(said, 4000);
     });
     this.historyButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Chat history' } });
     setIcon(this.historyButton, 'history');
