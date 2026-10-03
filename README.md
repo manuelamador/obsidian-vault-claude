@@ -59,11 +59,12 @@ Open the chat from the robot icon in the left ribbon.
 **Chatting**
 - Replies render as Obsidian Markdown: wikilinks, callouts, math and images from the vault. A note name Claude writes in bold or as code opens the note; hold ⌘ over it to preview. Thinking and tool calls fold into one "Steps" line.
 
-  Equations can look slightly small beside the text, in notes too: Obsidian draws them at a fixed 113.1% of the text size without measuring the font. A CSS snippet (**Settings → Appearance → CSS snippets**) making them 5% larger matches them to most text fonts, in notes and the panel alike:
-
-  ```css
-  mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
-  ```
+> [!NOTE]
+> Equations can look slightly small beside the text, in notes too: Obsidian draws them at a fixed 113.1% of the text size without measuring the font. A CSS snippet (**Settings → Appearance → CSS snippets**) making them 5% larger matches them to most text fonts, in notes and the panel alike:
+>
+> ```css
+> mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
+> ```
 
 - **At the end of each reply**, a card lists the files it changed, with lines added and removed. Click a file for its diff, its name to open it, or a diff line to open the note at that line.
 
