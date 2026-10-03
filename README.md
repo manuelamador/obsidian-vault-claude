@@ -7,7 +7,7 @@ An [Obsidian](https://obsidian.md) sidebar chat that runs your locally installed
 
 Built by **Claude Opus 5** (`claude-opus-5`) and **Claude Opus 5.5** (`claude-opus-5-5`) in Claude Code.
 
-<img src="docs/chat.png" width="800" alt="Obsidian with a note on the Solow model in Live Preview on the left, its callouts and equations rendered, among them a tagged equation and a folded derivation, and the Vault Claude panel on the right: the chat title with its save, side-chat and delete buttons, the usage meter, the bar over the chat naming the prompt being answered, a reply with the steady-state equations displayed, a reply embedding a figure from the vault, the note attached above the input, and under the input the notes button showing 2 beside the paperclip, then the model, effort and permission-mode menus and the fast-mode button">
+<img src="docs/chat.webp" width="800" alt="Obsidian with a note on the Solow model in Live Preview on the left, its callouts and equations rendered, among them a tagged equation and a folded derivation, and the Vault Claude panel on the right: the chat title with its save, side-chat and delete buttons, the phone, memos, history and new-chat buttons, the usage meter, the bar over the chat naming the prompt being answered, a reply with the steady-state equations displayed, a reply embedding a figure from the vault, the note attached above the input, and under the input the notes button showing 2 beside the paperclip, then the model, effort and permission-mode menus and the fast-mode button">
 
 ## Requirements
 
@@ -81,19 +81,19 @@ Open the chat from the robot icon in the left ribbon.
 
 - **The bar at the top of the chat** shows which of your messages is being answered. Its arrows (⌥↑/⌥↓) step between your messages, and its list button shows them all. ⌘F finds in the chat.
 
-  <img src="docs/message-list.png" width="480" alt="The bar over the chat naming the message being answered, with its list of all three messages open and the current one highlighted">
+  <img src="docs/message-list.png" width="560" alt="The bar over the chat naming the message being answered, with its list of all three messages open over the reply and the current one highlighted">
 
 - **Long chats** open on their last ten exchanges and draw the rest as you scroll up.
 
-- **Select text in a reply** for a **Quote** button; equations are quoted as LaTeX.
+- **Select text in the chat** for the **Quote**, **Side chat** and **Memo** buttons; equations are quoted as LaTeX.
 
-  <img src="docs/quote-button.png" width="480" alt="Text and equations selected in a reply, the equations shown as selected too, with the Quote and Side chat buttons just above them">
+  <img src="docs/quote-button.png" width="480" alt="Text and an equation selected in a reply, the equation shown as selected too, with the Quote, Side chat and Memo buttons just above them">
 
 - **Side chat:** ask about the chat without changing it, from the button beside Quote or beside the chat title. Paste or drop images on it to ask about them. It knows the conversation so far, runs in Plan mode so it changes nothing, and is deleted when closed unless you choose **Keep as a chat**.
 
-  <img src="docs/side-chat.png" width="520" alt="A side chat open over the right of a chat about a Solow-model note: a quoted passage and the question “what is the main cite/reference for this model?”, answered with Solow (1956) and Swan (1956)">
+  <img src="docs/side-chat.png" width="520" alt="A side chat open over the right of a chat about a Solow-model note, before its first question: “Ask about this chat. The answer does not change it.”, its delete, keep-as-a-chat and close buttons, and its input at the bottom">
 
-- **Buttons under a reply** reply to it, copy it, insert it into a note, or branch the chat from there. Checkboxes in replies can be ticked, and the ticks are kept: they are there when the chat is opened again, after a restart too.
+- **Buttons under a reply** reply to it, copy it, insert it into a note, save it as a memo, or branch the chat from there. Checkboxes in replies can be ticked, and the ticks are kept: they are there when the chat is opened again, after a restart too.
   - They are your own marks. Claude is not told which boxes you ticked; to tell it, say so in a message.
   - They live in the plugin's data, not in a note. A note gets them only when you copy the reply, insert it into a note, or save the chat as a note, and ticking a box later does not change that note.
 
@@ -123,11 +123,22 @@ Open the chat from the robot icon in the left ribbon.
 - Ask Claude about selection, Edit selection with Claude and Send this note to Claude as a prompt are also commands.
 
 **Memos**
+
+A memo keeps passages of a chat as a note: an idea to follow up, something to do, read or explore, or a bookmark to come back to. It links back to the chat, which opens at the passage.
+
 - **Memo** over a selection in the chat, or the sticky-note icon under a reply, saves those passages as a memo: a note per memo in `Claude chats/Memos/`. A selection across several messages becomes one passage each, marked You or Claude, with equations as LaTeX; a reply's memo holds your prompt and the reply.
 - The form takes a title and a description, which Claude (the model for small jobs) suggests from the passages and you edit, and tags: idea, todo, explore, read, bookmark, or your own. Or it adds the passages to a memo saved before.
+
+  <img src="docs/memo-form.png" width="420" alt="The Save a memo form: Add to (A new memo), the title and description Claude suggested for a passage on the Solow model's steady state, “Suggested by Claude: edit as you like.”, the tag toggles idea, todo, explore and read, a field for other tags, the passage with its equations as LaTeX, and Suggest again, Save and Cancel">
+
 - **A bookmark** needs no typing and no waiting: Save with the title left empty, or ⌘-click (Ctrl-click) Memo or the sticky-note icon to skip the form. The memo is titled by the passage's first words (with the date and time added if a note has that name), tagged `bookmark`, and listed in the table's Bookmarks view.
 - A memo's properties name the chats it came from and, as links, the notes it is about (the chat's attached note, and notes its passages link to), so it shows in those notes' backlinks. Each passage has **Go to the passage**, which opens the chat at the message it came from, drawing back earlier parts of the chat if needed (or searches for its words when that message is no longer in the chat), and **Continue in the chat**, which opens it with the passage quoted.
-- **The sticky-note icon at the top of the panel** opens the Memos table on all memos; ⌘-click opens this chat's. The table has views by chat, by note and by tag; a table left open follows the chat on the panel. Its **Send to chat** box puts a memo in the chat's input, and clearing it takes the memo out; its **Done** box moves a memo out of every view into Done; its Chats column opens each chat at the memo's first passage from it. A memo is a note: delete it from the table (select rows, right-click, Delete) or as any note.
+- **The sticky-note icon at the top of the panel** opens the Memos table on all memos; ⌘-click opens this chat's. The notes menu beside the paperclip lists the chat's memos too.
+
+  <img src="docs/memos-button.png" width="300" alt="The sticky-note button at the top right of the panel, between the phone and history buttons, with its tooltip “All memos, in a table (⌘-click: this chat's)”">
+ The table has views by chat, by note and by tag; a table left open follows the chat on the panel. Its **Send to chat** box puts a memo in the chat's input, and clearing it takes the memo out; its **Done** box moves a memo out of every view into Done; its Chats column opens each chat at the memo's first passage from it. A memo is a note: delete it from the table (select rows, right-click, Delete) or as any note.
+
+  <img src="docs/memos-table.webp" width="800" alt="The Memos table open on the left on its view “Chat: Demo — Solow model”, one memo listed with its send and done boxes, its title, its chat as a link and its note, beside the chat it came from in the panel on the right">
 
 **Controls**
 - **Under the input:** the chat's model, effort and permission mode, and the ⚡ fast-mode toggle. Approvals appear in the chat. In Plan mode, however it was entered, the input is outlined in the accent colour with a **Leave plan mode** link above it, and a line in the chat marks where plan mode starts and ends.
@@ -142,6 +153,9 @@ Open the chat from the robot icon in the left ribbon.
 
 **Chats**
 - **The clock icon, top right, opens the history.**
+
+  <img src="docs/history-button.png" width="265" alt="The clock button at the top right of the panel, with its tooltip “Chat history”">
+
   - Search chats by title, prompt or reply. Each row has pin, rename and delete buttons; ⌘↵ or ⌘-click opens a chat in a new tab.
   - **Tab** lists chats by note: type part of a note's name or folder to see the chats that changed it, were sent it, or mentioned it. More words filter by chat title (`with:solow diagram`); ⌘↵ opens the note.
   - Beside each date is the chat's status: grey ○ for open or in the background; accent ● for working, waiting for approval, background tasks, or a new reply. No mark means closed.
@@ -162,9 +176,9 @@ Open the chat from the robot icon in the left ribbon.
 
     <img src="docs/note-line.png" width="480" alt="Above the input of a new chat: the line “1 chat about this note”, and the chip offering to attach the open note, “+ Demo — Solow model”">
 
-  - **The document icon beside the paperclip** lists the notes the chat changed or mentioned. Click one to open it, ⌥-click to attach it.
+  - **The document icon beside the paperclip** lists the chat's memos and the notes it changed or mentioned. Click one to open it, ⌥-click to attach it; **This chat's memos in a table** opens the Memos table on them.
 
-    <img src="docs/notes-menu.png" width="560" alt="The notes menu open from the button beside the paperclip, headed “Notes in this chat · ⌥-click to attach”, listing the note the chat changed and a note it mentioned">
+    <img src="docs/notes-menu.png" width="510" alt="The notes menu open from the button beside the paperclip, headed “Notes in this chat · ⌥-click to attach”: under Memos, This chat's memos in a table and the chat's one memo; under Changed, the note the chat changed; under Mentioned, a note it mentioned">
 
 - **Scratch chat:** a standing chat for odds and ends, first in the history. It starts over after 24 hours unused (adjustable) or from its trash button. **Continue as a chat**, under a scratch reply, copies it up to there into a chat of its own.
 - **Beside the chat title:** save the chat, or a summary of it, as a note, and delete it.
@@ -175,7 +189,7 @@ Open the chat from the robot icon in the left ribbon.
 **Phone**
 - **The phone icon, top right,** puts a chat on the Claude app or claude.ai/code via Remote Control, and takes it off again.
 
-  <img src="docs/phone-menu.png" width="480" alt="The phone menu: Continue this chat on your phone, and Let the phone start new sessions in this vault">
+  <img src="docs/phone-menu.png" width="480" alt="The phone menu open below the phone button at the top right of the panel: Continue this chat on your phone, and Let the phone start new sessions in this vault">
 
 **Safety**
 - Remote images in replies are shown as links, not loaded.
