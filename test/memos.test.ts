@@ -9,7 +9,7 @@ import {
   retargetMemoBase,
   memoNoteMarkdown,
   memoNoteName,
-  firstPassageNeedle,
+  firstPassageTarget,
   memoSuggestionPrompt,
   pairChat,
   passageNeedle,
@@ -273,8 +273,18 @@ test('a table from before the Done box gets it once: the column, the filter in i
 
 test("a link from the table finds the memo's first passage from its chat", () => {
   const note = memoNoteMarkdown({ title: 'Memo', description: '', tags: [], notes: [], sources });
-  assert.equal(firstPassageNeedle(note, 'chat-1'), 'Does the result survive');
-  assert.equal(firstPassageNeedle(note, 'other-chat'), null);
+  assert.deepEqual(firstPassageTarget(note, 'chat-1'), { find: 'Does the result survive' });
+  assert.equal(firstPassageTarget(note, 'other-chat'), null);
+  // A passage that recorded its message: the link goes to it, and to the words in it.
+  const withMessage = memoNoteMarkdown({
+    title: 'Memo',
+    description: '',
+    tags: [],
+    notes: [],
+    sources: { ...sources, passages: [{ ...sources.passages[1], message: 'uuid-7#2' }] },
+  });
+  assert.ok(withMessage.includes('[Go to the passage](obsidian://vault-claude?vault=Obsidian&chat=chat-1&msg=uuid-7%232&find=A%20possible%20mechanism%3A)'));
+  assert.deepEqual(firstPassageTarget(withMessage, 'chat-1'), { msg: 'uuid-7#2', find: 'A possible mechanism:' });
   const base = memoBaseYaml('chat-1', 'Debt model', 'V');
   assert.ok(base.includes('+ \\"&memo=\\" + file.path, chats[index]'));
 });

@@ -201,6 +201,12 @@ export class EarlierDrawing implements FindEarlier {
     return count > 0 && (await this.draw(count));
   }
 
+  /** Draws back to the turn holding the message `uuid` (a link to a passage); false when none does or the chat changed. */
+  async drawToMessage(uuid: string): Promise<boolean> {
+    const count = this.turns.findIndex((turn) => turn.some((message) => message.uuid === uuid)) + 1;
+    return count > 0 && (await this.draw(count));
+  }
+
   /** Your messages in the turns not drawn, oldest first, for the list of your messages: going to one draws back to it. */
   listed(): ListedEarlier[] {
     this.prompts ??= [...this.turns].reverse().flatMap((turn) => {

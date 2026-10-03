@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, firstPassageNeedle, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -1162,7 +1162,7 @@ export default class VaultClaudePlugin extends Plugin {
    */
   private async openChatLink(params: Record<string, string>): Promise<void> {
     const id = params.chat;
-    log('chat link', { chat: id, find: params.find !== undefined, quote: params.quote !== undefined, memo: params.memo !== undefined });
+    log('chat link', { chat: id, msg: params.msg !== undefined, find: params.find !== undefined, quote: params.quote !== undefined, memo: params.memo !== undefined });
     if (!id) return;
     const title = this.chats.find((chat) => chat.id === id)?.title ?? this.lastListing?.find((item) => item.id === id)?.title ?? 'Chat';
     const view = await this.openChatById(id, title);
@@ -1171,12 +1171,12 @@ export default class VaultClaudePlugin extends Plugin {
       return;
     }
     if (params.quote) view.quote(params.quote);
-    else if (params.find) await view.findPassage(params.find);
+    else if (params.msg || params.find) await view.findPassage(params.find ?? '', params.msg);
     else if (params.memo) {
       // From the Memos table: the memo's first passage from this chat.
       const memo = this.app.vault.getAbstractFileByPath(params.memo);
-      const needle = memo instanceof TFile ? firstPassageNeedle(await this.app.vault.cachedRead(memo), id) : null;
-      if (needle) await view.findPassage(needle);
+      const target = memo instanceof TFile ? firstPassageTarget(await this.app.vault.cachedRead(memo), id) : null;
+      if (target) await view.findPassage(target.find ?? '', target.msg);
     }
   }
 

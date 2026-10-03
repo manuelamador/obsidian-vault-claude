@@ -125,6 +125,13 @@ test('find draws back to the newest turn with a match', async () => {
   assert.equal(await drawing.drawTo('absent'), false);
 });
 
+test("a memo's link draws back to the turn holding its message", async () => {
+  const { drawing, drawn } = setup();
+  assert.equal(await drawing.drawToMessage('p4'), true);
+  assert.equal(drawn(), 'p4,p5,p6,p7,p8,p9');
+  assert.equal(await drawing.drawToMessage('absent'), false);
+});
+
 // Newest first, as historyParts gives them: turn 2 is the latest; the second has a queued message.
 const threeTurns = () => [
   [prompt('third'), answer('The yield curve again')],

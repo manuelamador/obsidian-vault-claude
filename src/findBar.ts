@@ -218,16 +218,21 @@ export class FindBar {
   private reveal(): void {
     const range = this.ranges[this.index];
     const el = range?.startContainer.parentElement;
-    if (!range || !el) return;
-    // A match inside folded text (a long message): unfolded through its own control first.
-    (el.closest('.is-collapsed')?.querySelector('[data-expand]') as HTMLElement | null)?.click();
-    // Centred on the match itself, not on its element: a long message is one element holding many matches.
-    const rect = typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
-    if (rect && rect.height > 0) {
-      const box = this.root.getBoundingClientRect();
-      this.root.scrollTop += rect.top - box.top - (box.height - rect.height) / 2;
-    } else {
-      el.scrollIntoView?.({ block: 'center' });
-    }
+    if (range && el) revealIn(this.root, el, range);
+  }
+}
+
+/**
+ * Scrolls `root` to `el`, unfolding what holds it (a long message, a reply's steps) through its own
+ * control, and centred on `range` in it when given: a long message is one element holding many matches.
+ */
+export function revealIn(root: HTMLElement, el: HTMLElement, range?: Range): void {
+  (el.closest('.is-collapsed')?.querySelector('[data-expand]') as HTMLElement | null)?.click();
+  const rect = typeof range?.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
+  if (rect && rect.height > 0) {
+    const box = root.getBoundingClientRect();
+    root.scrollTop += rect.top - box.top - (box.height - rect.height) / 2;
+  } else {
+    el.scrollIntoView?.({ block: 'center' });
   }
 }

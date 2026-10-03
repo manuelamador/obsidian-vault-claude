@@ -45,7 +45,7 @@ import { chipFor, renderChip } from './chip';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
 import { addMemoSources, cleanTags, memoNoteMarkdown, memoNoteName, pairChat, passageNeedle, type MemoPassage, type MemoSources } from './memos';
-import { FindBar } from './findBar';
+import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
 import { renderPlainText } from './plainText';
@@ -4411,6 +4411,8 @@ export class ChatView extends ItemView {
     el.removeClass('vc-live');
     el.empty();
     this.markdownSource.set(el, text);
+    // Its message, for a memo's link to go straight to it (see goToMessage).
+    if (replyId) el.dataset.message = replyId;
     // Taken now: by the time the reply has rendered, another chat may be on screen.
     const chat = this.chatId ?? this.resumeId;
     void this.renderMarkdown(text, el).then(() => {
@@ -5253,7 +5255,8 @@ export class ChatView extends ItemView {
       const plain = part.cloneContents();
       const links = this.passageLinks(plain);
       for (const math of Array.from(plain.querySelectorAll('.math'))) math.replaceWith('\n');
-      passages.push({ role: el.closest('.vc-user') ? 'you' : 'claude', text, needle: passageNeedle(plain.textContent ?? ''), links });
+      const message = el.closest<HTMLElement>('.vc-user')?.dataset.uuid ?? el.dataset.message;
+      passages.push({ role: el.closest('.vc-user') ? 'you' : 'claude', text, needle: passageNeedle(plain.textContent ?? ''), links, ...(message ? { message } : {}) });
     }
     return passages;
   }
@@ -5267,11 +5270,13 @@ export class ChatView extends ItemView {
     let before = turn.previousElementSibling;
     while (before && !before.hasClass('vc-user') && !before.hasClass('vc-turn')) before = before.previousElementSibling;
     const prompt = before?.hasClass('vc-user') ? (before.querySelector('.vc-user-text')?.textContent ?? '').trim() : '';
-    if (prompt) passages.push({ role: 'you', text: prompt, needle: passageNeedle(prompt) });
+    const asked = (before as HTMLElement | null)?.dataset.uuid;
+    if (prompt) passages.push({ role: 'you', text: prompt, needle: passageNeedle(prompt), ...(asked ? { message: asked } : {}) });
     const plain = textEls[0]?.cloneNode(true) as HTMLElement | undefined;
     for (const math of Array.from(plain?.querySelectorAll('.math') ?? [])) math.replaceWith('\n');
     const links = textEls.flatMap((el) => this.passageLinks(el));
-    passages.push({ role: 'claude', text: this.replyMarkdown(textEls), needle: passageNeedle(plain?.textContent ?? ''), links });
+    const reply = textEls[0]?.dataset.message;
+    passages.push({ role: 'claude', text: this.replyMarkdown(textEls), needle: passageNeedle(plain?.textContent ?? ''), links, ...(reply ? { message: reply } : {}) });
     return passages;
   }
 
@@ -5388,9 +5393,40 @@ export class ChatView extends ItemView {
     this.quoteText(text);
   }
 
-  /** Finds `needle` in the chat on screen with Find, drawing earlier turns back to it (a link from a memo note). */
-  async findPassage(needle: string): Promise<void> {
-    if (!(await this.findBar.find(needle))) new Notice('The passage was not found in this chat: it may have been compacted away. It is kept in the memo note.');
+  /**
+   * A passage of the chat on screen (a link from a memo): its message, `message`, when the link names
+   * it, drawn back to if it is earlier; else `needle` found with Find. A notice when neither is there.
+   */
+  async findPassage(needle: string, message?: string): Promise<void> {
+    if (message && (await this.goToMessage(message, needle))) return;
+    if (needle && (await this.findBar.find(needle))) return;
+    new Notice('The passage was not found in this chat: it may have been compacted away. It is kept in the memo note.');
+  }
+
+  /**
+   * Scrolls to message `message` (your message's id, or a reply text's key), drawing earlier turns
+   * back to it, and there to `needle` when its words are in it; the message is marked for a moment.
+   * False when the chat has no such message.
+   */
+  private async goToMessage(message: string, needle: string): Promise<boolean> {
+    // Compared, not put in a selector: the id comes from a link, and may be anything.
+    const find = () =>
+      Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-text, .vc-user')).find((el) => (el.hasClass('vc-user') ? el.dataset.uuid : el.dataset.message) === message) ?? null;
+    let el = find();
+    if (!el && this.earlier) {
+      await this.earlier.drawToMessage(message.split('#')[0]);
+      el = find();
+    }
+    if (!el) return false;
+    const range = needle ? findRanges(el, needle)[0] : undefined;
+    const target = el;
+    const reveal = () => revealIn(this.messagesEl, target, range);
+    reveal();
+    // Again once the panel has settled, as a link's chat may still be drawing.
+    (this.messagesEl.ownerDocument.defaultView ?? window).requestAnimationFrame(reveal);
+    target.addClass('is-flashed');
+    window.setTimeout(() => target.removeClass('is-flashed'), 1600);
+    return true;
   }
 
   /** Opens the side chat, with `quote` (or the text selected in the chat) quoted in its input. */

@@ -12,6 +12,11 @@ export interface MemoPassage {
   needle: string;
   /** The notes and files it links to, by link text or vault path (see ChatView.passageLinks). */
   links?: string[];
+  /**
+   * The message it came from: your message's id, or a reply text's key (its message's id, see
+   * replyKey). A link goes straight to it; the needle then finds the passage within it.
+   */
+  message?: string;
 }
 
 /** Passages saved together from one chat. */
@@ -33,8 +38,11 @@ const QUOTE_LINK_CHARS = 2000;
 /** The protocol action the plugin answers: `obsidian://vault-claude?…` (see VaultClaudePlugin.openChatLink). */
 export const PROTOCOL_ACTION = 'vault-claude';
 
-/** A link that opens chat `chat` in the panel and finds `find` in it, or quotes `quote` in its input. */
-export function chatLink(params: { vault: string; chat: string; find?: string; quote?: string }): string {
+/**
+ * A link that opens chat `chat` in the panel and goes to message `msg` (and the words `find` in it),
+ * or finds `find` in the chat when it has no `msg`, or quotes `quote` in its input.
+ */
+export function chatLink(params: { vault: string; chat: string; msg?: string; find?: string; quote?: string }): string {
   const query = Object.entries(params)
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== '')
     .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
@@ -76,7 +84,7 @@ export function cleanTags(tags: string[]): string[] {
 function memoSourcesMarkdown(sources: MemoSources): string {
   const lines = [`### ${headingText(sources.chatTitle)} · ${sources.date}`, ''];
   for (const passage of sources.passages) {
-    const find = chatLink({ vault: sources.vault, chat: sources.chatId, find: passage.needle });
+    const find = chatLink({ vault: sources.vault, chat: sources.chatId, msg: passage.message, find: passage.needle });
     const quote = chatLink({ vault: sources.vault, chat: sources.chatId, quote: passage.text.slice(0, QUOTE_LINK_CHARS) });
     lines.push(`**${passage.role === 'you' ? 'You' : 'Claude'}** · [Go to the passage](${find}) · [Continue in the chat](${quote})`, '');
     lines.push(blockquote(passage.text.trim()), '');
@@ -143,20 +151,25 @@ export function memoNoteName(title: string): string {
 }
 
 /**
- * The words by which the memo `note` finds its first passage from chat `chatId`: the `find` of that
- * chat's first "Go to the passage" link in it. Null when it has none (a passage of an equation alone).
+ * Where the memo `note` finds its first passage from chat `chatId`: the message (`msg`) and words
+ * (`find`) of that chat's first "Go to the passage" link in it. Null when it has none.
  */
-export function firstPassageNeedle(note: string, chatId: string): string | null {
-  const chat = `chat=${encodeURIComponent(chatId)}&find=`;
+export function firstPassageTarget(note: string, chatId: string): { msg?: string; find?: string } | null {
   for (const match of note.matchAll(/obsidian:\/\/vault-claude\?([^)\s]+)/g)) {
-    const at = match[1].indexOf(chat);
-    if (at === -1) continue;
-    const value = match[1].slice(at + chat.length).split('&')[0];
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return null;
+    const params = new Map<string, string>();
+    for (const pair of match[1].split('&')) {
+      const at = pair.indexOf('=');
+      if (at === -1) continue;
+      try {
+        params.set(pair.slice(0, at), decodeURIComponent(pair.slice(at + 1)));
+      } catch {
+        // A value garbled by hand: the rest of the link may still do.
+      }
     }
+    if (params.get('chat') !== chatId || params.has('quote')) continue;
+    const msg = params.get('msg');
+    const find = params.get('find');
+    if (msg || find) return { ...(msg ? { msg } : {}), ...(find ? { find } : {}) };
   }
   return null;
 }

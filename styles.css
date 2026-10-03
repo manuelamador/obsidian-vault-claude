@@ -1994,3 +1994,11 @@ button.vc-continue-button:hover span:last-child {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
+
+/* A message a memo's link went to (see ChatView.goToMessage), marked for a moment. */
+.vc-text.is-flashed,
+.vc-user.is-flashed {
+  border-radius: var(--radius-s);
+  box-shadow: 0 0 0 2px var(--interactive-accent);
+  transition: box-shadow 400ms ease;
+}

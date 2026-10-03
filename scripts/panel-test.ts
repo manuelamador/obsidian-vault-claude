@@ -3183,18 +3183,18 @@ async function main(): Promise<void> {
     // equations as LaTeX and plain words to find it by; saved as a new memo note, or added to one.
     {
       const memoView = view as unknown as {
-        selectedPassages(): { role: string; text: string; needle: string; links?: string[] }[];
+        selectedPassages(): { role: string; text: string; needle: string; links?: string[]; message?: string }[];
         saveMemo(choice: { memo: unknown; title: string; description: string; tags: string[] }, sources: unknown): Promise<{ path: string } | null>;
-        findPassage(needle: string): Promise<void>;
+        findPassage(needle: string, message?: string): Promise<void>;
         quote(text: string): void;
         chatId: string | null;
         inputEl: HTMLTextAreaElement;
       };
       const exchange = internals.messagesEl.createDiv();
       exchange.innerHTML =
-        '<div class="vc-user"><div class="vc-user-text">Does the result survive recursive repayment?</div></div>' +
-        '<div class="vc-text"><p>A mechanism: <span class="math math-inline" data-tex="q(b)"><mjx-container></mjx-container></span> falls with debt, as in <a class="internal-link" data-href="New.md">New</a>.</p></div>' +
-        '<div class="vc-user"><div class="vc-user-text">Refine it with the recursive formulation.</div></div>';
+        '<div class="vc-user" data-uuid="u-1"><div class="vc-user-text">Does the result survive recursive repayment?</div></div>' +
+        '<div class="vc-text" data-message="a-2#1"><p>A mechanism: <span class="math math-inline" data-tex="q(b)"><mjx-container></mjx-container></span> falls with debt, as in <a class="internal-link" data-href="New.md">New</a>.</p></div>' +
+        '<div class="vc-user" data-uuid="u-3"><div class="vc-user-text">Refine it with the recursive formulation.</div></div>';
       const [question, , refinement] = Array.from(exchange.children) as HTMLElement[];
       const across = document.createRange();
       across.setStart(question.querySelector('.vc-user-text')?.firstChild as Text, 9);
@@ -3236,6 +3236,12 @@ async function main(): Promise<void> {
       await memoView.findPassage(excerpts[2]?.needle ?? '');
       const found = (view as unknown as { findBar: { state(): { count: number }; close(): void } }).findBar.state().count;
       (view as unknown as { findBar: { close(): void } }).findBar.close();
+      // A passage that recorded its message goes straight to it, marked; a message gone falls back to Find.
+      await memoView.findPassage('A mechanism:', 'a-2#1');
+      const wentTo = (exchange.children[1] as HTMLElement).hasClass('is-flashed');
+      await memoView.findPassage('Refine it', 'gone');
+      const fellBack = (view as unknown as { findBar: { state(): { count: number } } }).findBar.state().count;
+      (view as unknown as { findBar: { close(): void } }).findBar.close();
       const inputWas = memoView.inputEl.value;
       memoView.quote('A mechanism: $q(b)$ falls');
       const quoted = memoView.inputEl.value;
@@ -3251,6 +3257,10 @@ async function main(): Promise<void> {
       exchange.remove();
       const memoOk =
         JSON.stringify(excerpts.map((excerpt) => excerpt.role)) === '["you","claude","you"]' &&
+        JSON.stringify(excerpts.map((excerpt) => excerpt.message)) === '["u-1","a-2#1","u-3"]' &&
+        memoText.includes('&msg=a-2%231&find=A%20mechanism%3A)') &&
+        wentTo &&
+        fellBack > 0 &&
         excerpts[0]?.text === 'result survive recursive repayment?' &&
         excerpts[1]?.text === 'A mechanism: $q(b)$ falls with debt, as in New.' &&
         JSON.stringify(excerpts[1]?.links) === '["New.md"]' &&
@@ -3269,7 +3279,7 @@ async function main(): Promise<void> {
           JSON.stringify([['memo-chat', 'later-chat'], ['Debt model', 'Later'], ['memo', 'idea', 'read'], '2026-10-03']) &&
         found > 0 &&
         quoted.includes('> A mechanism: $q(b)$ falls');
-      console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${memoPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${memoOk}`);
+      console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${memoPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; went to ${wentTo}, fell back ${fellBack}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${memoOk}`);
       if (!memoOk) process.exitCode = 1;
     }
     // The memo form: Claude's suggestion fills the title and description, never over what was typed;
