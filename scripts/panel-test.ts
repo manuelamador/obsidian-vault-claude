@@ -145,6 +145,8 @@ async function main(): Promise<void> {
     },
     drafts: {} as Record<string, { text?: string; note?: string }>,
     memoNotes: () => [],
+    followChatMemos: async () => undefined,
+    openChatMemos: async () => undefined,
     suggestMemo: async () => null,
     planNotes: {} as Record<string, { path: string; plan: string }>,
     setPlanNote(id: string, path: string, plan: string) {
@@ -3255,7 +3257,8 @@ async function main(): Promise<void> {
         excerpts[2]?.text === 'Refine it' &&
         ideaPath === 'Claude chats/Memos/Repayment timing selection.md' &&
         ideaText.includes('# Repayment timing: selection') &&
-        ideaText.includes('tags: [memo, idea]') &&
+        ideaText.includes('tags: [idea]') &&
+        !ideaText.includes('memo,') &&
         ideaText.includes('chats: ["Debt model"]') &&
         ideaText.includes('> A mechanism: $q(b)$ falls with debt, as in New.') &&
         JSON.stringify(linked) === JSON.stringify([`${ideaPath}@idea-chat`]) &&

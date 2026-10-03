@@ -651,6 +651,9 @@ export class ChatView extends ItemView {
     setIcon(this.phoneButton, 'smartphone');
     this.registerDomEvent(this.phoneButton, 'click', (evt) => this.onPhoneClick(evt));
     this.updatePhoneButton();
+    const memosButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': "This chat's memos, in a table" } });
+    setIcon(memosButton, 'sticky-note');
+    this.registerDomEvent(memosButton, 'click', () => void this.plugin.openChatMemos(this.chatId ?? this.resumeId ?? '', this.chatName ?? 'New chat'));
     this.historyButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Chat history' } });
     setIcon(this.historyButton, 'history');
     this.registerDomEvent(this.historyButton, 'click', () => void this.openHistory());
@@ -1722,6 +1725,8 @@ export class ChatView extends ItemView {
     this.chatTitleEl.toggleClass('is-new', title === null);
     this.updateChatButtons();
     this.updateTab();
+    // Once the chat's id is set too, which follows the title when a chat opens.
+    window.setTimeout(() => void this.plugin.followChatMemos(this.chatId ?? this.resumeId ?? '', this.chatName ?? 'New chat'), 0);
   }
 
   /** The title-row buttons, shown once the chat has a Claude Code session. */

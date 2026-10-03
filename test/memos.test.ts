@@ -28,7 +28,7 @@ test('a new memo note: frontmatter with its tags, title, description, and each p
   const note = memoNoteMarkdown({ title: 'Repayment timing may change equilibrium selection', description: 'Test it under other continuation choices.', tags: ['idea', 'read'], notes: ['[[Model setup]]'], sources });
   assert.match(
     note,
-    /^---\ntype: memo\ntags: \[memo, idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
+    /^---\ntype: memo\ntags: \[idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
   );
   assert.ok(note.includes('**You** · [Go to the passage](obsidian://vault-claude?vault=Obsidian&chat=chat-1&find=Does%20the%20result%20survive)'));
   assert.ok(note.includes('> Does the result survive\n> recursive repayment?'));
@@ -103,4 +103,28 @@ test("a memo's Send box puts it in the input when ticked, takes it out when clea
   await p.followMemoBox(memo, true);
   await p.followMemoBox(memo, false);
   assert.deepEqual(attached, ['Claude chats/Memos/A memo.md']);
+});
+
+test('a Memos base open in a tab follows the chat on the panel; one closed is left alone', async () => {
+  const { default: VaultClaudePlugin } = await import('../src/main');
+  const { TFile } = await import('obsidian');
+  const p = new (VaultClaudePlugin as unknown as new () => InstanceType<typeof VaultClaudePlugin>)();
+  p.settings = { ...p.settings, memosFolder: 'Claude chats/Memos' };
+  const base = Object.assign(new TFile(), { path: 'Claude chats/Memos/Memos.base' });
+  let text = 'old';
+  let open = false;
+  (p as unknown as { app: unknown }).app = {
+    workspace: { getLeavesOfType: (type: string) => (type === 'bases' && open ? [{ view: { file: base } }] : []) },
+    vault: {
+      getAbstractFileByPath: (path: string) => (path === base.path ? base : { path }),
+      read: async () => text,
+      modify: async (_file: unknown, value: string) => void (text = value),
+    },
+  };
+  await p.followChatMemos('chat-2', 'Second chat');
+  assert.equal(text, 'old');
+  open = true;
+  await p.followChatMemos('chat-2', 'Second chat');
+  assert.ok(text.includes('name: "Chat: Second chat"'));
+  assert.ok(text.includes('claude_chats.contains(\\"chat-2\\")'));
 });

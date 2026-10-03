@@ -96,11 +96,12 @@ function yamlList(values: string[]): string {
  */
 export function memoNoteMarkdown(memo: { title: string; description: string; tags: string[]; notes: string[]; sources: MemoSources }): string {
   const { date, chatId, chatTitle } = memo.sources;
-  const tags = cleanTags(['memo', ...memo.tags]);
+  // No `memo` tag: `type: memo` says what it is, and a tag every memo had would say nothing in a table.
+  const tags = cleanTags(memo.tags);
   const frontmatter = [
     '---',
     'type: memo',
-    `tags: [${tags.join(', ')}]`,
+    ...(tags.length > 0 ? [`tags: [${tags.join(', ')}]`] : []),
     `created: ${date}`,
     `updated: ${date}`,
     `chats: ${yamlList([chatTitle])}`,

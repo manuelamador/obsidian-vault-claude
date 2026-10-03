@@ -1187,23 +1187,40 @@ export default class VaultClaudePlugin extends Plugin {
    */
   async openChatMemos(chatId: string, chatTitle: string): Promise<void> {
     try {
-      const folder = normalizePath(this.settings.memosFolder || '/');
-      if (folder !== '/' && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
-      const path = `${folder === '/' ? '' : `${folder}/`}Memos.base`;
-      const text = memoBaseYaml(folder, chatId, chatTitle);
-      const existing = this.app.vault.getAbstractFileByPath(path);
-      let file: TFile;
-      if (existing instanceof TFile) {
-        if ((await this.app.vault.read(existing)) !== text) await this.app.vault.modify(existing, text);
-        file = existing;
-      } else {
-        file = await this.app.vault.create(path, text);
-      }
+      const file = await this.writeMemosBase(chatId, chatTitle);
       await this.app.workspace.openLinkText(`${file.path}#${chatMemosView(chatTitle)}`, '', 'tab');
     } catch (error) {
       log('opening the memos base failed', error);
       new Notice(`Could not show the memos: ${errorText(error)}`);
     }
+  }
+
+  /** The Memos base's path, in the memos folder. */
+  private memosBasePath(): { folder: string; path: string } {
+    const folder = normalizePath(this.settings.memosFolder || '/');
+    return { folder, path: `${folder === '/' ? '' : `${folder}/`}Memos.base` };
+  }
+
+  /** Writes the Memos base for chat `chatId` (see memoBaseYaml), when it says anything else. */
+  private async writeMemosBase(chatId: string, chatTitle: string): Promise<TFile> {
+    const { folder, path } = this.memosBasePath();
+    if (folder !== '/' && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+    const text = memoBaseYaml(folder, chatId, chatTitle);
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (!(existing instanceof TFile)) return this.app.vault.create(path, text);
+    if ((await this.app.vault.read(existing)) !== text) await this.app.vault.modify(existing, text);
+    return existing;
+  }
+
+  /**
+   * The chat on a panel changed (opened, started, renamed): a Memos base open in a tab follows it,
+   * its first view becoming that chat's memos. One closed is left alone.
+   */
+  async followChatMemos(chatId: string, chatTitle: string): Promise<void> {
+    const { path } = this.memosBasePath();
+    const open = this.app.workspace.getLeavesOfType('bases').some((leaf) => (leaf.view as { file?: TFile | null }).file?.path === path);
+    if (!open) return;
+    await this.writeMemosBase(chatId, chatTitle).catch((error: unknown) => log('following the chat in the memos base failed', error));
   }
 
   /**
