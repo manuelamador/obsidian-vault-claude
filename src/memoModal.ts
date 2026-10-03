@@ -1,11 +1,12 @@
 // The form for saving passages of a chat as a memo: a new memo, with its title, description and
 // tags, or a memo already saved, to add the passages (and any tags) to. Claude suggests a title and
-// description from the passages as the form opens; what you type is never overwritten.
+// description from the passages as the form opens; what you type is never overwritten. Saved with
+// no title, before the suggestion or without one, the memo is a bookmark (see quickMemoTitle).
 import { Modal, type App, type TFile } from 'obsidian';
 import { MEMO_KINDS, cleanTags, type MemoPassage } from './memos';
 import { errorText, log } from './log';
 
-/** What the form was filled in with: the memo to add to (null for a new one), a new memo's title and description, and the tags. */
+/** What the form was filled in with: the memo to add to (null for a new one), a new memo's title (empty for a bookmark) and description, and the tags. */
 export interface MemoChoice {
   memo: TFile | null;
   title: string;
@@ -48,7 +49,7 @@ export class MemoModal extends Modal {
     const fresh = contentEl.createDiv();
     const titleField = fresh.createDiv({ cls: 'vc-memo-field' });
     titleField.createEl('label', { text: 'Title' });
-    const title = titleField.createEl('input', { attr: { type: 'text' } });
+    const title = titleField.createEl('input', { attr: { type: 'text', placeholder: 'None: saved as a bookmark, titled by its first words' } });
     const descriptionField = fresh.createDiv({ cls: 'vc-memo-field' });
     descriptionField.createEl('label', { text: 'Description' });
     const description = descriptionField.createEl('textarea', { attr: { rows: '3' } });
@@ -126,7 +127,8 @@ export class MemoModal extends Modal {
 
     const submit = () => {
       const memo = chosen();
-      const why = memo ? null : title.value.trim() ? this.titleProblem(title.value.trim()) : 'Give the memo a title.';
+      // No title: a bookmark, titled by the passage's first words (see ChatView.saveMemo).
+      const why = memo || !title.value.trim() ? null : this.titleProblem(title.value.trim());
       if (why) {
         problem.setText(why);
         problem.show();

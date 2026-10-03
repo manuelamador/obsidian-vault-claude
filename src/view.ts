@@ -44,7 +44,7 @@ import {
 import { chipFor, renderChip } from './chip';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
-import { addMemoSources, cleanTags, memoNoteMarkdown, memoNoteName, pairChat, passageNeedle, type MemoPassage, type MemoSources } from './memos';
+import { BOOKMARK_TAG, addMemoSources, cleanTags, freeMemoTitle, memoNoteMarkdown, memoNoteName, pairChat, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -769,10 +769,15 @@ export class ChatView extends ItemView {
     this.sideButton.hide();
     this.registerDomEvent(this.sideButton, 'mousedown', (evt) => evt.preventDefault());
     this.registerDomEvent(this.sideButton, 'click', () => this.openSideChat());
-    this.memoButton = messagesWrap.createEl('button', { cls: 'vc-quote-button vc-side-button vc-memo-button', text: 'Memo', attr: { 'aria-label': 'Save the selected passages as a memo' } });
+    const quickHint = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
+    this.memoButton = messagesWrap.createEl('button', {
+      cls: 'vc-quote-button vc-side-button vc-memo-button',
+      text: 'Memo',
+      attr: { 'aria-label': `Save the selected passages as a memo (${quickHint}: at once, as a bookmark)` },
+    });
     this.memoButton.hide();
     this.registerDomEvent(this.memoButton, 'mousedown', (evt) => evt.preventDefault());
-    this.registerDomEvent(this.memoButton, 'click', () => this.saveMemoFromSelection());
+    this.registerDomEvent(this.memoButton, 'click', (evt) => this.saveMemoFromSelection(Keymap.isModEvent(evt) !== false));
     this.sideChat = new SideChat(messagesWrap, {
       startSession: (handlers, id, own) => this.startSideSession(handlers, id, own),
       renderMarkdown: (markdown, el, component) => void this.renderMarkdown(markdown, el, component),
@@ -2382,9 +2387,13 @@ export class ChatView extends ItemView {
       const insert = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Insert into note' } });
       setIcon(insert, 'file-input');
       insert.addEventListener('click', (evt) => this.onInsertClick(evt, this.replyMarkdown(textEls)));
-      const memo = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Save as a memo' } });
+      const memo = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `Save as a memo (${Platform.isMacOS ? '⌘-click' : 'Ctrl-click'}: at once, as a bookmark)` } });
       setIcon(memo, 'sticky-note');
-      memo.addEventListener('click', () => this.openMemoForm(this.replyPassages(turn, textEls)));
+      memo.addEventListener('click', (evt) => {
+        const passages = this.replyPassages(turn, textEls);
+        if (Keymap.isModEvent(evt) !== false) void this.saveBookmark(passages);
+        else this.openMemoForm(passages);
+      });
     }
     if (uuid) {
       turn.addClass('has-branch');
@@ -5335,31 +5344,44 @@ export class ChatView extends ItemView {
     return notes;
   }
 
-  /** "Memo" over a selection in the chat: the form for saving the selected passages as a memo (see MemoModal). */
-  saveMemoFromSelection(): void {
+  /**
+   * "Memo" over a selection in the chat: the form for saving the selected passages as a memo (see
+   * MemoModal); `now` (a modifier click), saved at once as a bookmark (see saveBookmark).
+   */
+  saveMemoFromSelection(now = false): void {
     const passages = this.selectedPassages();
     this.hideSelectionButtons();
     if (passages.length === 0) {
       new Notice('Select the passages of the chat to save first.');
       return;
     }
-    this.openMemoForm(passages);
+    if (now) void this.saveBookmark(passages);
+    else this.openMemoForm(passages);
+  }
+
+  /** Where `passages` of the chat on screen come from, for a memo; null, with a notice, before the chat has started. */
+  private memoSources(passages: MemoPassage[]): MemoSources | null {
+    const chatId = this.chatId ?? this.resumeId;
+    if (!chatId) {
+      new Notice('This chat has not started yet: there is nothing to link a memo to.');
+      return null;
+    }
+    return { vault: this.app.vault.getName(), chatId, chatTitle: this.chatName ?? 'Chat', date: formatDate(Date.now()).slice(0, 10), passages };
+  }
+
+  /** Saves `passages` as a memo at once, with no form and no suggestion: a bookmark, titled by their first words. */
+  async saveBookmark(passages: MemoPassage[]): Promise<TFile | null> {
+    const sources = this.memoSources(passages);
+    if (!sources) return null;
+    const saved = await this.saveMemo({ memo: null, title: '', description: '', tags: [] }, sources, true);
+    if (saved) this.flashHint(`Memo saved: ${saved.basename}`);
+    return saved;
   }
 
   /** The memo form for `passages` of the chat on screen, with Claude's suggestion of a title and description. */
   private openMemoForm(passages: MemoPassage[]): void {
-    const chatId = this.chatId ?? this.resumeId;
-    if (!chatId) {
-      new Notice('This chat has not started yet: there is nothing to link a memo to.');
-      return;
-    }
-    const sources: MemoSources = {
-      vault: this.app.vault.getName(),
-      chatId,
-      chatTitle: this.chatName ?? 'Chat',
-      date: formatDate(Date.now()).slice(0, 10),
-      passages,
-    };
+    const sources = this.memoSources(passages);
+    if (!sources) return;
     new MemoModal(
       this.app,
       passages,
@@ -5378,8 +5400,17 @@ export class ChatView extends ItemView {
     return taken ? `A note named “${name}” already exists: add the passages to it, or give the memo another title.` : null;
   }
 
-  /** Writes the passages to a new memo note, or to the end of the one chosen with its tags added, and links the note to the chat. */
-  async saveMemo(choice: MemoChoice, sources: MemoSources): Promise<TFile | null> {
+  /**
+   * Writes the passages to a new memo note, or to the end of the one chosen with its tags added, and
+   * links the note to the chat. A new memo with no title is a bookmark: titled by the passages' first
+   * words, a name no note has. `quiet`: no notice (the caller says it was saved).
+   */
+  async saveMemo(choice: MemoChoice, sources: MemoSources, quiet = false): Promise<TFile | null> {
+    if (!choice.memo && !choice.title.trim()) {
+      const stamp = formatDate(Date.now()).replace(':', '');
+      const title = freeMemoTitle(quickMemoTitle(sources.passages), stamp, (name) => this.app.metadataCache.getFirstLinkpathDest(name, '') !== null);
+      choice = { ...choice, title, tags: cleanTags([...choice.tags, BOOKMARK_TAG]) };
+    }
     try {
       let file = choice.memo;
       if (file) {
@@ -5403,6 +5434,7 @@ export class ChatView extends ItemView {
       }
       this.plugin.linkNoteChat(file.path, sources.chatId);
       const saved = file;
+      if (quiet) return saved;
       const frag = createFragment((parts) => {
         parts.appendText(`${choice.memo ? 'Added to' : 'Saved'} “${saved.basename}”. `);
         parts.createEl('a', { text: 'Open it', href: '#' }).addEventListener('click', (evt) => {

@@ -147,7 +147,11 @@ export class Modal {
   open(): void {
     Modal.last = this;
   }
-  close(): void {}
+  onClose(): void {}
+  /** As Obsidian's: closing runs onClose. */
+  close(): void {
+    this.onClose();
+  }
 }
 export class SuggestModal<T> {
   /** Typing into it re-runs the query; a test counts those runs. */

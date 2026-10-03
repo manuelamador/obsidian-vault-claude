@@ -3186,6 +3186,8 @@ async function main(): Promise<void> {
         selectedPassages(): { role: string; text: string; needle: string; links?: string[]; message?: string }[];
         saveMemo(choice: { memo: unknown; title: string; description: string; tags: string[] }, sources: unknown): Promise<{ path: string } | null>;
         findPassage(needle: string, message?: string): Promise<void>;
+        saveBookmark(passages: unknown[]): Promise<{ path: string; basename: string } | null>;
+        hintEl: HTMLElement | null;
         quote(text: string): void;
         chatId: string | null;
         inputEl: HTMLTextAreaElement;
@@ -3232,6 +3234,17 @@ async function main(): Promise<void> {
       const linked = plugin.noteLinks.slice(linksBefore);
       await memoView.saveMemo({ memo: created, title: '', description: '', tags: ['read'] }, { ...sources, chatId: 'later-chat', chatTitle: 'Later', passages: [excerpts[0]] });
       const addedText = notesOnDisk.get(memoPath) ?? '';
+      // A bookmark: saved at once, titled by the passage's first words; a second of the same, with the
+      // date and time added to a name already taken.
+      const cache = app.metadataCache as unknown as { getFirstLinkpathDest: (link: string, from: string) => unknown };
+      const resolveWas = cache.getFirstLinkpathDest;
+      cache.getFirstLinkpathDest = (link: string, from: string) => (notesOnDisk.has(`Claude chats/Memos/${link}.md`) ? {} : resolveWas(link, from));
+      const bookmark = await memoView.saveBookmark([excerpts[1]]);
+      const hinted = memoView.hintEl?.textContent ?? '';
+      const second = await memoView.saveBookmark([excerpts[1]]);
+      cache.getFirstLinkpathDest = resolveWas;
+      const bookmarkText = notesOnDisk.get(bookmark?.path ?? '') ?? '';
+      for (const saved of [bookmark, second]) if (saved) notesOnDisk.delete(saved.path);
       // Back in the chat: Find goes to the passage, and a passage carried on from is quoted in the input.
       await memoView.findPassage(excerpts[2]?.needle ?? '');
       const found = (view as unknown as { findBar: { state(): { count: number }; close(): void } }).findBar.state().count;
@@ -3278,8 +3291,13 @@ async function main(): Promise<void> {
         JSON.stringify([frontmatters[0]?.claude_chats, frontmatters[0]?.chats, frontmatters[0]?.tags, frontmatters[0]?.updated]) ===
           JSON.stringify([['memo-chat', 'later-chat'], ['Debt model', 'Later'], ['memo', 'idea', 'read'], '2026-10-03']) &&
         found > 0 &&
+        bookmark?.path === 'Claude chats/Memos/A mechanism.md' &&
+        bookmarkText.includes('tags: [bookmark]') &&
+        bookmarkText.includes('# A mechanism:') &&
+        hinted === 'Memo saved: A mechanism' &&
+        /^Claude chats\/Memos\/A mechanism \d{4}-\d\d-\d\d \d{4}\.md$/.test(second?.path ?? '') &&
         quoted.includes('> A mechanism: $q(b)$ falls');
-      console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${memoPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; went to ${wentTo}, fell back ${fellBack}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${memoOk}`);
+      console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${memoPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; bookmarks ${bookmark?.path}, ${second?.path}, hint ${JSON.stringify(hinted)}; went to ${wentTo}, fell back ${fellBack}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${memoOk}`);
       if (!memoOk) process.exitCode = 1;
     }
     // The memo form: Claude's suggestion fills the title and description, never over what was typed;
@@ -3319,8 +3337,25 @@ async function main(): Promise<void> {
         JSON.stringify(suggested) === JSON.stringify(['Repayment timing and selection', 'Asked whether timing changes selection.']) &&
         JSON.stringify(again) === JSON.stringify(['My own title', 'Another description.']) &&
         JSON.stringify(chosen) === JSON.stringify({ memo: null, title: 'My own title', description: 'Another description.', tags: ['todo', 'econ', 'to-read'] });
-      console.log(`memo form: suggested ${JSON.stringify(suggested)}; again, with a title typed ${JSON.stringify(again)}; saved ${JSON.stringify(chosen)} -> ${formOk}`);
-      if (!formOk) process.exitCode = 1;
+      // Saved at once, the suggestion still on its way: no title, a bookmark (titled by ChatView.saveMemo).
+      let quick: { title: string; tags: string[] } | null = null;
+      let abandoned = false;
+      const quickForm = new MemoModal(
+        app as never,
+        [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.' }],
+        [],
+        () => 'never asked',
+        (choice) => void (quick = choice),
+        (signal) => new Promise(() => signal.addEventListener('abort', () => (abandoned = true))),
+      );
+      const quickEl = (quickForm as unknown as { contentEl: HTMLElement }).contentEl;
+      document.body.appendChild(quickEl);
+      quickForm.onOpen();
+      ([...quickEl.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLElement).click();
+      quickEl.remove();
+      const quickOk = JSON.stringify(quick) === JSON.stringify({ memo: null, title: '', description: '', tags: [] }) && abandoned;
+      console.log(`memo form: suggested ${JSON.stringify(suggested)}; again, with a title typed ${JSON.stringify(again)}; saved ${JSON.stringify(chosen)}; saved at once ${JSON.stringify(quick)}, suggestion let go ${abandoned} -> ${formOk && quickOk}`);
+      if (!formOk || !quickOk) process.exitCode = 1;
     }
     // Save as a memo under a reply: the prompt it answered, then the reply, as the form's passages.
     {
@@ -3338,7 +3373,7 @@ async function main(): Promise<void> {
       text.innerHTML = '<p>Yes: <span class="math math-inline" data-tex="q(b)"></span> moves first.</p>';
       replyView.markdownSource.set(text, 'Yes: $q(b)$ moves first.');
       replyView.finishTurnActions(turn);
-      const memoButton = turn.querySelector('.vc-turn-actions [aria-label="Save as a memo"]') as HTMLElement | null;
+      const memoButton = turn.querySelector('.vc-turn-actions [aria-label^="Save as a memo"]') as HTMLElement | null;
       stub.Modal.last = null;
       memoButton?.click();
       const opened = stub.Modal.last as unknown as { passages?: { role: string; text: string; needle: string }[] } | null;

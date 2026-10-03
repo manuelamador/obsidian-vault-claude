@@ -30,7 +30,10 @@ export interface MemoSources {
 }
 
 /** The tags offered as toggles in the memo form; others are typed. */
-export const MEMO_KINDS = ['idea', 'todo', 'explore', 'read'] as const;
+export const MEMO_KINDS = ['idea', 'todo', 'explore', 'read', 'bookmark'] as const;
+
+/** The tag of a memo saved with no title given: a bookmark (see quickMemoTitle). */
+export const BOOKMARK_TAG = 'bookmark';
 
 /** The longest passage carried by a "Continue in the chat" link, which quotes it in the chat's input. */
 const QUOTE_LINK_CHARS = 2000;
@@ -186,6 +189,31 @@ export function passageNeedle(plain: string, max = 60): string {
   return (space > max / 2 ? cut.slice(0, space) : cut).trim();
 }
 
+/**
+ * The title of a memo saved with none given: the first words of its first passage that has any, or
+ * of its text (an equation alone), else "Bookmark". Its note's name leaves out what a name cannot hold.
+ */
+export function quickMemoTitle(passages: MemoPassage[]): string {
+  for (const passage of passages) {
+    const words = passage.needle || passageNeedle(passage.text);
+    if (memoNoteName(words)) return words;
+  }
+  return 'Bookmark';
+}
+
+/**
+ * `title` made into a memo name no note has yet (`taken`): as it is, else with the date and time
+ * added (`stamp`, as "2026-10-03 1432"), else with a number after that.
+ */
+export function freeMemoTitle(title: string, stamp: string, taken: (name: string) => boolean): string {
+  if (!taken(memoNoteName(title))) return title;
+  const stamped = `${title} ${stamp}`;
+  for (let n = 1; ; n += 1) {
+    const candidate = n === 1 ? stamped : `${stamped} ${n}`;
+    if (!taken(memoNoteName(candidate))) return candidate;
+  }
+}
+
 /** The instructions for suggesting a memo's title and description (see VaultClaudePlugin.suggestMemo). */
 export const MEMO_SUGGESTION_SYSTEM = [
   'You suggest a title and a description for a memo a researcher is saving from passages of a conversation with an AI assistant.',
@@ -329,6 +357,7 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
     view('To read', ['file.hasTag("read")'], oldest),
     view('To explore', ['file.hasTag("explore")'], oldest),
     view('Ideas', ['file.hasTag("idea")'], newest),
+    view('Bookmarks', [`file.hasTag("${BOOKMARK_TAG}")`], newest),
     view('By chat', [], newest, 'chats'),
     view('By note', [], newest, 'notes'),
     view(DONE_VIEW, ['done == true'], newest),

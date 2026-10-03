@@ -10,6 +10,8 @@ import {
   memoNoteMarkdown,
   memoNoteName,
   firstPassageTarget,
+  freeMemoTitle,
+  quickMemoTitle,
   memoSuggestionPrompt,
   pairChat,
   passageNeedle,
@@ -89,9 +91,9 @@ test('the suggestion request names who wrote each passage, and the reply is read
 test("the Memos base opens on the chat's memos, then all, those about the note in front, and each kind", () => {
   const base = memoBaseYaml('chat-1', 'Debt model [v2] #draft', 'My vault');
   const views = [...base.matchAll(/^    name: "(.*)"$/gm)].map((match) => match[1]);
-  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas', 'By chat', 'By note', 'Done']);
+  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas', 'Bookmarks', 'By chat', 'By note', 'Done']);
   // Finished memos only in Done.
-  assert.equal(base.split('"done != true"').length - 1, 9);
+  assert.equal(base.split('"done != true"').length - 1, 10);
   assert.ok(base.includes('        - "done == true"'));
   assert.ok(base.includes('    groupBy:\n      property: chats\n      direction: ASC'));
   assert.ok(base.includes('    groupBy:\n      property: notes\n      direction: ASC'));
@@ -287,4 +289,14 @@ test("a link from the table finds the memo's first passage from its chat", () =>
   assert.deepEqual(firstPassageTarget(withMessage, 'chat-1'), { msg: 'uuid-7#2', find: 'A possible mechanism:' });
   const base = memoBaseYaml('chat-1', 'Debt model', 'V');
   assert.ok(base.includes('+ \\"&memo=\\" + file.path, chats[index]'));
+});
+
+test("a bookmark's title: its first words, from the first passage with any; a name taken gets the date and time", () => {
+  assert.equal(quickMemoTitle([{ role: 'you', text: '$x$', needle: '' }, { role: 'claude', text: 'Long', needle: 'The price: q(b) falls' }]), '$x$');
+  assert.equal(quickMemoTitle([{ role: 'claude', text: 'Long', needle: 'The price: q(b) falls' }]), 'The price: q(b) falls');
+  assert.equal(quickMemoTitle([{ role: 'claude', text: '', needle: '' }]), 'Bookmark');
+  const taken = new Set(['Price', 'Price 2026-10-03 1432']);
+  assert.equal(freeMemoTitle('New', '2026-10-03 1432', (name) => taken.has(name)), 'New');
+  assert.equal(freeMemoTitle('Price', '2026-10-03 1432', (name) => taken.has(name)), 'Price 2026-10-03 1432 2');
+  assert.equal(freeMemoTitle('Price', '2026-10-03 1433', (name) => taken.has(name)), 'Price 2026-10-03 1433');
 });
