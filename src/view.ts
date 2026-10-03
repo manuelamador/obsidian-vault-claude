@@ -5710,8 +5710,10 @@ export class ChatView extends ItemView {
    * starts.
    */
   private renderMarkdown(markdown: string, el: HTMLElement, component = this.chatComponent): Promise<void> {
-    // Whatever holds rendered Markdown (a reply, a plan, a side chat's question) is styled alike.
-    el.addClass('vc-markdown');
+    // Whatever holds rendered Markdown (a reply, a plan, a side chat's question) is styled alike, and
+    // as notes are: Obsidian and themes style a note's code, quotes, lists and tables only under
+    // `.markdown-rendered`, so the theme in use decides how they look here too.
+    el.addClass('vc-markdown', 'markdown-rendered');
     if (renderPlainText(markdown, el)) return Promise.resolve();
     // The chat's own text (not a side chat's) records its mentions once its links are in.
     const chat = component === this.chatComponent ? this.mentionsChat() : null;

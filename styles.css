@@ -844,15 +844,6 @@
   gap: var(--size-4-2);
 }
 
-/* Rendered Markdown (a reply, a plan, a side chat's question) sits flush in what holds it. */
-.vc-markdown > :first-child {
-  margin-top: 0;
-}
-
-.vc-markdown > :last-child {
-  margin-bottom: 0;
-}
-
 .vc-live {
   white-space: pre-wrap;
 }
@@ -976,73 +967,17 @@
 }
 
 /*
- * Tables as Obsidian draws them in notes, which it does only under `.markdown-rendered`, wherever
- * the panel renders Markdown (a reply, a plan, a side chat's question; see renderMarkdown): cell
- * borders, headers aligned with their columns, and the theme's table variables, except its sizes,
- * which are a note's text size: a table here is the size of the text around it. Words are kept
- * whole, as there; a table wider than the panel scrolls.
+ * Rendered Markdown carries Obsidian's note class (see renderMarkdown), which draws tables as notes
+ * do, in the theme's style. Two things differ here: a table keeps to the panel's text size rather
+ * than a note's, and one wider than the panel scrolls, its words kept whole.
  */
 .vc-markdown table {
   display: block;
-  border-collapse: collapse;
-  line-height: var(--table-line-height);
-  word-break: normal;
   overflow-wrap: normal;
 }
 
-.vc-markdown th,
-.vc-markdown td {
-  padding: var(--size-2-2) var(--size-4-2);
-  border: var(--table-border-width) solid var(--table-border-color);
-  min-width: var(--table-column-min-width);
-  max-width: var(--table-column-max-width);
-  vertical-align: var(--table-cell-vertical-alignment);
-  text-align: start;
-}
-
-.vc-markdown td {
-  color: var(--table-text-color);
-}
-
-.vc-markdown th {
-  font-weight: var(--table-header-weight);
-  font-family: var(--table-header-font);
-  color: var(--table-header-color);
-  line-height: var(--line-height-tight);
-  border-top-width: var(--table-header-border-width);
-  border-color: var(--table-header-border-color);
-}
-
-.vc-markdown :is(th, td)[align="center"] {
-  text-align: center;
-}
-
-.vc-markdown :is(th, td)[align="right"] {
-  text-align: end;
-}
-
-.vc-markdown thead tr {
-  background-color: var(--table-header-background);
-}
-
-.vc-markdown tbody tr:nth-child(odd) {
-  background-color: var(--table-row-alt-background);
-}
-
-.vc-markdown tr > :nth-child(2n + 2) {
-  background-color: var(--table-column-alt-background);
-}
-
-.vc-markdown tr > :first-child {
-  border-left-width: var(--table-column-first-border-width);
-}
-
-.vc-markdown tr > :last-child {
-  border-right-width: var(--table-column-last-border-width);
-}
-
-.vc-markdown tbody tr:last-child > td {
-  border-bottom-width: var(--table-row-last-border-width);
+.vc-markdown.markdown-rendered :is(th, td) {
+  font-size: inherit;
 }
 
 .vc-task-body {
@@ -1115,7 +1050,8 @@
   font-weight: var(--font-semibold);
 }
 
-.vc-permission-detail pre {
+/* What a tool would run, in an approval card; a plan's code blocks are drawn as in notes. */
+.vc-permission-detail:not(.vc-plan) pre {
   margin: 0;
   max-height: 16em;
   overflow: auto;
