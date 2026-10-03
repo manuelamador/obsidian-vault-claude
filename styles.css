@@ -1454,7 +1454,7 @@ button.vc-continue-button:hover span:last-child {
   color: var(--text-error);
 }
 
-/* Where the chat was compacted: a dashed rule on either side of the line. */
+/* Where the chat was compacted, or its mode or model changed: a dashed rule on either side of the line. */
 .vc-compaction,
 .vc-mode-line {
   display: flex;
@@ -1534,7 +1534,7 @@ button.vc-continue-button:hover span:last-child {
   font-size: var(--font-ui-smaller);
 }
 
-.vc-mode-line {
+.vc-mode-line.is-plan {
   color: var(--text-accent);
 }
 

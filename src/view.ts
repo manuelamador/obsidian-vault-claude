@@ -3394,13 +3394,28 @@ export class ChatView extends ItemView {
     });
   }
 
-  /** A line in the chat where plan mode starts or ends. */
+  /** A line in the chat where the permission mode changes; where Plan mode starts or ends, in its colour. */
   private renderModeLine(from: PermissionMode, to: PermissionMode): void {
-    if (from === to || (from !== 'plan' && to !== 'plan')) return;
-    const text =
-      to === 'plan' ? 'Plan mode: Claude plans, and changes nothing until you approve' : `Left plan mode · back to ${permissionModes(true)[to] ?? to}`;
-    (this.busy ? this.container() : this.messagesEl).createDiv({ cls: 'vc-notice vc-muted vc-mode-line', text });
+    if (from === to) return;
+    const name = permissionModes(true)[to] ?? to;
+    if (to === 'plan') this.renderSettingLine('Plan mode: Claude plans, and changes nothing until you approve', true);
+    else if (from === 'plan') this.renderSettingLine(`Left plan mode · back to ${name}`, true);
+    else this.renderSettingLine(`Permission mode: ${name}`);
+  }
+
+  /** A line across the chat where one of its settings changes: the permission mode, or the model. */
+  private renderSettingLine(text: string, plan = false): void {
+    const line = (this.busy ? this.container() : this.messagesEl).createDiv({ cls: 'vc-notice vc-muted vc-mode-line', text });
+    line.toggleClass('is-plan', plan);
     this.scrollToBottom();
+  }
+
+  /** A model menu choice by name, as its line in the chat gives it: `Opus 5.5`, `Default (Opus 5.5)`. */
+  private modelName(value: string): string {
+    const model = this.plugin.models.find((candidate) => candidate.value === value);
+    const name = prettyModel(model?.resolvedModel ?? value);
+    if (value === 'default') return name && name !== 'Default' ? `Default (${name})` : 'Default';
+    return name || 'Default';
   }
 
   /**
@@ -3594,6 +3609,7 @@ export class ChatView extends ItemView {
     // Default is sent as such: with no model, Claude Code runs the one its settings name, which may differ.
     this.modelOverride = value || undefined;
     const session = this.session;
+    let switched = true;
     if (session) {
       try {
         await session.setModel(this.modelOverride);
@@ -3605,6 +3621,7 @@ export class ChatView extends ItemView {
       } catch (error) {
         log('setModel failed', error);
         new Notice('Could not switch the model.');
+        switched = false;
       }
     } else {
       // Nothing running yet (a chat reopened, or one not started): the choice is what it will run,
@@ -3612,6 +3629,7 @@ export class ChatView extends ItemView {
       this.currentModel = null;
     }
     this.populateModelSelect();
+    if (switched) this.renderSettingLine(`Model: ${this.modelName(value)}`);
     // A model without fast mode turns it off.
     const chosen = this.plugin.models.find((model) => model.value === this.chosenModel());
     if (this.fastMode && chosen && !chosen.supportsFastMode) void this.toggleFastMode();

@@ -3498,6 +3498,24 @@ async function main(): Promise<void> {
       modeChat.mode = 'plan';
       view.newChat();
       const keptPlan = modeChat.mode;
+      // Any other mode change, and a model change, draw a line too; one that fails does not.
+      modeChat.mode = 'auto';
+      modeChat.session = {
+        setPermissionMode: async () => undefined,
+        setModel: async (model: string) => {
+          if (model === 'claude-broken-1') throw new Error('refused');
+        },
+        setHandlers() {},
+        close() {},
+      };
+      const settingView = view as unknown as { changeMode(mode: string): Promise<void>; changeModel(value: string): Promise<void> };
+      await settingView.changeMode('acceptEdits');
+      await settingView.changeModel('claude-sonnet-5-5');
+      await settingView.changeModel('claude-broken-1');
+      const settingLines = lines();
+      const planColoured = [...root.querySelectorAll('.vc-mode-line')].map((el) => el.hasClass('is-plan'));
+      modeChat.session = null;
+      view.newChat();
       plugin.settings.permissionMode = settingsMode;
       modeChat.mode = modeWas;
       (view as unknown as { populateModeSelect(): void }).populateModeSelect();
@@ -3512,6 +3530,8 @@ async function main(): Promise<void> {
         !afterNew.cue &&
         !afterNew.tinted &&
         keptPlan === 'plan' &&
+        JSON.stringify(settingLines) === JSON.stringify(['Permission mode: Accept edits', 'Model: Sonnet 5.5']) &&
+        JSON.stringify(planColoured) === '[false,false]' &&
         !left.cue &&
         !left.tinted &&
         JSON.stringify(left.changes) === JSON.stringify(['auto']) &&
@@ -3522,7 +3542,7 @@ async function main(): Promise<void> {
             'Plan mode: Claude plans, and changes nothing until you approve',
             'Left plan mode · back to Auto (classifier)',
           ]);
-      console.log(`plan mode cues: entered ${JSON.stringify(entered)}; left ${JSON.stringify(left)}; new chat ${JSON.stringify(afterNew)}, with Plan as the default ${keptPlan}; lines ${JSON.stringify(drawn)} -> ${modeOk}`);
+      console.log(`plan mode cues: entered ${JSON.stringify(entered)}; left ${JSON.stringify(left)}; new chat ${JSON.stringify(afterNew)}, with Plan as the default ${keptPlan}; lines ${JSON.stringify(drawn)}; other settings ${JSON.stringify(settingLines)} -> ${modeOk}`);
       if (!modeOk) process.exitCode = 1;
     }
 
