@@ -115,6 +115,8 @@ const TURN_PROMPT_MAX_BYTES = 8 * 1024 * 1024;
 const MAX_NOTE_CHARS = 100_000;
 /** A message you send that is longer than this is shown folded to its first lines. */
 const LONG_MESSAGE_LINES = 8;
+/** How a modifier click is named in tooltips, as on this platform. */
+const MOD_CLICK = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
 const LONG_MESSAGE_CHARS = 700;
 const MAX_PREVIEW_LINES = 60;
 const PLAN_USAGE_INTERVAL_MS = 60_000;
@@ -478,6 +480,8 @@ export class ChatView extends ItemView {
   private mentionKey = '';
   /** A short message under the header (see flashHint), and when it goes. */
   private hintEl: HTMLElement | null = null;
+  /** The memo saves under way, one after another (see saveMemo). */
+  private memoSaves: Promise<unknown> = Promise.resolve();
   private hintTimer: number | null = null;
   /** A Memos table to bring to the chat on screen, once its title and id are both set (see setChatTitle). */
   private memosTimer: number | null = null;
@@ -656,7 +660,7 @@ export class ChatView extends ItemView {
     setIcon(this.phoneButton, 'smartphone');
     this.registerDomEvent(this.phoneButton, 'click', (evt) => this.onPhoneClick(evt));
     this.updatePhoneButton();
-    const chatHint = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
+    const chatHint = MOD_CLICK;
     const memosButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `All memos, in a table (${chatHint}: this chat's)` } });
     setIcon(memosButton, 'sticky-note');
     this.registerDomEvent(memosButton, 'click', (evt) => {
@@ -676,7 +680,7 @@ export class ChatView extends ItemView {
     this.historyButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Chat history' } });
     setIcon(this.historyButton, 'history');
     this.registerDomEvent(this.historyButton, 'click', () => void this.openHistory());
-    const newTabHint = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
+    const newTabHint = MOD_CLICK;
     const newButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `New chat (${newTabHint}: in a new tab)` } });
     setIcon(newButton, 'square-pen');
     this.registerDomEvent(newButton, 'contextmenu', (evt) => {
@@ -769,11 +773,10 @@ export class ChatView extends ItemView {
     this.sideButton.hide();
     this.registerDomEvent(this.sideButton, 'mousedown', (evt) => evt.preventDefault());
     this.registerDomEvent(this.sideButton, 'click', () => this.openSideChat());
-    const quickHint = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
     this.memoButton = messagesWrap.createEl('button', {
       cls: 'vc-quote-button vc-side-button vc-memo-button',
       text: 'Memo',
-      attr: { 'aria-label': `Save the selected passages as a memo (${quickHint}: at once, as a bookmark)` },
+      attr: { 'aria-label': `Save the selected passages as a memo (${MOD_CLICK}: at once, as a bookmark)` },
     });
     this.memoButton.hide();
     this.registerDomEvent(this.memoButton, 'mousedown', (evt) => evt.preventDefault());
@@ -2387,7 +2390,7 @@ export class ChatView extends ItemView {
       const insert = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Insert into note' } });
       setIcon(insert, 'file-input');
       insert.addEventListener('click', (evt) => this.onInsertClick(evt, this.replyMarkdown(textEls)));
-      const memo = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `Save as a memo (${Platform.isMacOS ? '⌘-click' : 'Ctrl-click'}: at once, as a bookmark)` } });
+      const memo = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `Save as a memo (${MOD_CLICK}: at once, as a bookmark)` } });
       setIcon(memo, 'sticky-note');
       memo.addEventListener('click', (evt) => {
         const passages = this.replyPassages(turn, textEls);
@@ -3078,7 +3081,11 @@ export class ChatView extends ItemView {
       bubble.remove();
       this.pending.delete(uuid);
       const here = session === this.session;
-      if (here) this.restoreUnsent(text, attachments, pathOnly);
+      if (here) {
+        this.restoreUnsent(text, attachments, pathOnly);
+        // A new chat's opening lines, taken away for the message, come back.
+        if (this.messagesEl.childElementCount === 0) this.renderWelcome();
+      }
       new Notice(`The message was not sent: ${errorText(error)}.${here ? ' It is back in the input.' : ''}`);
       return;
     }
@@ -5396,8 +5403,12 @@ export class ChatView extends ItemView {
   private memoTitleProblem(title: string): string | null {
     const name = memoNoteName(title);
     if (!name) return 'Give the memo a title with letters or numbers in it.';
-    const taken = this.app.metadataCache.getFirstLinkpathDest(name, '');
-    return taken ? `A note named “${name}” already exists: add the passages to it, or give the memo another title.` : null;
+    return this.noteNameTaken(name) ? `A note named “${name}” already exists: add the passages to it, or give the memo another title.` : null;
+  }
+
+  /** Whether a note is called `name` anywhere in the vault: note names are unique, and a link to a memo must find it. */
+  private noteNameTaken(name: string): boolean {
+    return this.app.metadataCache.getFirstLinkpathDest(name, '') !== null;
   }
 
   /**
@@ -5405,10 +5416,17 @@ export class ChatView extends ItemView {
    * links the note to the chat. A new memo with no title is a bookmark: titled by the passages' first
    * words, a name no note has. `quiet`: no notice (the caller says it was saved).
    */
-  async saveMemo(choice: MemoChoice, sources: MemoSources, quiet = false): Promise<TFile | null> {
+  saveMemo(choice: MemoChoice, sources: MemoSources, quiet = false): Promise<TFile | null> {
+    // One at a time: two bookmarks of one passage saved together would otherwise take the same name.
+    const saved = this.memoSaves.then(() => this.writeMemo(choice, sources, quiet));
+    this.memoSaves = saved;
+    return saved;
+  }
+
+  private async writeMemo(choice: MemoChoice, sources: MemoSources, quiet: boolean): Promise<TFile | null> {
     if (!choice.memo && !choice.title.trim()) {
       const stamp = formatDate(Date.now()).replace(':', '');
-      const title = freeMemoTitle(quickMemoTitle(sources.passages), stamp, (name) => this.app.metadataCache.getFirstLinkpathDest(name, '') !== null);
+      const title = freeMemoTitle(quickMemoTitle(sources.passages), stamp, (name) => this.noteNameTaken(name));
       choice = { ...choice, title, tags: cleanTags([...choice.tags, BOOKMARK_TAG]) };
     }
     try {
@@ -5461,7 +5479,10 @@ export class ChatView extends ItemView {
    * it, drawn back to if it is earlier; else `needle` found with Find. A notice when neither is there.
    */
   async findPassage(needle: string, message?: string): Promise<void> {
+    const generation = this.chatGeneration;
     if (message && (await this.goToMessage(message, needle))) return;
+    // Another chat opened while earlier turns were drawn: the passage is not looked for in it.
+    if (generation !== this.chatGeneration) return;
     if (needle && (await this.findBar.find(needle))) return;
     new Notice('The passage was not found in this chat: it may have been compacted away. It is kept in the memo note.');
   }

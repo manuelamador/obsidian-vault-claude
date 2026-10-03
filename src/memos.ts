@@ -48,9 +48,17 @@ export const PROTOCOL_ACTION = 'vault-claude';
 export function chatLink(params: { vault: string; chat: string; msg?: string; find?: string; quote?: string }): string {
   const query = Object.entries(params)
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== '')
-    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .map(([key, value]) => `${key}=${linkValue(value)}`)
     .join('&');
   return `obsidian://${PROTOCOL_ACTION}?${query}`;
+}
+
+/**
+ * `value` encoded for a link written in Markdown: as encodeURIComponent, and its parentheses too,
+ * since one left unmatched (words cut inside one, an interval like [0,1)) would end the link early.
+ */
+function linkValue(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 /** `text` as a Markdown blockquote, every line marked, blank ones included. */
@@ -159,16 +167,8 @@ export function memoNoteName(title: string): string {
  */
 export function firstPassageTarget(note: string, chatId: string): { msg?: string; find?: string } | null {
   for (const match of note.matchAll(/obsidian:\/\/vault-claude\?([^)\s]+)/g)) {
-    const params = new Map<string, string>();
-    for (const pair of match[1].split('&')) {
-      const at = pair.indexOf('=');
-      if (at === -1) continue;
-      try {
-        params.set(pair.slice(0, at), decodeURIComponent(pair.slice(at + 1)));
-      } catch {
-        // A value garbled by hand: the rest of the link may still do.
-      }
-    }
+    // `+` is never a space here: chatLink writes it as %2B.
+    const params = new URLSearchParams(match[1]);
     if (params.get('chat') !== chatId || params.has('quote')) continue;
     const msg = params.get('msg');
     const find = params.get('find');
@@ -243,6 +243,9 @@ export function readMemoSuggestion(reply: string): { title: string; description:
   }
 }
 
+/** How the name of the view of one chat's memos starts (see chatMemosView, isChatViewName). */
+const CHAT_VIEW_PREFIX = 'Chat: ';
+
 /**
  * The name of the Memos base's view of one chat's memos, which the panel opens (see memoBaseYaml):
  * the chat's title, so that a table left open still says whose memos it lists after the panel moves
@@ -250,7 +253,7 @@ export function readMemoSuggestion(reply: string): { title: string; description:
  */
 export function chatMemosView(chatTitle: string): string {
   const title = chatTitle.replace(/[#|[\]^\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
-  return `Chat: ${title || 'untitled'}`;
+  return `${CHAT_VIEW_PREFIX}${title || 'untitled'}`;
 }
 
 /** The name of the Memos base's view of every memo. */
@@ -271,8 +274,10 @@ const DONE_VIEW = 'Done';
  * ones included.
  */
 function chatLinksFormula(vault: string): string {
-  // The memo's path goes with it, so that the chat opens at the memo's first passage from it.
-  return `${CHAT_LINKS_START}${encodeURIComponent(vault)}&chat=" + value + "&memo=" + file.path, chats[index]))`;
+  // The memo's name goes with it, so that the chat opens at the memo's first passage from it: its
+  // name, not its path, as a folder's name may hold what a link's query cannot (a formula cannot
+  // encode it), and the names of memos leave that out (see memoNoteName).
+  return `${CHAT_LINKS_START}${encodeURIComponent(vault)}&chat=" + value + "&memo=" + file.name, chats[index]))`;
 }
 
 /** How the plugin's chat-link formula starts, by which a formula of its own is told from one of the user's. */
@@ -368,7 +373,7 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
 
 /** Whether a view's name is that of a view of one chat's memos, as the plugin names them (see chatMemosView). */
 export function isChatViewName(name: unknown): boolean {
-  return typeof name === 'string' && name.startsWith('Chat: ');
+  return typeof name === 'string' && name.startsWith(CHAT_VIEW_PREFIX);
 }
 
 /** Whether `value`, part of a view's filters, holds the filter of one chat's memos. */
@@ -424,7 +429,7 @@ function addDoneBoxes(base: Record<string, unknown>): Record<string, unknown> {
     const record = view as Record<string, unknown>;
     const order = Array.isArray(record.order) ? record.order.flatMap((column) => (column === 'send' ? ['send', 'done'] : [column])) : record.order;
     const and = (record.filters as { and?: unknown } | undefined)?.and;
-    const ours = Array.isArray(and) && and.includes('type == "memo"');
+    const ours = Array.isArray(and) && and.includes('type == "memo"') && !and.includes(NOT_DONE);
     return { ...record, order, ...(ours ? { filters: { ...(record.filters as object), and: [...and, NOT_DONE] } } : {}) };
   });
   views.push({ type: 'table', name: DONE_VIEW, filters: { and: ['type == "memo"', 'done == true'] }, order: BASE_COLUMNS, sort: [{ property: 'updated', direction: 'DESC' }] });

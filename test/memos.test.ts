@@ -101,7 +101,7 @@ test("the Memos base opens on the chat's memos, then all, those about the note i
   assert.ok(base.includes('        - "file.hasLink(this.file)"'));
   // Memos wherever they are, by their type; their chats as links that open them.
   assert.ok(!base.includes('inFolder'));
-  assert.ok(base.startsWith('formulas:\n  chat: "claude_chats.map(link(\\"obsidian://vault-claude?vault=My%20vault&chat=\\" + value + \\"&memo=\\" + file.path, chats[index]))"'));
+  assert.ok(base.startsWith('formulas:\n  chat: "claude_chats.map(link(\\"obsidian://vault-claude?vault=My%20vault&chat=\\" + value + \\"&memo=\\" + file.name, chats[index]))"'));
   assert.ok(base.includes('      - formula.chat'));
 });
 
@@ -123,8 +123,10 @@ test("turning the base to another chat changes its chat view only, and keeps wha
   assert.ok(turned.formulas.chat.startsWith('claude_chats.map(link('));
   assert.deepEqual(turned.views[0].order, ['file.name']);
   // A base whose chat view was removed gets one again, first; something else is not a base.
-  const without = retargetMemoBase({ views: [{ name: 'Only mine', order: ['chats'] }] }, 'chat-3', 'Third', 'V') as { views: { name: string; order?: string[] }[] };
+  const without = retargetMemoBase({ views: [{ name: 'Only mine', order: ['chats'] }] }, 'chat-3', 'Third', 'V') as { views: { name: string; order?: string[]; filters?: { and: string[] } }[] };
   assert.deepEqual(without.views.map((view) => view.name), ['Chat: Third', 'Only mine', 'Done']);
+  // The chat view it gets leaves finished memos out once, not twice.
+  assert.equal(without.views[0].filters?.and.filter((filter) => filter === 'done != true').length, 1);
   assert.deepEqual(without.views[1].order, ['formula.chat']);
   assert.equal(retargetMemoBase('not a base', 'c', 't', 'V'), null);
 });
@@ -288,7 +290,7 @@ test("a link from the table finds the memo's first passage from its chat", () =>
   assert.ok(withMessage.includes('[Go to the passage](obsidian://vault-claude?vault=Obsidian&chat=chat-1&msg=uuid-7%232&find=A%20possible%20mechanism%3A)'));
   assert.deepEqual(firstPassageTarget(withMessage, 'chat-1'), { msg: 'uuid-7#2', find: 'A possible mechanism:' });
   const base = memoBaseYaml('chat-1', 'Debt model', 'V');
-  assert.ok(base.includes('+ \\"&memo=\\" + file.path, chats[index]'));
+  assert.ok(base.includes('+ \\"&memo=\\" + file.name, chats[index]'));
 });
 
 test("a bookmark's title: its first words, from the first passage with any; a name taken gets the date and time", () => {
@@ -299,4 +301,11 @@ test("a bookmark's title: its first words, from the first passage with any; a na
   assert.equal(freeMemoTitle('New', '2026-10-03 1432', (name) => taken.has(name)), 'New');
   assert.equal(freeMemoTitle('Price', '2026-10-03 1432', (name) => taken.has(name)), 'Price 2026-10-03 1432 2');
   assert.equal(freeMemoTitle('Price', '2026-10-03 1433', (name) => taken.has(name)), 'Price 2026-10-03 1433');
+});
+
+test('a link keeps working when its words hold an unmatched parenthesis', () => {
+  const link = chatLink({ vault: 'V', chat: 'c', msg: 'u#1', find: 'His CV (fetched 2026' });
+  assert.equal(link, 'obsidian://vault-claude?vault=V&chat=c&msg=u%231&find=His%20CV%20%28fetched%202026');
+  const note = `**Claude** · [Go to the passage](${link}) · [Continue](${chatLink({ vault: 'V', chat: 'c', quote: 'on [0,1)' })})`;
+  assert.deepEqual(firstPassageTarget(note, 'c'), { msg: 'u#1', find: 'His CV (fetched 2026' });
 });

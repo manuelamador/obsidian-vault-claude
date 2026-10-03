@@ -1150,13 +1150,13 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * A link from a memo note (see memos.ts chatLink) or the Memos table: opens its chat, then finds the
-   * passage in it (`find`), quotes it in the input to carry on from it (`quote`), or finds the memo's
-   * first passage from that chat (`memo`, the memo's path).
+   * A link from a memo note (see memos.ts chatLink) or the Memos table: opens its chat, then goes to
+   * the passage's message (`msg`) and its words in it (`find`; alone, searched for in the chat),
+   * quotes it in the input to carry on from it (`quote`), or goes to the memo's first passage from
+   * that chat (`memo`, the memo's name, or its path in a table written before).
    */
   private async openChatLink(params: Record<string, string>): Promise<void> {
     const id = params.chat;
-    log('chat link', { chat: id, msg: params.msg !== undefined, find: params.find !== undefined, quote: params.quote !== undefined, memo: params.memo !== undefined });
     if (!id) return;
     const title = this.chats.find((chat) => chat.id === id)?.title ?? this.lastListing?.find((item) => item.id === id)?.title ?? 'Chat';
     const view = await this.openChatById(id, title);
@@ -1168,7 +1168,7 @@ export default class VaultClaudePlugin extends Plugin {
     else if (params.msg || params.find) await view.findPassage(params.find ?? '', params.msg);
     else if (params.memo) {
       // From the Memos table: the memo's first passage from this chat.
-      const memo = this.app.vault.getAbstractFileByPath(params.memo);
+      const memo = this.app.vault.getAbstractFileByPath(params.memo) ?? this.app.metadataCache.getFirstLinkpathDest(params.memo, '');
       const target = memo instanceof TFile ? firstPassageTarget(await this.app.vault.cachedRead(memo), id) : null;
       if (target) await view.findPassage(target.find ?? '', target.msg);
     }
