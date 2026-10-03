@@ -608,17 +608,20 @@ export async function deleteSessionIfAny(id: string, dir: string): Promise<void>
 
 /**
  * Deletes the sessions `ids`, except those in `keep`, trying each; one with no file is passed over,
- * and one that fails to go is logged and passed over.
+ * and one that fails to go is logged and passed over. Returns those that failed, to try again.
  */
-export async function deleteSessions(ids: string[], dir: string, keep: Set<string>, remove = deleteSessionIfAny): Promise<void> {
+export async function deleteSessions(ids: string[], dir: string, keep: Set<string>, remove = deleteSessionIfAny): Promise<string[]> {
+  const failed: string[] = [];
   for (const id of ids) {
     if (keep.has(id)) continue;
     try {
       await remove(id, dir);
     } catch (error) {
       log('a session was not deleted', id, error);
+      failed.push(id);
     }
   }
+  return failed;
 }
 
 /**

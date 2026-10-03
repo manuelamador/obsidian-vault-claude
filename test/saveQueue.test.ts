@@ -53,3 +53,15 @@ test('a failed save does not stop the next', async () => {
   await p.saveSettings();
   assert.equal(calls, 2);
 });
+
+test('flushing waits for a save already under way', async () => {
+  const p = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
+  let written = false;
+  p.saveData = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    written = true;
+  };
+  void p.saveSettings();
+  await p.flushSave();
+  assert.equal(written, true);
+});

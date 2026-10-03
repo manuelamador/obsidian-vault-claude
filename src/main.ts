@@ -139,6 +139,8 @@ export default class VaultClaudePlugin extends Plugin {
   private readonly unlisted = new Set<string>();
   /** Processes of closed chats still exiting, by session id (see processEnding). */
   private readonly exiting = new Map<string, Promise<void>>();
+  /** The hidden-path patterns last compiled, with their test (see isHiddenPath). */
+  private hidden: { patterns: string; test: (path: string) => boolean } | null = null;
   /** Each chat's text for the history's search, with the stamp of the file it was read from (see chatSearchText). */
   private readonly searchTexts = new Map<string, { stamp: string; text: string }>();
   /** Search texts being read, by chat id, so that two histories open one after the other read a chat once. */
@@ -495,9 +497,9 @@ export default class VaultClaudePlugin extends Plugin {
     void this.flushSave();
   }
 
-  /** Makes a save still waiting (see saveSoon) at once; nothing when none is waiting. */
+  /** Makes a save still waiting (see saveSoon) at once; resolves once the saves under way are written. */
   flushSave(): Promise<void> {
-    if (this.saveTimer === null) return Promise.resolve();
+    if (this.saveTimer === null) return this.saving;
     clearTimeout(this.saveTimer);
     this.saveTimer = null;
     return this.saveSettings();
@@ -557,9 +559,7 @@ export default class VaultClaudePlugin extends Plugin {
       new Notice(`Phone access stopped: ${error ?? 'unknown error'}`, 10_000);
     }
     this.lastRemoteState = state;
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof ChatView) leaf.view.updatePhoneButton();
-    }
+    for (const view of this.chatViews()) view.updatePhoneButton();
   }
 
   vaultRoot(): string | null {
@@ -600,22 +600,16 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   refreshPanelMargins(): void {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof ChatView) leaf.view.applyPanelMargin();
-    }
+    for (const view of this.chatViews()) view.applyPanelMargin();
   }
 
   /** Redraws the opening lines of every empty chat, after a setting changed what they say. */
   refreshWelcomes(): void {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof ChatView) leaf.view.refreshWelcome();
-    }
+    for (const view of this.chatViews()) view.refreshWelcome();
   }
 
   refreshModeMenus(): void {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof ChatView) leaf.view.populateModeSelect();
-    }
+    for (const view of this.chatViews()) view.populateModeSelect();
   }
 
   /** How long the scratch chat may be left alone before it starts over, in milliseconds (the setting). */
@@ -639,9 +633,7 @@ export default class VaultClaudePlugin extends Plugin {
   async setScratchIdle(hours: number): Promise<void> {
     this.settings.scratchIdleHours = hours;
     await this.saveSettings();
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof ChatView) leaf.view.refreshScratchLines();
-    }
+    for (const view of this.chatViews()) view.refreshScratchLines();
   }
 
   /** The session a panel started for the scratch chat; it is not added to the history list. */
@@ -676,9 +668,7 @@ export default class VaultClaudePlugin extends Plugin {
     }
     // Moving or deleting a folder is one event per file: saved once for them all.
     if (changed) this.saveSoon();
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof ChatView) leaf.view.followNote(from, to);
-    }
+    for (const view of this.chatViews()) view.followNote(from, to);
   }
 
   /** Marks session `id` as still ending; the function returned says it has ended. */
@@ -730,12 +720,12 @@ export default class VaultClaudePlugin extends Plugin {
     void this.saveSettings();
   }
 
-  /** Deletes the side chats' sessions `ids`, left from the last run, and forgets them. */
+  /** Deletes the side chats' sessions `ids`, left from the last run, and forgets them; one that failed to go is tried again at the next start. */
   private async sweepSideSessions(ids: string[]): Promise<void> {
     const dir = this.vaultRoot();
     if (!dir || ids.length === 0) return;
-    await deleteSessions(ids, dir, new Set(this.chats.map((chat) => chat.id)));
-    this.sideSessions = this.sideSessions.filter((id) => !ids.includes(id));
+    const failed = await deleteSessions(ids, dir, new Set(this.chats.map((chat) => chat.id)));
+    this.sideSessions = this.sideSessions.filter((id) => !ids.includes(id) || failed.includes(id));
     await this.saveSettings();
   }
 
@@ -802,9 +792,7 @@ export default class VaultClaudePlugin extends Plugin {
    * the chat list, rather than leaving it open with nowhere to reach it again.
    */
   async stopScratch(): Promise<void> {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof ChatView && leaf.view.isScratchChat()) leaf.view.keepScratchAsChat();
-    }
+    for (const view of this.chatViews()) if (view.isScratchChat()) view.keepScratchAsChat();
     this.scratch = null;
     await this.saveSettings();
   }
@@ -823,7 +811,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Records that a chat changed a note, so the note can offer it later. */
   /** `promote`: an edit made now, which makes the chat the note's newest (see linkNote); saved only when the index changed. */
   linkNoteChat(path: string, chatId: string, promote = true): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path) || !this.mayLink(path, chatId, promote)) return;
+    if (this.isHiddenPath(path) || !this.onDisk(path) || !this.mayLink(path, chatId, promote)) return;
     // Links come in bursts (a turn editing many notes, an older chat reopened): saved once for them.
     if (linkNote(this.noteChats, path, chatId, promote)) this.saveSoon();
   }
@@ -846,13 +834,13 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Records that a note went with a message in a chat: as the attached note, or mentioned. */
   linkNoteRef(path: string, chatId: string): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path) || !this.mayLink(path, chatId, true)) return;
+    if (this.isHiddenPath(path) || !this.onDisk(path) || !this.mayLink(path, chatId, true)) return;
     if (linkNote(this.noteRefs, path, chatId)) this.saveSoon();
   }
 
   /** Records that a chat mentioned a note (see ChatView.recordMentions), for the history's notes view. */
   linkNoteMention(path: string, chatId: string): void {
-    if (hiddenPaths(this.settings.hiddenNotePaths)(path) || !this.onDisk(path) || !this.mayLink(path, chatId, false)) return;
+    if (this.isHiddenPath(path) || !this.onDisk(path) || !this.mayLink(path, chatId, false)) return;
     if (linkNote(this.noteMentions, path, chatId, false)) this.saveSoon();
   }
 
@@ -998,6 +986,13 @@ export default class VaultClaudePlugin extends Plugin {
     view?.mentionItems(items);
   }
 
+  /** Whether `path` is left out of the notes a chat lists (see hiddenPaths); the patterns compiled once for each value of the setting. */
+  isHiddenPath(path: string): boolean {
+    const patterns = this.settings.hiddenNotePaths;
+    if (this.hidden?.patterns !== patterns) this.hidden = { patterns, test: hiddenPaths(patterns) };
+    return this.hidden.test(path);
+  }
+
   private chatViews(): ChatView[] {
     return this.app.workspace
       .getLeavesOfType(VIEW_TYPE)
@@ -1067,8 +1062,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   firstChatView(): ChatView | null {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    return view instanceof ChatView ? view : null;
+    return this.chatViews()[0] ?? null;
   }
 
   /** Pins or unpins a chat in the history; returns whether it is pinned afterwards. */
@@ -1136,9 +1130,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** A user-chosen title: the panel's record, Claude Code's record of the session, and any panel showing it. */
   async renameChatTitle(id: string, title: string): Promise<void> {
     this.renameChat(id, title);
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof ChatView) leaf.view.onChatRenamed(id, title);
-    }
+    for (const view of this.chatViews()) view.onChatRenamed(id, title);
     const dir = this.vaultRoot();
     if (!dir) return;
     try {
