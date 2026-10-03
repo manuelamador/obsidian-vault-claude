@@ -466,12 +466,20 @@ async function main(): Promise<void> {
       type(typed);
       const shown = chips();
       const sentWhole = String((await more.buildContent(typed, [])).content);
-      (root.querySelector('.vc-tray .vc-chip .vc-chip-remove') as HTMLElement).click();
+      // No × on a mention's chip: only editing the text takes the mention away.
+      const removers = root.querySelectorAll('.vc-tray .vc-chip-remove').length;
+      (root.querySelector('.vc-tray .vc-chip.is-toggle') as HTMLElement).click();
       const afterRemove = chips();
       const pathOnly = new Set(chipView.pathOnlyMentions);
       const sentPath = String((await (view as unknown as { buildContent(t: string, a: unknown[], p: Set<string>): Promise<{ content: unknown }> }).buildContent(typed, [], pathOnly)).content);
-      (root.querySelector('.vc-tray .vc-chip.is-path-only') as HTMLElement).click();
+      (root.querySelector('.vc-tray .vc-chip.is-toggle') as HTMLElement).click();
       const afterClick = chips();
+      type('');
+      // A mention put in from code (the @ picker, a note dropped on the input) shows its chip at once.
+      const attachVault = view as unknown as { attachVaultFile(file: unknown): Promise<void> };
+      // Its link text as the stub's metadata cache resolves it.
+      await attachVault.attachVaultFile(Object.assign(new stub.TFile(), { path: 'New.md', basename: 'New.md', extension: 'md', stat: { size: 9600 } }));
+      const fromCode = chips();
       type('');
       const cleared = { chips: chips().length, pathOnly: chipView.pathOnlyMentions.size, shown: (root.querySelector('.vc-tray') as HTMLElement).isShown() };
       notesOnDisk.delete('New.md');
@@ -479,6 +487,8 @@ async function main(): Promise<void> {
       chipView.renderTray();
       const chipsOk =
         JSON.stringify(shown) === JSON.stringify(['New ~2,400 tokens', 'Notes/ path only', 'paper.pdf path only']) &&
+        removers === 0 &&
+        JSON.stringify(fromCode) === JSON.stringify(['New ~2,400 tokens']) &&
         sentWhole.includes('<note path="New.md">') &&
         afterRemove[0] === 'New path only' &&
         sentPath.includes('Mentioned note: /tmp/New.md') &&
@@ -487,8 +497,32 @@ async function main(): Promise<void> {
         cleared.chips === 0 &&
         cleared.pathOnly === 0 &&
         !cleared.shown;
-      console.log(`mention chips: ${JSON.stringify(shown)}; × ${afterRemove[0]} (sends the path ${sentPath.includes('Mentioned note:')}); click ${afterClick[0]}; cleared ${JSON.stringify(cleared)} -> ${chipsOk}`);
+      console.log(`mention chips: ${JSON.stringify(shown)}, × on them ${removers}; click ${afterRemove[0]} (sends the path ${sentPath.includes('Mentioned note:')}); click again ${afterClick[0]}; put in from code ${JSON.stringify(fromCode)}; cleared ${JSON.stringify(cleared)} -> ${chipsOk}`);
       if (!chipsOk) process.exitCode = 1;
+    }
+    // Undo in the input stays in the chat on screen: it stops at the text the chat came back with, and
+    // redo redoes only what was undone since.
+    {
+      const undoView = view as unknown as { inputEl: HTMLTextAreaElement; setUndoFloor(): void };
+      const was = undoView.inputEl.value;
+      const history = (inputType: string) => {
+        const event = new dom.window.InputEvent('beforeinput', { inputType, cancelable: true });
+        undoView.inputEl.dispatchEvent(event);
+        return event.defaultPrevented ? 'stopped' : 'allowed';
+      };
+      undoView.inputEl.value = 'the draft of this chat';
+      undoView.setUndoFloor();
+      const atFloor = [history('historyUndo'), history('historyRedo')];
+      history('insertText');
+      undoView.inputEl.value = 'the draft of this chat, typed on';
+      const afterTyping = history('historyUndo');
+      undoView.inputEl.value = 'the draft of this chat';
+      const backAtFloor = [history('historyRedo'), history('historyRedo'), history('historyUndo')];
+      undoView.inputEl.value = was;
+      undoView.setUndoFloor();
+      const undoOk = JSON.stringify(atFloor) === '["stopped","stopped"]' && afterTyping === 'allowed' && JSON.stringify(backAtFloor) === '["allowed","stopped","stopped"]';
+      console.log(`undo within the chat: at its text ${atFloor}; after typing ${afterTyping}; back at its text, redo, redo, undo ${backAtFloor} -> ${undoOk}`);
+      if (!undoOk) process.exitCode = 1;
     }
 
 
