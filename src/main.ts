@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { FileSystemAdapter, Menu, Notice, Plugin, TFile, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, Menu, Notice, Plugin, TFile, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
 import { join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
@@ -185,7 +185,7 @@ export default class VaultClaudePlugin extends Plugin {
       id: 'inline-edit',
       name: 'Edit selection with Claude',
       editorCallback: (editor, ctx) => {
-        if (ctx.file) void this.openInlineEdit(editor, ctx.file);
+        if (ctx.file) void this.openInlineEdit(editor, ctx.file, ctx);
       },
     });
     this.addCommand({
@@ -343,7 +343,7 @@ export default class VaultClaudePlugin extends Plugin {
           item
             .setTitle('Edit with Claude')
             .setIcon('wand')
-            .onClick(() => void this.openInlineEdit(editor, file)),
+            .onClick(() => void this.openInlineEdit(editor, file, info)),
         );
         menu.addItem((item) =>
           item
@@ -1343,7 +1343,8 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** "Edit selection with Claude" for the editor's selection, or for writing at the cursor. */
-  async openInlineEdit(editor: Editor, file: TFile): Promise<void> {
+  /** `owner`: what holds the editor (a note's tab, a canvas card, a hover preview), by which the edit finds its note again (see InlineEditModal.accept). */
+  async openInlineEdit(editor: Editor, file: TFile, owner: MarkdownFileInfo): Promise<void> {
     const launch = this.launchOrNotice();
     if (!launch) return;
     const from = editor.getCursor('from');
@@ -1354,6 +1355,7 @@ export default class VaultClaudePlugin extends Plugin {
     const target = {
       editor,
       file,
+      owner,
       from,
       to,
       original: editor.getRange(from, to),

@@ -1,4 +1,4 @@
-import { MarkdownView, Modal, Notice, Platform, type App, type Editor, type EditorPosition, type TFile } from 'obsidian';
+import { Modal, Notice, Platform, type App, type Editor, type EditorPosition, type MarkdownFileInfo, type TFile } from 'obsidian';
 import { cleanReplacement, inlineEditPrompt } from './inlineEditPrompt';
 import { errorText, log } from './log';
 import { wordDiff } from './wordDiff';
@@ -6,6 +6,8 @@ import { wordDiff } from './wordDiff';
 export interface InlineEditTarget {
   editor: Editor;
   file: TFile;
+  /** What holds the editor: a note's tab, a canvas card, a hover preview. */
+  owner: MarkdownFileInfo;
   from: EditorPosition;
   to: EditorPosition;
   /** The selected text; empty when writing at the cursor. */
@@ -140,12 +142,12 @@ export class InlineEditModal extends Modal {
    */
   private accept(): void {
     if (this.replacement === null) return;
-    const { editor, file, from, to, original, before, after } = this.target;
+    const { editor, file, owner, from, to, original, before, after } = this.target;
     const near = 200;
-    // The editor still shows the note the edit was asked for: one turned to another note with the
-    // same text around the selection must not take it.
-    const sameNote = this.app.workspace.getLeavesOfType('markdown').some((leaf) => leaf.view instanceof MarkdownView && leaf.view.editor === editor && leaf.view.file?.path === file.path);
-    if (!sameNote) {
+    // What holds the editor still shows the note the edit was asked for, wherever it is (a tab, a
+    // canvas card, a hover preview): one turned to another note with the same text around the
+    // selection must not take it.
+    if (owner.editor !== editor || owner.file?.path !== file.path) {
       new Notice('The note is no longer open where the edit was asked for; nothing was replaced.');
       return;
     }

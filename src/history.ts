@@ -357,10 +357,19 @@ export function isPlanFile(file: string): boolean {
       return where;
     }
   };
-  const inFolder = real(path.dirname(path.resolve(file.normalize('NFC'))));
-  const plans = real(path.join(configDir, 'plans'));
+  // Every file a chat changes is asked about, a chat opened from the history replaying them all:
+  // the folder's real path is looked up once for each config folder, and the file's only when its
+  // folder is called `plans`.
+  if (plansFolder?.config !== configDir) plansFolder = { config: configDir, real: real(path.join(configDir, 'plans')) };
+  const folder = path.dirname(path.resolve(file.normalize('NFC')));
+  if (path.basename(folder).toLowerCase() !== 'plans') return false;
+  const inFolder = real(folder);
+  const plans = plansFolder.real;
   return process.platform === 'win32' ? inFolder.toLowerCase() === plans.toLowerCase() : inFolder === plans;
 }
+
+/** The real path of Claude Code's plans folder, for the config folder it was found for (see isPlanFile). */
+let plansFolder: { config: string; real: string } | null = null;
 
 /** Where Claude Code keeps a session: `<config>/projects/<projectFolder>/<id>.jsonl`. */
 function sessionFile(id: string, dir: string): string {

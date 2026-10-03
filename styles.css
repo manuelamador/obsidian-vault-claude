@@ -967,6 +967,21 @@
 }
 
 /*
+ * Headings in the panel a step smaller than a note's, with less room above them: a reply or a plan
+ * in a narrow panel is not a page. Set through the theme's own heading variables, so a theme that
+ * sizes headings some other way keeps its sizes.
+ */
+.vc-markdown.markdown-rendered {
+  --h1-size: 1.3em;
+  --h2-size: 1.18em;
+  --h3-size: 1.08em;
+  --h4-size: 1em;
+  --h5-size: 1em;
+  --h6-size: 1em;
+  --heading-spacing: calc(var(--p-spacing) * 1.25);
+}
+
+/*
  * Rendered Markdown carries Obsidian's note class (see renderMarkdown), which draws tables as notes
  * do, in the theme's style. Two things differ here: a table keeps to the panel's text size rather
  * than a note's, and one wider than the panel scrolls, its words kept whole.
@@ -1028,20 +1043,24 @@
   margin-top: var(--size-4-1);
 }
 
+/* A card waiting on you (an approval, a plan, questions): one framed box, lifted by a light shadow,
+   with its buttons inside. */
 .vc-permission {
   display: flex;
   flex-direction: column;
   gap: var(--size-4-2);
-  padding: var(--size-4-2) var(--size-4-3);
+  padding: var(--size-4-3) var(--size-4-4);
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-  background: var(--background-secondary);
+  border-radius: var(--radius-l);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
 }
 
 .vc-permission.is-decided {
   padding: 0;
   border: none;
   background: none;
+  box-shadow: none;
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
@@ -1065,14 +1084,10 @@
   gap: var(--size-4-2);
 }
 
-/* A plan to approve, edit in a note, or send back with feedback (see ChatView.renderPlanCard). The
-   plan itself sits on a panel tinted with the accent colour, as expanded steps do, so it stands
-   apart from the chat in any theme. */
+/* A plan to approve, edit in a note, or send back with feedback (see ChatView.renderPlanCard): the
+   card's frame sets it apart, the plan inside it as plain text. */
 .vc-plan-card .vc-plan {
-  padding: var(--size-4-2) var(--size-4-4);
-  border-left: 2px solid var(--interactive-accent);
-  border-radius: var(--radius-s);
-  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+  margin-bottom: var(--size-4-1);
 }
 
 .vc-plan-feedback {

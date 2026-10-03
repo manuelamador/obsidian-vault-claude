@@ -251,6 +251,12 @@ function isStep(el: HTMLElement): boolean {
   return el.hasClass('vc-tools') || el.hasClass('vc-permission');
 }
 
+/** The answer to a plan, questions or an approval still waiting when the panel closes (see ChatView.onClose). */
+const PANEL_CLOSED_ANSWER = 'Not answered: the Claude panel was closed. Nothing was approved.';
+
+/** How long a chat whose waiting requests were just answered has to take the answers before its process is ended (see ChatView.closeAfterAnswer). */
+const ANSWER_WAIT_MS = 3000;
+
 /** A plan request without the plan's text: its file is read this many times, this far apart, until it is written (see showPlan). */
 const PLAN_READ_ATTEMPTS = 40;
 const PLAN_READ_PAUSE_MS = 250;
@@ -1051,6 +1057,10 @@ export class ChatView extends ItemView {
     const heir = this.plugin.otherChatView(this);
     if (heir) this.handOver(heir);
     else this.reportStopped();
+    // What still waits on you in the chat on screen (none when it moved to another panel) is answered
+    // before its process ends: its record then says the panel was closed, rather than that the request
+    // was cut off, which Claude reads as an error when the chat is opened again.
+    const refused = this.refuseOpenApprovals(PANEL_CLOSED_ANSWER);
     // Nothing left scheduled to run against a closed panel, nor holding on to its page: Find's
     // highlights are the app's, and keep the matches' elements until cleared.
     this.findBar.close();
@@ -1064,7 +1074,8 @@ export class ChatView extends ItemView {
     this.hintTimer = null;
     for (const run of this.summaryRuns) run.abort();
     this.sessionToken = null;
-    this.closeSession(this.session);
+    if (refused && this.session) this.closeAfterAnswer(this.session, PANEL_CLOSED_ANSWER);
+    else this.closeSession(this.session);
     this.session = null;
     for (const entry of [...this.background]) this.dropBackground(entry);
     this.stopStatusTimer();
@@ -1633,8 +1644,49 @@ export class ChatView extends ItemView {
     this.updateBackgroundIndicator();
   }
 
+  /**
+   * Refuses what waits on you in the chat on screen with `message`; a plan's note keeps its edits for
+   * the chat's next plan, as on Esc. Whether there was anything to refuse.
+   */
+  private refuseOpenApprovals(message: string): boolean {
+    const refused = this.openApprovals.length > 0;
+    for (const approval of this.openApprovals) {
+      this.onWithdrawn(approval, null);
+      void this.withdrawPlanNote(approval);
+      approval.resolve({ behavior: 'deny', message });
+    }
+    this.openApprovals = [];
+    this.pendingApprovals = 0;
+    return refused;
+  }
+
+  /**
+   * Ends `session` once Claude Code has taken the answers just given to its waiting requests (its
+   * next message), or after ANSWER_WAIT_MS: ended at once, its process would be gone before the
+   * answers reached it, and its record would say they were cut off. Nothing more of it is shown, and
+   * anything else it asks is refused with `message`.
+   */
+  private closeAfterAnswer(session: ClaudeSession, message: string): void {
+    let open = true;
+    const close = () => {
+      if (!open) return;
+      open = false;
+      window.clearTimeout(timer);
+      this.closeSession(session);
+    };
+    const timer = window.setTimeout(close, ANSWER_WAIT_MS);
+    session.setHandlers({
+      onMessage: (next) => {
+        if (next.type === 'user' || next.type === 'assistant' || next.type === 'result') close();
+      },
+      onPermission: async () => ({ behavior: 'deny', message }),
+      onEnd: () => close(),
+    });
+  }
+
   /** Stops a background chat: its approvals refused, its timer and notice gone, its process closed. */
   private dropBackground(entry: BackgroundChat): void {
+    const answered = entry.approvals.length > 0;
     for (const approval of entry.approvals) {
       void this.withdrawPlanNote(approval, false);
       approval.resolve({ behavior: 'deny', message: 'Chat closed.' });
@@ -1642,7 +1694,9 @@ export class ChatView extends ItemView {
     clearSettle(entry);
     entry.notice?.hide();
     this.background.delete(entry);
-    this.closeSession(entry.session);
+    // As on screen: the answers reach Claude Code before its process ends.
+    if (answered) this.closeAfterAnswer(entry.session, 'Chat closed.');
+    else this.closeSession(entry.session);
   }
 
   private finishBackground(entry: BackgroundChat, succeeded: boolean): void {
@@ -2323,7 +2377,7 @@ export class ChatView extends ItemView {
     for (const el of Array.from(turn.children) as HTMLElement[]) {
       // Shown at the reply's end whatever its place among the steps (CSS order): the card of changed
       // files, created where the first file changed, and the reply's buttons.
-      if (el.hasClass('vc-changes') || el.hasClass('vc-turn-actions')) continue;
+      if (el.hasClass('vc-changes') || el.hasClass('vc-turn-actions') || el.hasClass('vc-activity')) continue;
       if (isStep(el)) {
         for (const empty of gap) empty.remove();
         run.push(el);
@@ -2350,7 +2404,9 @@ export class ChatView extends ItemView {
     if (!turn?.hasClass('vc-turn') || turn.hasClass('has-folded-steps')) return;
     const run: HTMLElement[] = [];
     for (let el = card.previousElementSibling as HTMLElement | null; el; el = el.previousElementSibling as HTMLElement | null) {
-      if (el.hasClass('vc-changes') || el.hasClass('vc-turn-actions')) continue;
+      // Not steps, and not in their way: the changed files and buttons, and the reply's status line,
+      // which is kept last (see scrollToBottom) and so sits just before a card when it arrives.
+      if (el.hasClass('vc-changes') || el.hasClass('vc-turn-actions') || el.hasClass('vc-activity')) continue;
       if (isStep(el)) run.unshift(el);
       // Text with nothing in it (white space between steps) is passed over, left where it is.
       else if (!(el.hasClass('vc-text') && !(this.markdownSource.get(el) ?? el.textContent ?? '').trim())) break;
@@ -4822,7 +4878,7 @@ export class ChatView extends ItemView {
     const carried = kept !== undefined && this.app.vault.getAbstractFileByPath(kept) instanceof TFile;
     if (carried) approval.notePath = kept;
 
-    // No title: the plan's own heading names it, and the tinted panel and its buttons say what it is.
+    // No title: the plan's own heading names it, and the framed card and its buttons say what it is.
     card.addClass('vc-plan-card');
     if (carried) {
       const line = card.createDiv({ cls: 'vc-muted vc-plan-carried' });

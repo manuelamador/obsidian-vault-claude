@@ -1246,12 +1246,14 @@ async function main(): Promise<void> {
         const foldTurn = steps.container();
         foldTurn.createDiv({ cls: 'vc-tools vc-thinking' });
         foldTurn.createDiv({ cls: 'vc-tools' });
+        // The reply's status line, kept last: just before the card when it comes.
+        foldTurn.createDiv({ cls: 'vc-activity' });
         const os = await import('node:os');
         steps.renderEdit('Write', { file_path: `${os.homedir()}/.claude/plans/a-test-plan.md`, content: '# Plan' }, undefined, false);
         const planListed = foldTurn.querySelector('.vc-changes') !== null;
         const foldAsked = planView.askPermission({ toolName: 'ExitPlanMode', input: { plan, planFilePath: '/tmp/plan.md' }, signal: new AbortController().signal });
         const foldedBefore = foldTurn.querySelectorAll(':scope > .vc-steps > .vc-steps-body > .vc-tools').length;
-        const cardAfterFold = foldTurn.querySelector(':scope > .vc-steps + .vc-plan-card') !== null;
+        const cardAfterFold = foldTurn.querySelector(':scope > .vc-steps ~ .vc-plan-card') !== null;
         ([...foldTurn.querySelectorAll('button')].find((el) => el.textContent === 'Reject') as HTMLElement).click();
         await foldAsked;
         steps.foldSteps(foldTurn);
@@ -3419,9 +3421,10 @@ async function main(): Promise<void> {
         const { InlineEditModal } = await import('../src/inlineEdit');
         const replaced: string[] = [];
         const editor = { getValue: () => 'aa sel bb', posToOffset: (pos: { ch: number }) => pos.ch, getRange: () => 'sel', replaceRange: (text: string) => void replaced.push(text) };
-        const shown = Object.assign(new stub.MarkdownView(), { editor, file: { path: 'Note.md' } });
-        const editApp = { workspace: { getLeavesOfType: () => [{ view: shown }] } };
-        const target = { editor, file: { path: 'Note.md' }, from: { line: 0, ch: 3 }, to: { line: 0, ch: 6 }, original: 'sel', before: 'aa ', after: ' bb' };
+        // What holds the editor (here a note's tab; a canvas card or a hover preview alike).
+        const shown = { editor, file: { path: 'Note.md' } };
+        const editApp = { workspace: { getLeavesOfType: () => [] } };
+        const target = { editor, file: { path: 'Note.md' }, owner: shown, from: { line: 0, ch: 3 }, to: { line: 0, ch: 6 }, original: 'sel', before: 'aa ', after: ' bb' };
         const accept = (modal: unknown) => {
           (modal as { replacement: string }).replacement = 'NEW';
           (modal as { accept(): void }).accept();
@@ -4223,7 +4226,31 @@ async function main(): Promise<void> {
 
     (plugin as { heir: unknown }).heir = null;
     startRunning();
+    // A plan still waiting is answered, saying the panel was closed, and the chat's process ends only
+    // once Claude Code has taken the answer (its next message): ended at once, the answer would be lost.
+    let closedAt: string | null = null;
+    let quiet: { onMessage(message: unknown): void } | null = null;
+    closing.session = {
+      close: () => void (closedAt ??= quiet ? 'after its next message' : 'at once'),
+      setHandlers: (handlers: { onMessage(message: unknown): void }) => void (quiet = handlers),
+      stopTask: async () => undefined,
+    };
+    const waiting = (view as unknown as { askPermission(request: unknown): Promise<{ behavior: string; message?: string }> }).askPermission({
+      toolName: 'ExitPlanMode',
+      input: { plan: '# A plan' },
+      signal: new AbortController().signal,
+    });
     const stoppedSaid = await notices(() => view.onClose());
+    const waitingAnswer = await waiting;
+    const openAfterClose = closedAt === null;
+    (quiet as { onMessage(message: unknown): void } | null)?.onMessage({ type: 'user', message: { role: 'user', content: [] } });
+    const refusedOk =
+      waitingAnswer.behavior === 'deny' &&
+      waitingAnswer.message === 'Not answered: the Claude panel was closed. Nothing was approved.' &&
+      openAfterClose &&
+      closedAt === 'after its next message';
+    console.log(`closing answers a waiting plan: ${JSON.stringify(waitingAnswer)}; process still open when the panel closed ${openAfterClose}, ended ${closedAt} -> ${refusedOk}`);
+    if (!refusedOk) process.exitCode = 1;
     const closeNotice = stoppedSaid.find((line) => line.startsWith('[Notice] Closing the panel'));
     const closeOk = closeNotice === '[Notice] Closing the panel stopped 2 chats and 3 background tasks. The conversations are saved: reopen one from the history to carry on.';
     console.log(`closing the last panel says what it stopped: ${JSON.stringify(closeNotice)} -> ${closeOk}`);

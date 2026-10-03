@@ -101,11 +101,11 @@ Open the chat from the robot icon in the left ribbon.
 
 - **When Claude finishes a plan** (Plan mode, from the mode menu or `/plan` followed by what to plan), the steps that led to it fold into one line and its card offers **Approve**, **Edit in a note** (approving then sends your edited version, and the note is deleted; if Esc withdraws the plan, edits in the note carry over to Claude's next plan in the chat), feedback to send it back, or **Reject**.
 
-  <img src="docs/plan-card.png" width="560" alt="Claude’s plan on a tinted panel: its title, Context, Steps with commands and file names as inline code, and Verification, with Approve, Edit in a note and Reject below it, a box to tell Claude what to change, and “Waiting for your approval”">
+  <img src="docs/plan-card.png" width="560" alt="A chat in Plan mode: the line “Plan mode: Claude plans, and changes nothing until you approve” above the request, the tool line Write, ExitPlanMode, then Claude’s plan in a framed card with a light shadow, its headings, steps and inline code, and inside it Approve, Edit in a note, Reject and a box to tell Claude what to change; “Waiting for your approval” below the card, and the input outlined in the accent colour with Leave plan mode above it">
 
 - **When Claude asks a multiple-choice question**, a card shows it in the chat: click an option, pick several where the question allows, or type your own answer. Skip declines.
 
-  <img src="docs/question-card.png" width="560" alt="Claude’s question in the chat: its label “Test action”, the question, three options as buttons each with a description, a box to type an answer of your own, Send and Skip, and “Waiting for your answer” below">
+  <img src="docs/question-card.png" width="500" alt="Claude’s questions in a framed card with a light shadow, headed “Claude has 2 questions”: Pick a color, with Red and Blue as option buttons, and Pick any fruits (any that apply), with Apple, Pear and Plum, each with a box to type an answer of your own; Send and Skip inside the card, and “Waiting for your answer” below it">
 
 - A system notification arrives when a long reply finishes or Claude needs approval or an answer while Obsidian is in the background.
 
