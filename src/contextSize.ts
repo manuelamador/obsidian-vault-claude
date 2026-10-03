@@ -1,9 +1,17 @@
 // What goes with a message, and roughly how much of it: the @-mentions in its text, and sizes for
 // the chips above the input. Kept free of `obsidian` imports so the tests can use it.
 
+/** An `@[[…]]` mention: its target is the first group, before any heading or display text. */
+const MENTION = /@\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]/g;
+
 /** The targets of the `@[[…]]` mentions in `text`, in order: a note or file by its link text, a folder ending in `/`. */
 export function mentionTargets(text: string): string[] {
-  return [...text.matchAll(/@\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]/g)].map((match) => match[1].trim());
+  return [...text.matchAll(MENTION)].map((match) => match[1].trim());
+}
+
+/** `text` without the mentions whose target `drop` picks, each with the space after it. */
+export function removeMentions(text: string, drop: (target: string) => boolean): string {
+  return text.replace(new RegExp(`${MENTION.source}[ \\t]?`, 'g'), (whole, target: string) => (drop(target.trim()) ? '' : whole));
 }
 
 /** Tokens in `chars` characters of text, as a rough estimate: about four characters a token. */

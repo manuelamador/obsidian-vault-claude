@@ -42,7 +42,7 @@ import {
   type SelectionAttachment,
 } from './attachments';
 import { chipFor, renderChip } from './chip';
-import { estimateTokens, formatTokens, mentionTargets } from './contextSize';
+import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
 import { addMemoSources, cleanTags, memoNoteMarkdown, memoNoteName, passageNeedle, type MemoPassage, type MemoSources } from './memos';
 import { FindBar } from './findBar';
@@ -476,6 +476,8 @@ export class ChatView extends ItemView {
   private readonly pathOnlyMentions = new Set<string>();
   /** What the tray's mention chips show, to redraw it only when that changes (see followMentions). */
   private mentionKey = '';
+  /** A Memos table to bring to the chat on screen, once its title and id are both set (see setChatTitle). */
+  private memosTimer: number | null = null;
   /** The memos the input mentions, whose Send boxes are ticked (see followMemoBoxes). */
   private mentionedMemos = new Set<string>();
   /** The input's text when its chat came on screen, and the undos since that redo may redo (see setUndoFloor). */
@@ -651,9 +653,12 @@ export class ChatView extends ItemView {
     setIcon(this.phoneButton, 'smartphone');
     this.registerDomEvent(this.phoneButton, 'click', (evt) => this.onPhoneClick(evt));
     this.updatePhoneButton();
-    const memosButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': "This chat's memos, in a table" } });
+    const allHint = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
+    const memosButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `This chat's memos, in a table (${allHint}: all memos)` } });
     setIcon(memosButton, 'sticky-note');
-    this.registerDomEvent(memosButton, 'click', () => void this.plugin.openChatMemos(this.chatId ?? this.resumeId ?? '', this.chatName ?? 'New chat'));
+    this.registerDomEvent(memosButton, 'click', (evt) =>
+      void this.plugin.openChatMemos(this.chatId ?? this.resumeId ?? '', this.chatName ?? 'New chat', Keymap.isModEvent(evt) !== false),
+    );
     this.historyButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Chat history' } });
     setIcon(this.historyButton, 'history');
     this.registerDomEvent(this.historyButton, 'click', () => void this.openHistory());
@@ -1026,6 +1031,8 @@ export class ChatView extends ItemView {
     this.dropLive();
     if (this.selectionTimer !== null) window.clearTimeout(this.selectionTimer);
     this.selectionTimer = null;
+    if (this.memosTimer !== null) window.clearTimeout(this.memosTimer);
+    this.memosTimer = null;
     for (const run of this.summaryRuns) run.abort();
     this.sessionToken = null;
     this.closeSession(this.session);
@@ -1725,8 +1732,12 @@ export class ChatView extends ItemView {
     this.chatTitleEl.toggleClass('is-new', title === null);
     this.updateChatButtons();
     this.updateTab();
-    // Once the chat's id is set too, which follows the title when a chat opens.
-    window.setTimeout(() => void this.plugin.followChatMemos(this.chatId ?? this.resumeId ?? '', this.chatName ?? 'New chat'), 0);
+    // Once the chat's id is set too, which follows the title when a chat opens; once for several titles at a time.
+    if (this.memosTimer !== null) window.clearTimeout(this.memosTimer);
+    this.memosTimer = window.setTimeout(() => {
+      this.memosTimer = null;
+      if (!this.closing) void this.plugin.followChatMemos(this.chatId ?? this.resumeId ?? '', this.chatName ?? 'New chat');
+    }, 0);
   }
 
   /** The title-row buttons, shown once the chat has a Claude Code session. */
@@ -2764,9 +2775,11 @@ export class ChatView extends ItemView {
     this.mentionedMemos = memos;
   }
 
+  /** Ticks or clears a memo's Send box; cleared only when no other panel still has the memo in its input. */
   private setMemoBox(path: string, on: boolean): void {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile) || (this.app.metadataCache.getFileCache(file)?.frontmatter?.send === true) === on) return;
+    if (!on && this.plugin.mentionedElsewhere(path, this)) return;
     this.app.fileManager
       .processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
         frontmatter.send = on;
@@ -2781,9 +2794,7 @@ export class ChatView extends ItemView {
 
   /** Takes the input's @-mentions of the file at `path` out: its memo's Send box was cleared in the Memos base. */
   unmention(path: string): void {
-    const text = this.inputEl.value.replace(/@\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\][ \t]?/g, (whole, target: string) =>
-      this.mentionedItems(`@[[${target.trim()}]]`)[0]?.item.path === path ? '' : whole,
-    );
+    const text = removeMentions(this.inputEl.value, (target) => this.mentionedItems(`@[[${target}]]`)[0]?.item.path === path);
     if (text === this.inputEl.value) return;
     this.inputEl.value = text;
     this.inputEdited();
@@ -5316,9 +5327,7 @@ export class ChatView extends ItemView {
           frontmatter.updated = sources.date;
         });
       } else {
-        const folder = normalizePath(this.plugin.settings.memosFolder || '/');
-        if (folder !== '/' && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
-        const path = `${folder === '/' ? '' : `${folder}/`}${memoNoteName(choice.title)}.md`;
+        const path = await this.plugin.memosPath(`${memoNoteName(choice.title)}.md`);
         file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, tags: choice.tags, notes: this.memoNotesFor(sources.passages), sources }));
       }
       this.plugin.linkNoteChat(file.path, sources.chatId);

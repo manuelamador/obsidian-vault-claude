@@ -394,7 +394,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Folder for memos')
-      .setDesc('Where "Memo" writes a note for each memo, relative to the vault root; created if missing. Leave empty for the vault root.')
+      .setDesc('Where "Memo" writes a note for each memo, and the Memos table its file, relative to the vault root; created if missing. Leave empty for the vault root. Memos saved in an earlier folder are still listed; a Memos.base left there can be deleted.')
       .addText((text) =>
         text
           .setPlaceholder('Claude chats/Memos')

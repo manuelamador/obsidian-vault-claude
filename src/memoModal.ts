@@ -20,7 +20,8 @@ export type MemoSuggester = (signal: AbortSignal) => Promise<{ title: string; de
 const PREVIEW_CHARS = 400;
 
 export class MemoModal extends Modal {
-  private readonly suggesting = new AbortController();
+  /** The suggestion being asked for; aborted when it is not wanted any more. */
+  private suggesting = new AbortController();
 
   constructor(
     app: App,
@@ -83,8 +84,16 @@ export class MemoModal extends Modal {
     buttons.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
     const chosen = () => this.memos.find((memo) => memo.path === select.value) ?? null;
     select.addEventListener('change', () => {
-      fresh.toggle(chosen() === null);
+      const adding = chosen() !== null;
+      fresh.toggle(!adding);
       problem.hide();
+      // Adding to a memo already saved needs no title or description: a suggestion on its way is let go,
+      // and asked for again on going back to a new memo.
+      if (adding) {
+        this.suggesting.abort();
+        this.suggesting = new AbortController();
+        status.setText('');
+      } else if (!title.value.trim()) void askClaude();
     });
 
     // A suggestion fills a field only while it is empty or holds the last suggestion: never what was typed.
@@ -92,11 +101,12 @@ export class MemoModal extends Modal {
     const fillable = (field: HTMLInputElement | HTMLTextAreaElement, last: string) => !field.value.trim() || field.value === last;
     const askClaude = async () => {
       if (!this.suggest) return;
+      const signal = this.suggesting.signal;
       status.setText('Claude is suggesting a title and description…');
       if (again) again.disabled = true;
       try {
-        const suggestion = await this.suggest(this.suggesting.signal);
-        if (this.suggesting.signal.aborted) return;
+        const suggestion = await this.suggest(signal);
+        if (signal.aborted) return;
         if (!suggestion) {
           status.setText('No suggestion came back.');
           return;
@@ -105,7 +115,7 @@ export class MemoModal extends Modal {
         if (suggestion.description && fillable(description, filled.description)) description.value = filled.description = suggestion.description;
         status.setText('Suggested by Claude: edit as you like.');
       } catch (error) {
-        if (this.suggesting.signal.aborted) return;
+        if (signal.aborted) return;
         log('suggesting a memo failed', error);
         status.setText(`No suggestion: ${errorText(error)}`);
       } finally {

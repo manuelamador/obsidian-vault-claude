@@ -237,6 +237,13 @@ export class Scope {
   register(): void {}
 }
 export const Platform = { isMacOS: true, isWin: false, isLinux: false };
+/** JSON is YAML: enough for a test that reads back what it wrote. */
+export function parseYaml(text: string): unknown {
+  return JSON.parse(text);
+}
+export function stringifyYaml(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
 export function normalizePath(path: string): string {
   return path.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/|\/$/g, '');
 }

@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { FileSystemAdapter, Menu, Notice, Plugin, TFile, normalizePath, type Editor, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, Menu, Notice, Plugin, TFile, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
 import { join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { MEMO_SUGGESTION_SYSTEM, chatMemosView, PROTOCOL_ACTION, memoBaseYaml, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, PROTOCOL_ACTION, memoBaseYaml, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -676,6 +676,12 @@ export default class VaultClaudePlugin extends Plugin {
     changed = followNote(this.noteMentions, from, to) || changed;
     changed = followNote(this.noteRemoved, from, to) || changed;
     changed = followDraftNotes(Object.entries(this.drafts), from, to, (id) => delete this.drafts[id]) || changed;
+    for (const [path, on] of [...this.memoBoxes]) {
+      const moved = movedPath(path, from, to);
+      if (moved === undefined) continue;
+      this.memoBoxes.delete(path);
+      if (moved !== null) this.memoBoxes.set(moved, on);
+    }
     for (const [id, note] of Object.entries(this.planNotes)) {
       const moved = movedPath(note.path, from, to);
       if (moved === undefined) continue;
@@ -1166,14 +1172,12 @@ export default class VaultClaudePlugin extends Plugin {
     else if (params.find) await view.findPassage(params.find);
   }
 
-  /** The memo notes in the memos folder (see MemoModal), the most recently changed first; `chat`: only those saved from that chat. */
+  /** The memo notes (`type: memo`, see MemoModal), the most recently changed first; `chat`: only those saved from that chat. */
   memoNotes(chat?: string): TFile[] {
-    const folder = normalizePath(this.settings.memosFolder || '/');
-    const inside = (file: TFile) => folder === '/' || file.path.startsWith(`${folder}/`);
+    // Wherever they are: memos saved before the memos folder moved are memos still.
     return this.app.vault
       .getMarkdownFiles()
       .filter((file) => {
-        if (!inside(file)) return false;
         const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
         if (frontmatter?.type !== 'memo') return false;
         return chat === undefined || (Array.isArray(frontmatter.claude_chats) && frontmatter.claude_chats.includes(chat));
@@ -1185,42 +1189,74 @@ export default class VaultClaudePlugin extends Plugin {
    * Opens the Memos base on chat `chatId`'s memos: the base, in the memos folder, is written for that
    * chat (see memoBaseYaml) and opened in a tab on its first view.
    */
-  async openChatMemos(chatId: string, chatTitle: string): Promise<void> {
+  async openChatMemos(chatId: string, chatTitle: string, all = false): Promise<void> {
     try {
       const file = await this.writeMemosBase(chatId, chatTitle);
-      await this.app.workspace.openLinkText(`${file.path}#${chatMemosView(chatTitle)}`, '', 'tab');
+      // On the chat's memos, or all of them (asked for, or a chat with no memos to have yet), in the
+      // tab already showing the base when there is one.
+      const subpath = `#${all || !chatId ? ALL_MEMOS_VIEW : chatMemosView(chatTitle)}`;
+      const leaf = this.memosBaseLeaf() ?? this.app.workspace.getLeaf('tab');
+      await leaf.openFile(file, { active: true, eState: { subpath } });
+      await this.app.workspace.revealLeaf(leaf);
     } catch (error) {
       log('opening the memos base failed', error);
       new Notice(`Could not show the memos: ${errorText(error)}`);
     }
   }
 
-  /** The Memos base's path, in the memos folder. */
-  private memosBasePath(): { folder: string; path: string } {
-    const folder = normalizePath(this.settings.memosFolder || '/');
-    return { folder, path: `${folder === '/' ? '' : `${folder}/`}Memos.base` };
+  /** The memos folder (setting), normalized: `/` for the vault root. */
+  memosFolder(): string {
+    return normalizePath(this.settings.memosFolder || '/');
   }
 
-  /** Writes the Memos base for chat `chatId` (see memoBaseYaml), when it says anything else. */
-  private async writeMemosBase(chatId: string, chatTitle: string): Promise<TFile> {
-    const { folder, path } = this.memosBasePath();
+  /** The path of `name` in the memos folder, which is made when it is missing. */
+  async memosPath(name: string): Promise<string> {
+    const folder = this.memosFolder();
     if (folder !== '/' && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
-    const text = memoBaseYaml(folder, chatId, chatTitle);
+    return `${folder === '/' ? '' : `${folder}/`}${name}`;
+  }
+
+  /** A tab showing the Memos base, if one does. */
+  private memosBaseLeaf(): WorkspaceLeaf | null {
+    const folder = this.memosFolder();
+    const path = `${folder === '/' ? '' : `${folder}/`}Memos.base`;
+    return this.app.workspace.getLeavesOfType('bases').find((leaf) => (leaf.view as { file?: TFile | null }).file?.path === path) ?? null;
+  }
+
+  /**
+   * Writes the Memos base for chat `chatId`: a new one from the template (see memoBaseYaml); one there
+   * already has only its view of one chat's memos turned to this chat (see retargetMemoBase), so that
+   * what was changed in the table (columns, sorts, widths, views of one's own) stays.
+   */
+  private async writeMemosBase(chatId: string, chatTitle: string): Promise<TFile> {
+    const path = await this.memosPath('Memos.base');
     const existing = this.app.vault.getAbstractFileByPath(path);
-    if (!(existing instanceof TFile)) return this.app.vault.create(path, text);
-    if ((await this.app.vault.read(existing)) !== text) await this.app.vault.modify(existing, text);
+    if (!(existing instanceof TFile)) return this.app.vault.create(path, memoBaseYaml(chatId, chatTitle));
+    const before = await this.app.vault.read(existing);
+    let parsed: unknown = null;
+    try {
+      parsed = parseYaml(before);
+    } catch {
+      // Not YAML any more: written anew below.
+    }
+    const turned = retargetMemoBase(parsed, chatId, chatTitle);
+    const text = turned ? stringifyYaml(turned) : memoBaseYaml(chatId, chatTitle);
+    if (text !== before) await this.app.vault.modify(existing, text);
     return existing;
   }
 
   /**
    * The chat on a panel changed (opened, started, renamed): a Memos base open in a tab follows it,
-   * its first view becoming that chat's memos. One closed is left alone.
+   * its view of one chat's memos turning to that chat. One closed is left alone.
    */
   async followChatMemos(chatId: string, chatTitle: string): Promise<void> {
-    const { path } = this.memosBasePath();
-    const open = this.app.workspace.getLeavesOfType('bases').some((leaf) => (leaf.view as { file?: TFile | null }).file?.path === path);
-    if (!open) return;
+    if (!this.memosBaseLeaf()) return;
     await this.writeMemosBase(chatId, chatTitle).catch((error: unknown) => log('following the chat in the memos base failed', error));
+  }
+
+  /** Whether a panel other than `except` has the file at `path` mentioned in its input (see ChatView.followMemoBoxes). */
+  mentionedElsewhere(path: string, except: ChatView): boolean {
+    return this.app.workspace.getLeavesOfType(VIEW_TYPE).some((leaf) => leaf.view instanceof ChatView && leaf.view !== except && leaf.view.mentions(path));
   }
 
   /**

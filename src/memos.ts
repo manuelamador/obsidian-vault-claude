@@ -73,7 +73,7 @@ export function cleanTags(tags: string[]): string[] {
 }
 
 /** The section recording passages saved from one chat: the chat and date, then each passage with who wrote it and links back. */
-export function memoSourcesMarkdown(sources: MemoSources): string {
+function memoSourcesMarkdown(sources: MemoSources): string {
   const lines = [`### ${headingText(sources.chatTitle)} · ${sources.date}`, ''];
   for (const passage of sources.passages) {
     const find = chatLink({ vault: sources.vault, chat: sources.chatId, find: passage.needle });
@@ -106,7 +106,8 @@ export function memoNoteMarkdown(memo: { title: string; description: string; tag
     `updated: ${date}`,
     `chats: ${yamlList([chatTitle])}`,
     ...(memo.notes.length > 0 ? [`notes: ${yamlList(memo.notes)}`] : []),
-    // A box in the Memos base: ticked, the memo goes to the chat's input (see VaultClaudePlugin.sendMemo).
+    // A box in the Memos base, in step with the chat's input: ticked while the memo is mentioned in it
+    // (see VaultClaudePlugin.followMemoBox and ChatView.followMemoBoxes).
     'send: false',
     `claude_chats: [${chatId}]`,
     '---',
@@ -186,23 +187,43 @@ export function chatMemosView(chatTitle: string): string {
   return `Chat: ${title || 'untitled'}`;
 }
 
+/** The name of the Memos base's view of every memo. */
+export const ALL_MEMOS_VIEW = 'All memos';
+
+/** The columns of the Memos base's views. */
+const BASE_COLUMNS = ['send', 'file.name', 'tags', 'chats', 'notes', 'updated'];
+
+/** The filter that picks chat `chatId`'s memos, by which the base's view of one chat is known. */
+function chatFilter(chatId: string): string {
+  return `claude_chats.contains(${JSON.stringify(chatId)})`;
+}
+
+/** The view of chat `chatId`'s memos, newest first. */
+function chatView(chatId: string, chatTitle: string): Record<string, unknown> {
+  return {
+    type: 'table',
+    name: chatMemosView(chatTitle),
+    filters: { and: ['type == "memo"', chatFilter(chatId)] },
+    order: BASE_COLUMNS,
+    sort: [{ property: 'updated', direction: 'DESC' }],
+  };
+}
+
 /**
- * The Memos base the panel writes and opens, in the memos folder: first the memos of chat `chatId`,
- * then those about the note in front (the note it is embedded in, or the active one when it is open
- * in a sidebar), all memos, and those of each kind. Written anew each time it is opened from a chat.
+ * The Memos base the panel writes for a new file and opens: first the memos of chat `chatId`, then
+ * those about the note in front (the note it is embedded in, or the active one when it is open in a
+ * sidebar), all memos, and those of each kind. Memos are found by `type: memo` wherever they are.
  */
-export function memoBaseYaml(folder: string, chatId: string, chatTitle: string): string {
-  const where = folder === '/' ? [] : [`file.inFolder(${JSON.stringify(folder)})`];
-  const columns = ['send', 'file.name', 'tags', 'chats', 'notes', 'updated'];
+export function memoBaseYaml(chatId: string, chatTitle: string): string {
   const view = (name: string, filters: string[], sort: { property: string; direction: 'ASC' | 'DESC' }) =>
     [
       '  - type: table',
       `    name: ${JSON.stringify(name)}`,
       '    filters:',
       '      and:',
-      ...[...where, 'type == "memo"', ...filters].map((filter) => `        - ${JSON.stringify(filter)}`),
+      ...['type == "memo"', ...filters].map((filter) => `        - ${JSON.stringify(filter)}`),
       '    order:',
-      ...columns.map((column) => `      - ${column}`),
+      ...BASE_COLUMNS.map((column) => `      - ${column}`),
       '    sort:',
       `      - property: ${sort.property}`,
       `        direction: ${sort.direction}`,
@@ -210,7 +231,6 @@ export function memoBaseYaml(folder: string, chatId: string, chatTitle: string):
   const newest = { property: 'updated', direction: 'DESC' } as const;
   const oldest = { property: 'created', direction: 'ASC' } as const;
   return [
-    `# Written by Vault Claude when a chat's memos are shown (now: ${chatTitle.replace(/\n/g, ' ')}); copy it to keep changes of your own.`,
     'properties:',
     '  send:',
     '    displayName: Send to chat',
@@ -225,13 +245,40 @@ export function memoBaseYaml(folder: string, chatId: string, chatTitle: string):
     '  updated:',
     '    displayName: Updated',
     'views:',
-    view(chatMemosView(chatTitle), [`claude_chats.contains(${JSON.stringify(chatId)})`], newest),
+    view(chatMemosView(chatTitle), [chatFilter(chatId)], newest),
+    view(ALL_MEMOS_VIEW, [], newest),
     view('About this note', ['file.hasLink(this.file)'], newest),
-    view('All memos', [], newest),
     view('To do', ['file.hasTag("todo")'], oldest),
     view('To read', ['file.hasTag("read")'], oldest),
     view('To explore', ['file.hasTag("explore")'], oldest),
     view('Ideas', ['file.hasTag("idea")'], newest),
     '',
   ].join('\n');
+}
+
+
+/** Whether `value`, part of a view's filters, holds the filter of one chat's memos. */
+function picksChat(value: unknown): boolean {
+  if (typeof value === 'string') return value.startsWith('claude_chats.contains(');
+  if (Array.isArray(value)) return value.some(picksChat);
+  return typeof value === 'object' && value !== null && Object.values(value).some(picksChat);
+}
+
+/**
+ * The Memos base `base` (as parsed from its file) turned to chat `chatId`: its view of one chat's
+ * memos gets the chat's name and filter, and everything else in it (columns, sorts, widths, views of
+ * the user's own) stays. A base with no such view gets one, first. Null when `base` is not a base.
+ */
+export function retargetMemoBase(base: unknown, chatId: string, chatTitle: string): Record<string, unknown> | null {
+  if (typeof base !== 'object' || base === null || !Array.isArray((base as { views?: unknown }).views)) return null;
+  const views = [...((base as { views: unknown[] }).views)];
+  const at = views.findIndex((view) => typeof view === 'object' && view !== null && picksChat((view as { filters?: unknown }).filters));
+  if (at === -1) views.unshift(chatView(chatId, chatTitle));
+  else {
+    const view = views[at] as Record<string, unknown>;
+    const retarget = (value: unknown): unknown =>
+      typeof value === 'string' ? (picksChat(value) ? chatFilter(chatId) : value) : Array.isArray(value) ? value.map(retarget) : typeof value === 'object' && value !== null ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, retarget(inner)])) : value;
+    views[at] = { ...view, name: chatMemosView(chatTitle), filters: retarget(view.filters) };
+  }
+  return { ...(base as Record<string, unknown>), views };
 }

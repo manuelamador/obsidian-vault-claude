@@ -145,6 +145,8 @@ async function main(): Promise<void> {
     },
     drafts: {} as Record<string, { text?: string; note?: string }>,
     memoNotes: () => [],
+    memosPath: async (name: string) => `Claude chats/Memos/${name}`,
+    mentionedElsewhere: () => false,
     followChatMemos: async () => undefined,
     openChatMemos: async () => undefined,
     suggestMemo: async () => null,
@@ -3043,14 +3045,14 @@ async function main(): Promise<void> {
     if (!quoteBtnOk) process.exitCode = 1;
     // Side chat and Memo sit just after Quote, all inside the panel, even for a selection at its right edge.
     const sideBtn = root.querySelector('.vc-side-button:not(.vc-memo-button)') as HTMLElement;
-    const ideaBtn = root.querySelector('.vc-memo-button') as HTMLElement;
+    const memoBtn = root.querySelector('.vc-memo-button') as HTMLElement;
     Object.defineProperty(quoteBtn, 'offsetWidth', { configurable: true, value: 70 });
     Object.defineProperty(sideBtn, 'offsetWidth', { configurable: true, value: 90 });
-    Object.defineProperty(ideaBtn, 'offsetWidth', { configurable: true, value: 60 });
+    Object.defineProperty(memoBtn, 'offsetWidth', { configurable: true, value: 60 });
     const placed = (left: number) => {
       (quoteRange as unknown as { getClientRects(): unknown[] }).getClientRects = () => [{ ...box, left, x: left }];
       (view as unknown as { placeQuoteButton(): void }).placeQuoteButton();
-      return `${parseFloat(quoteBtn.style.left)}/${parseFloat(sideBtn.style.left)}/${parseFloat(ideaBtn.style.left)}${sideBtn.isShown() && ideaBtn.isShown() ? '' : ' (hidden)'}`;
+      return `${parseFloat(quoteBtn.style.left)}/${parseFloat(sideBtn.style.left)}/${parseFloat(memoBtn.style.left)}${sideBtn.isShown() && memoBtn.isShown() ? '' : ' (hidden)'}`;
     };
     // 300 px wide: Quote 70, Side chat 90 and Memo 60, 6 apart, 4 from the edge.
     const placements = [placed(40), placed(280)];
@@ -3180,7 +3182,7 @@ async function main(): Promise<void> {
     // Memos: a selection across messages is one passage for each, in order, with who wrote it, its
     // equations as LaTeX and plain words to find it by; saved as a new memo note, or added to one.
     {
-      const ideaView = view as unknown as {
+      const memoView = view as unknown as {
         selectedPassages(): { role: string; text: string; needle: string; links?: string[] }[];
         saveMemo(choice: { memo: unknown; title: string; description: string; tags: string[] }, sources: unknown): Promise<{ path: string } | null>;
         findPassage(needle: string): Promise<void>;
@@ -3199,7 +3201,7 @@ async function main(): Promise<void> {
       across.setEnd(refinement.querySelector('.vc-user-text')?.firstChild as Text, 9);
       dom.window.getSelection()?.removeAllRanges();
       dom.window.getSelection()?.addRange(across);
-      const excerpts = ideaView.selectedPassages();
+      const excerpts = memoView.selectedPassages();
       dom.window.getSelection()?.removeAllRanges();
       const vault = app.vault as unknown as Record<string, unknown>;
       const fileManager = app.fileManager as unknown as Record<string, unknown>;
@@ -3211,64 +3213,64 @@ async function main(): Promise<void> {
       vault.createFolder = async () => undefined;
       vault.process = async (file: { path: string }, change: (text: string) => string) => void notesOnDisk.set(file.path, change(notesOnDisk.get(file.path) ?? ''));
       fileManager.processFrontMatter = async (_file: unknown, change: (frontmatter: Record<string, unknown>) => void) => {
-        const frontmatter: Record<string, unknown> = { claude_chats: ['idea-chat'], tags: ['memo', 'idea'] };
+        const frontmatter: Record<string, unknown> = { claude_chats: ['memo-chat'], tags: ['memo', 'idea'] };
         change(frontmatter);
         frontmatters.push(frontmatter);
       };
-      const chatWas = ideaView.chatId;
-      ideaView.chatId = 'idea-chat';
+      const chatWas = memoView.chatId;
+      memoView.chatId = 'memo-chat';
       // The chat's attached note, and a note a passage links to: the notes the memo is about.
       const memoNotes = view as unknown as { attachedNote: string | null };
       const attachedWas = memoNotes.attachedNote;
       memoNotes.attachedNote = 'Linked.md';
       notesOnDisk.set('Linked.md', 'linked');
-      const sources = { vault: 'Obsidian', chatId: 'idea-chat', chatTitle: 'Debt model', date: '2026-10-03', passages: excerpts };
+      const sources = { vault: 'Obsidian', chatId: 'memo-chat', chatTitle: 'Debt model', date: '2026-10-03', passages: excerpts };
       const linksBefore = plugin.noteLinks.length;
-      const created = await ideaView.saveMemo({ memo: null, title: 'Repayment timing: selection', description: 'Test it.', tags: ['idea'] }, sources);
-      const ideaPath = created?.path ?? '';
-      const ideaText = notesOnDisk.get(ideaPath) ?? '';
+      const created = await memoView.saveMemo({ memo: null, title: 'Repayment timing: selection', description: 'Test it.', tags: ['idea'] }, sources);
+      const memoPath = created?.path ?? '';
+      const memoText = notesOnDisk.get(memoPath) ?? '';
       const linked = plugin.noteLinks.slice(linksBefore);
-      await ideaView.saveMemo({ memo: created, title: '', description: '', tags: ['read'] }, { ...sources, chatId: 'later-chat', chatTitle: 'Later', passages: [excerpts[0]] });
-      const addedText = notesOnDisk.get(ideaPath) ?? '';
+      await memoView.saveMemo({ memo: created, title: '', description: '', tags: ['read'] }, { ...sources, chatId: 'later-chat', chatTitle: 'Later', passages: [excerpts[0]] });
+      const addedText = notesOnDisk.get(memoPath) ?? '';
       // Back in the chat: Find goes to the passage, and a passage carried on from is quoted in the input.
-      await ideaView.findPassage(excerpts[2]?.needle ?? '');
+      await memoView.findPassage(excerpts[2]?.needle ?? '');
       const found = (view as unknown as { findBar: { state(): { count: number }; close(): void } }).findBar.state().count;
       (view as unknown as { findBar: { close(): void } }).findBar.close();
-      const inputWas = ideaView.inputEl.value;
-      ideaView.quote('A mechanism: $q(b)$ falls');
-      const quoted = ideaView.inputEl.value;
-      ideaView.inputEl.value = inputWas;
-      ideaView.chatId = chatWas;
+      const inputWas = memoView.inputEl.value;
+      memoView.quote('A mechanism: $q(b)$ falls');
+      const quoted = memoView.inputEl.value;
+      memoView.inputEl.value = inputWas;
+      memoView.chatId = chatWas;
       memoNotes.attachedNote = attachedWas;
       notesOnDisk.delete('Linked.md');
       delete vault.create;
       delete vault.createFolder;
       delete vault.process;
       delete fileManager.processFrontMatter;
-      notesOnDisk.delete(ideaPath);
+      notesOnDisk.delete(memoPath);
       exchange.remove();
-      const ideaOk =
+      const memoOk =
         JSON.stringify(excerpts.map((excerpt) => excerpt.role)) === '["you","claude","you"]' &&
         excerpts[0]?.text === 'result survive recursive repayment?' &&
         excerpts[1]?.text === 'A mechanism: $q(b)$ falls with debt, as in New.' &&
         JSON.stringify(excerpts[1]?.links) === '["New.md"]' &&
-        ideaText.includes('notes: ["[[Linked]]", "[[New]]"]') &&
+        memoText.includes('notes: ["[[Linked]]", "[[New]]"]') &&
         excerpts[1]?.needle === 'A mechanism:' &&
         excerpts[2]?.text === 'Refine it' &&
-        ideaPath === 'Claude chats/Memos/Repayment timing selection.md' &&
-        ideaText.includes('# Repayment timing: selection') &&
-        ideaText.includes('tags: [idea]') &&
-        !ideaText.includes('memo,') &&
-        ideaText.includes('chats: ["Debt model"]') &&
-        ideaText.includes('> A mechanism: $q(b)$ falls with debt, as in New.') &&
-        JSON.stringify(linked) === JSON.stringify([`${ideaPath}@idea-chat`]) &&
+        memoPath === 'Claude chats/Memos/Repayment timing selection.md' &&
+        memoText.includes('# Repayment timing: selection') &&
+        memoText.includes('tags: [idea]') &&
+        !memoText.includes('memo,') &&
+        memoText.includes('chats: ["Debt model"]') &&
+        memoText.includes('> A mechanism: $q(b)$ falls with debt, as in New.') &&
+        JSON.stringify(linked) === JSON.stringify([`${memoPath}@memo-chat`]) &&
         addedText.includes('### Later · 2026-10-03') &&
         JSON.stringify([frontmatters[0]?.claude_chats, frontmatters[0]?.chats, frontmatters[0]?.tags, frontmatters[0]?.updated]) ===
-          JSON.stringify([['idea-chat', 'later-chat'], ['Later'], ['memo', 'idea', 'read'], '2026-10-03']) &&
+          JSON.stringify([['memo-chat', 'later-chat'], ['Later'], ['memo', 'idea', 'read'], '2026-10-03']) &&
         found > 0 &&
         quoted.includes('> A mechanism: $q(b)$ falls');
-      console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${ideaPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${ideaOk}`);
-      if (!ideaOk) process.exitCode = 1;
+      console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${memoPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${memoOk}`);
+      if (!memoOk) process.exitCode = 1;
     }
     // The memo form: Claude's suggestion fills the title and description, never over what was typed;
     // the tags picked and typed go with the memo.
