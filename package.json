@@ -1,6 +1,6 @@
 {
   "name": "obsidian-vault-claude",
-  "version": "0.25.1",
+  "version": "0.25.2",
   "private": true,
   "description": "Obsidian sidebar chat that runs the local Claude Code in the vault via the Claude Agent SDK.",
   "main": "main.js",
