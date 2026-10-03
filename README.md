@@ -131,7 +131,7 @@ A memo keeps passages of a chat as a note: an idea to follow up, something to do
 
   <img src="docs/memo-form.png" width="420" alt="The Save a memo form: Add to (A new memo), the title and description Claude suggested for a passage on the Solow model's steady state, “Suggested by Claude: edit as you like.”, the tag toggles idea, todo, explore and read, a field for other tags, the passage with its equations as LaTeX, and Suggest again, Save and Cancel">
 
-- **A bookmark** needs no typing and no waiting: Save with the title left empty, or ⌘-click (Ctrl-click) Memo over a selection or the sticky-note icon under a reply to skip the form. The memo is titled by the passage's first words (with the date and time added if a note has that name), tagged `bookmark`, and listed in the table's Bookmarks view.
+- **A bookmark** needs no typing and no waiting: Save with the title left empty, or ⌥-click (Alt-click) Memo over a selection or the sticky-note icon under a reply to skip the form. The memo is titled by the passage's first words (with the date and time added if a note has that name), tagged `bookmark`, and listed in the table's Bookmarks view.
 - A memo's properties name the chats it came from and, as links, the notes it is about (the chat's attached note, and notes its passages link to), so it shows in those notes' backlinks. Each passage has **Go to the passage**, which opens the chat at the message it came from, drawing back earlier parts of the chat if needed (or searches for its words when that message is no longer in the chat), and **Continue in the chat**, which opens it with the passage quoted.
 - **The sticky-note icon at the top of the panel** opens the Memos table on all memos; ⌘-click opens this chat's. The notes menu beside the paperclip lists the chat's memos too.
 
@@ -210,6 +210,8 @@ A memo keeps passages of a chat as a note: an idea to follow up, something to do
 | ⌘-click / ⌥-click a note in the notes menu | Open it in a new tab / attach it as an `@` mention |
 | ⌘ + pointer on a link or file name | Preview the note |
 | ⌘-click a line of a diff | Open the note at that line in a new tab |
+| ⌥-click Memo, or the sticky-note under a reply | Save the passages as a bookmark, without the form |
+| ⌘-click the sticky-note at the top | This chat's memos in the table, instead of all |
 
 ## Your data
 

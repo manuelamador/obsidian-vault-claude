@@ -117,6 +117,11 @@ const MAX_NOTE_CHARS = 100_000;
 const LONG_MESSAGE_LINES = 8;
 /** How a modifier click is named in tooltips, as on this platform. */
 const MOD_CLICK = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
+/**
+ * How an Option (Alt) click is named in tooltips. It saves a bookmark: ⌘-click takes what it opens
+ * to a tab away from the panel, and a bookmark opens nothing.
+ */
+const ALT_CLICK = Platform.isMacOS ? '⌥-click' : 'Alt-click';
 const LONG_MESSAGE_CHARS = 700;
 const MAX_PREVIEW_LINES = 60;
 const PLAN_USAGE_INTERVAL_MS = 60_000;
@@ -776,11 +781,11 @@ export class ChatView extends ItemView {
     this.memoButton = messagesWrap.createEl('button', {
       cls: 'vc-quote-button vc-side-button vc-memo-button',
       text: 'Memo',
-      attr: { 'aria-label': `Save the selected passages as a memo (${MOD_CLICK}: at once, as a bookmark)` },
+      attr: { 'aria-label': `Save the selected passages as a memo (${ALT_CLICK}: at once, as a bookmark)` },
     });
     this.memoButton.hide();
     this.registerDomEvent(this.memoButton, 'mousedown', (evt) => evt.preventDefault());
-    this.registerDomEvent(this.memoButton, 'click', (evt) => this.saveMemoFromSelection(Keymap.isModEvent(evt) !== false));
+    this.registerDomEvent(this.memoButton, 'click', (evt) => this.saveMemoFromSelection(evt.altKey));
     this.sideChat = new SideChat(messagesWrap, {
       startSession: (handlers, id, own) => this.startSideSession(handlers, id, own),
       renderMarkdown: (markdown, el, component) => void this.renderMarkdown(markdown, el, component),
@@ -2390,11 +2395,11 @@ export class ChatView extends ItemView {
       const insert = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Insert into note' } });
       setIcon(insert, 'file-input');
       insert.addEventListener('click', (evt) => this.onInsertClick(evt, this.replyMarkdown(textEls)));
-      const memo = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `Save as a memo (${MOD_CLICK}: at once, as a bookmark)` } });
+      const memo = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `Save as a memo (${ALT_CLICK}: at once, as a bookmark)` } });
       setIcon(memo, 'sticky-note');
       memo.addEventListener('click', (evt) => {
         const passages = this.replyPassages(turn, textEls);
-        if (Keymap.isModEvent(evt) !== false) void this.saveBookmark(passages);
+        if (evt.altKey) void this.saveBookmark(passages);
         else this.openMemoForm(passages);
       });
     }
@@ -5353,7 +5358,7 @@ export class ChatView extends ItemView {
 
   /**
    * "Memo" over a selection in the chat: the form for saving the selected passages as a memo (see
-   * MemoModal); `now` (a modifier click), saved at once as a bookmark (see saveBookmark).
+   * MemoModal); `now` (an Option-click), saved at once as a bookmark (see saveBookmark).
    */
   saveMemoFromSelection(now = false): void {
     const passages = this.selectedPassages();

@@ -3377,16 +3377,29 @@ async function main(): Promise<void> {
       stub.Modal.last = null;
       memoButton?.click();
       const opened = stub.Modal.last as unknown as { passages?: { role: string; text: string; needle: string }[] } | null;
+      // Option-click: saved at once as a bookmark, no form.
+      const bookmarked: unknown[] = [];
+      const saveWas = (view as unknown as { saveBookmark: unknown }).saveBookmark;
+      (view as unknown as { saveBookmark: (passages: unknown[]) => Promise<null> }).saveBookmark = async (passages) => {
+        bookmarked.push(passages);
+        return null;
+      };
+      stub.Modal.last = null;
+      memoButton?.dispatchEvent(new dom.window.MouseEvent('click', { altKey: true, bubbles: true }));
+      const formOnAlt = stub.Modal.last !== null;
+      (view as unknown as { saveBookmark: unknown }).saveBookmark = saveWas;
       replyView.chatId = chatWas;
       asked.remove();
       turn.remove();
       const replyMemoOk =
+        bookmarked.length === 1 &&
+        !formOnAlt &&
         JSON.stringify(opened?.passages) ===
         JSON.stringify([
           { role: 'you', text: 'Does timing matter?', needle: 'Does timing matter?' },
           { role: 'claude', text: 'Yes: $q(b)$ moves first.', needle: 'Yes:', links: [] },
         ]);
-      console.log(`a reply saved as a memo: button ${memoButton !== null}; passages ${JSON.stringify(opened?.passages)} -> ${replyMemoOk}`);
+      console.log(`a reply saved as a memo: button ${memoButton !== null}; passages ${JSON.stringify(opened?.passages)}; Option-click bookmarked ${bookmarked.length}, form ${formOnAlt} -> ${replyMemoOk}`);
       if (!replyMemoOk) process.exitCode = 1;
     }
     // The memo button's message shows in the panel, under the header, not as a notice over its buttons.
