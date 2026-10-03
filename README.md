@@ -2,6 +2,9 @@
 
 An [Obsidian](https://obsidian.md) sidebar chat that runs your locally installed Claude Code in the vault, through the Claude Agent SDK. It uses the same sign-in as the `claude` CLI, so a Claude subscription works without an API key.
 
+> [!NOTE]
+> This plugin was built for my own personal use. Use it at your own risk.
+
 Built by **Claude Opus 5** (`claude-opus-5`) and **Claude Opus 5.5** (`claude-opus-5-5`) in Claude Code.
 
 <img src="docs/chat.png" width="800" alt="Obsidian with a note on the Solow model in Live Preview on the left, its callouts and equations rendered, among them a tagged equation and a folded derivation, and the Vault Claude panel on the right: the chat title with its save, side-chat and delete buttons, the usage meter, the bar over the chat naming the prompt being answered, a reply with the steady-state equations displayed, a reply embedding a figure from the vault, the note attached above the input, and under the input the notes button showing 2 beside the paperclip, then the model, effort and permission-mode menus and the fast-mode button">
