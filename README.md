@@ -40,7 +40,9 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/side-chat.png" width="520" alt="A side chat open over the right of a chat about a Solow-model note: a quoted passage and the question “what is the main cite/reference for this model?”, answered with Solow (1956) and Swan (1956)">
 
-- **Buttons under a reply** reply to it, copy it, insert it into a note, or branch the chat from there. Checkboxes in replies can be ticked, and the ticks are kept: they are there when the chat is opened again, after a restart too, and go with Copy reply, Insert into note and Save chat as note. They are kept in the plugin's data, not in a note, and Claude is not told of them.
+- **Buttons under a reply** reply to it, copy it, insert it into a note, or branch the chat from there. Checkboxes in replies can be ticked, and the ticks are kept: they are there when the chat is opened again, after a restart too.
+  - They are your own marks. Claude is not told which boxes you ticked; to tell it, say so in a message.
+  - They live in the plugin's data, not in a note. A note gets them only when you copy the reply, insert it into a note, or save the chat as a note, and ticking a box later does not change that note.
 
   <img src="docs/reply-buttons.png" width="420" alt="The buttons under a reply — reply, copy, insert into a note, branch — shown three times with the tooltips “Reply to this”, “Insert into note” and “Branch from here”">
 
