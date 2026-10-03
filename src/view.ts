@@ -653,12 +653,16 @@ export class ChatView extends ItemView {
     setIcon(this.phoneButton, 'smartphone');
     this.registerDomEvent(this.phoneButton, 'click', (evt) => this.onPhoneClick(evt));
     this.updatePhoneButton();
-    const allHint = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
-    const memosButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `This chat's memos, in a table (${allHint}: all memos)` } });
+    const chatHint = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
+    const memosButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `All memos, in a table (${chatHint}: this chat's)` } });
     setIcon(memosButton, 'sticky-note');
-    this.registerDomEvent(memosButton, 'click', (evt) =>
-      void this.plugin.openChatMemos(this.chatId ?? this.resumeId ?? '', this.chatName ?? 'New chat', Keymap.isModEvent(evt) !== false),
-    );
+    this.registerDomEvent(memosButton, 'click', (evt) => {
+      const chatId = this.chatId ?? this.resumeId ?? '';
+      // All memos; this chat's with the modifier, for a chat that has started.
+      const all = Keymap.isModEvent(evt) === false || !chatId;
+      void this.plugin.openChatMemos(chatId, this.chatName ?? 'New chat', all);
+      new Notice(all ? `All memos. ${chatHint} the memo button for this chat's.` : "This chat's memos. Click the memo button for all of them.", 4000);
+    });
     this.historyButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Chat history' } });
     setIcon(this.historyButton, 'history');
     this.registerDomEvent(this.historyButton, 'click', () => void this.openHistory());
