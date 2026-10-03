@@ -476,6 +476,9 @@ export class ChatView extends ItemView {
   private readonly pathOnlyMentions = new Set<string>();
   /** What the tray's mention chips show, to redraw it only when that changes (see followMentions). */
   private mentionKey = '';
+  /** A short message under the header (see flashHint), and when it goes. */
+  private hintEl: HTMLElement | null = null;
+  private hintTimer: number | null = null;
   /** A Memos table to bring to the chat on screen, once its title and id are both set (see setChatTitle). */
   private memosTimer: number | null = null;
   /** The memos the input mentions, whose Send boxes are ticked (see followMemoBoxes). */
@@ -668,7 +671,7 @@ export class ChatView extends ItemView {
         : forChat
           ? "This chat's memos. Click the memo button for all of them."
           : `All memos. ${chatHint} the memo button for this chat's.`;
-      new Notice(said, 4000);
+      this.flashHint(said);
     });
     this.historyButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Chat history' } });
     setIcon(this.historyButton, 'history');
@@ -1044,6 +1047,8 @@ export class ChatView extends ItemView {
     this.selectionTimer = null;
     if (this.memosTimer !== null) window.clearTimeout(this.memosTimer);
     this.memosTimer = null;
+    if (this.hintTimer !== null) window.clearTimeout(this.hintTimer);
+    this.hintTimer = null;
     for (const run of this.summaryRuns) run.abort();
     this.sessionToken = null;
     this.closeSession(this.session);
@@ -2784,6 +2789,21 @@ export class ChatView extends ItemView {
     for (const path of memos) if (!this.mentionedMemos.has(path)) this.setMemoBox(path, true);
     for (const path of this.mentionedMemos) if (!memos.has(path)) this.setMemoBox(path, false);
     this.mentionedMemos = memos;
+  }
+
+  /**
+   * A short message just under the panel's header, for a few seconds: a notice would sit over the
+   * header's buttons, the very ones it is about.
+   */
+  private flashHint(text: string): void {
+    this.hintEl ??= (this.messagesEl.parentElement ?? this.contentEl).createDiv({ cls: 'vc-hint' });
+    this.hintEl.setText(text);
+    this.hintEl.show();
+    if (this.hintTimer !== null) window.clearTimeout(this.hintTimer);
+    this.hintTimer = window.setTimeout(() => {
+      this.hintTimer = null;
+      this.hintEl?.hide();
+    }, 3500);
   }
 
   /** Ticks or clears a memo's Send box; cleared only when no other panel still has the memo in its input. */

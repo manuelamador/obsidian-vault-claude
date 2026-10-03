@@ -3344,6 +3344,15 @@ async function main(): Promise<void> {
       console.log(`a reply saved as a memo: button ${memoButton !== null}; passages ${JSON.stringify(opened?.passages)} -> ${replyMemoOk}`);
       if (!replyMemoOk) process.exitCode = 1;
     }
+    // The memo button's message shows in the panel, under the header, not as a notice over its buttons.
+    {
+      const memosButton = [...root.querySelectorAll('button')].find((el) => el.getAttribute('aria-label')?.startsWith('All memos')) as HTMLElement;
+      memosButton.click();
+      const hint = root.querySelector('.vc-hint') as HTMLElement | null;
+      const hintOk = hint?.isShown() === true && hint.textContent === 'All memos.';
+      console.log(`memo button hint: "${hint?.textContent}" shown ${hint?.isShown()} -> ${hintOk}`);
+      if (!hintOk) process.exitCode = 1;
+    }
     // Pinned at the bottom while a reply streams, the bar is still brought up to date — spaced out,
     // not on every frame's scroll — and once more when the reply ends.
     {
