@@ -626,6 +626,26 @@
   --vc-panel-bg: var(--background-secondary);
 }
 
+/*
+ * A translucent window (Settings → Appearance) makes the sidebars see-through, which a solid bar
+ * would cover as a grey band: there the bar is see-through too, and blurs what scrolls under it.
+ * The side chat, a pane over the chat, is tinted as well as blurred, as its text sits on top.
+ */
+.is-translucent:not(.is-fullscreen) .mod-left-split .vc-root,
+.is-translucent:not(.is-fullscreen) .mod-right-split .vc-root {
+  --vc-panel-bg: transparent;
+}
+
+.is-translucent:not(.is-fullscreen) :is(.mod-left-split, .mod-right-split) .vc-question-bar {
+  backdrop-filter: blur(12px);
+  box-shadow: none;
+}
+
+.is-translucent:not(.is-fullscreen) :is(.mod-left-split, .mod-right-split) .vc-side-chat {
+  background: color-mix(in srgb, var(--background-primary) 60%, transparent);
+  backdrop-filter: blur(20px);
+}
+
 .vc-question-bar-main {
   flex: 1;
   min-width: 0;
@@ -1063,8 +1083,8 @@
   text-decoration: underline;
 }
 
-/* Bold or code text in a reply that names a vault file (see fileLinks.ts): the link colour over the code one. */
-.vc-text .vc-file-link {
+/* Bold or code text that names a vault file (see fileLinks.ts), in any rendered Markdown: the link colour over the code one. */
+.vc-markdown .vc-file-link {
   color: var(--text-accent);
 }
 

@@ -3628,7 +3628,7 @@ export class ChatView extends ItemView {
 
   private async changeModel(value: string): Promise<void> {
     // Default is sent as such: with no model, Claude Code runs the one its settings name, which may differ.
-    const previous = { override: this.modelOverride, current: this.currentModel };
+    const previous = this.modelOverride;
     this.modelOverride = value || undefined;
     const session = this.session;
     let switched = true;
@@ -3643,9 +3643,8 @@ export class ChatView extends ItemView {
       } catch (error) {
         log('setModel failed', error);
         new Notice('Could not switch the model.');
-        // The menu stays on the model that runs.
-        this.modelOverride = previous.override;
-        this.currentModel = previous.current;
+        // The menu stays on the model that runs (currentModel, which this left alone, still names it).
+        this.modelOverride = previous;
         switched = false;
       }
     } else {

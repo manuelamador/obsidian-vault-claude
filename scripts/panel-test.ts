@@ -3571,7 +3571,10 @@ async function main(): Promise<void> {
       modeChat.session = {
         setPermissionMode: async () => undefined,
         setModel: async (model: string) => {
-          if (model === 'claude-broken-1') throw new Error('refused');
+          // A reply naming the model it ran on arrives while the refused switch is pending.
+          if (model !== 'claude-broken-1') return;
+          (view as unknown as { currentModel: string | null }).currentModel = 'claude-haiku-4-5-20251001';
+          throw new Error('refused');
         },
         setHandlers() {},
         close() {},
@@ -3602,7 +3605,7 @@ async function main(): Promise<void> {
         !afterNew.tinted &&
         keptPlan === 'plan' &&
         JSON.stringify(settingLines) === JSON.stringify(['Permission mode: Accept edits', 'Model: Sonnet 5.5']) &&
-        afterRefusal === 'Sonnet 5.5 (claude-sonnet-5-5)' &&
+        afterRefusal === 'Haiku 4.5 (claude-sonnet-5-5)' &&
         JSON.stringify(planColoured) === '[false,false]' &&
         !left.cue &&
         !left.tinted &&
