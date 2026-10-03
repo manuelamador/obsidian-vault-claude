@@ -66,6 +66,7 @@ async function main(): Promise<void> {
       },
     },
     metadataCache: {
+      getFileCache: (_file: unknown): unknown => null,
       getFirstLinkpathDest: (link: string) =>
         link === 'paper.pdf'
           ? Object.assign(new stub.TFile(), { path: 'paper.pdf', name: 'paper.pdf', extension: 'pdf' })
@@ -502,6 +503,41 @@ async function main(): Promise<void> {
         !cleared.shown;
       console.log(`mention chips: ${JSON.stringify(shown)}, × on them ${removers}; click ${afterRemove[0]} (sends the path ${sentPath.includes('Mentioned note:')}); click again ${afterClick[0]}; put in from code ${JSON.stringify(fromCode)}; cleared ${JSON.stringify(cleared)} -> ${chipsOk}`);
       if (!chipsOk) process.exitCode = 1;
+    }
+    // A memo's Send box follows the input: ticked when the memo is mentioned, cleared when it is not;
+    // and a box cleared in the base takes the memo's mention out of the input.
+    {
+      const boxView = view as unknown as { inputEl: HTMLTextAreaElement; unmention(path: string): void; mentions(path: string): boolean };
+      const cache = app.metadataCache as unknown as Record<string, unknown>;
+      const fileManager = app.fileManager as unknown as Record<string, unknown>;
+      const boxes: string[] = [];
+      const fileCacheWas = cache.getFileCache;
+      cache.getFileCache = (file: { path: string }) => (file.path === 'New.md' ? { frontmatter: { type: 'memo', send: boxes.at(-1) === 'New.md: true' } } : null);
+      fileManager.processFrontMatter = async (file: { path: string }, change: (frontmatter: Record<string, unknown>) => void) => {
+        const frontmatter: Record<string, unknown> = {};
+        change(frontmatter);
+        boxes.push(`${file.path}: ${frontmatter.send}`);
+      };
+      const type = (value: string) => {
+        boxView.inputEl.value = value;
+        boxView.inputEl.dispatchEvent(new dom.window.Event('input'));
+      };
+      notesOnDisk.set('New.md', 'a memo');
+      type('Compare @[[New.md]] and @[[paper.pdf]]');
+      type('Compare @[[New.md]] and @[[paper.pdf]], again');
+      const mentioned = boxView.mentions('New.md');
+      boxView.unmention('New.md');
+      const afterUnmention = boxView.inputEl.value;
+      type('');
+      cache.getFileCache = fileCacheWas;
+      delete fileManager.processFrontMatter;
+      notesOnDisk.delete('New.md');
+      const boxOk =
+        JSON.stringify(boxes) === JSON.stringify(['New.md: true', 'New.md: false']) &&
+        mentioned &&
+        afterUnmention === 'Compare and @[[paper.pdf]], again';
+      console.log(`memo Send boxes: ${JSON.stringify(boxes)}; mentioned ${mentioned}; unmentioned "${afterUnmention}" -> ${boxOk}`);
+      if (!boxOk) process.exitCode = 1;
     }
     // Undo in the input stays in the chat on screen: it stops at the text the chat came back with, and
     // redo redoes only what was undone since.

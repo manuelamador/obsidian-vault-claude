@@ -476,6 +476,8 @@ export class ChatView extends ItemView {
   private readonly pathOnlyMentions = new Set<string>();
   /** What the tray's mention chips show, to redraw it only when that changes (see followMentions). */
   private mentionKey = '';
+  /** The memos the input mentions, whose Send boxes are ticked (see followMemoBoxes). */
+  private mentionedMemos = new Set<string>();
   /** The input's text when its chat came on screen, and the undos since that redo may redo (see setUndoFloor). */
   private undoFloor = '';
   private undosSinceFloor = 0;
@@ -2740,7 +2742,46 @@ export class ChatView extends ItemView {
     const mentions = this.mentionedItems(this.inputEl.value);
     // A note no longer mentioned is no longer sent as a path only: mentioned again, it goes with its text.
     for (const path of this.pathOnlyMentions) if (!mentions.some(({ item }) => item.path === path)) this.pathOnlyMentions.delete(path);
+    this.followMemoBoxes(mentions);
     if (this.mentionsKey(mentions) !== this.mentionKey) this.renderTray();
+  }
+
+  /**
+   * A memo's Send box in the Memos base follows the input: ticked while the memo is mentioned in it,
+   * cleared once it is not (sent, its mention deleted, another chat's text in the input).
+   */
+  private followMemoBoxes(mentions: Mention[]): void {
+    const memos = new Set(
+      mentions.filter(({ item }) => item instanceof TFile && this.app.metadataCache.getFileCache(item)?.frontmatter?.type === 'memo').map(({ item }) => item.path),
+    );
+    for (const path of memos) if (!this.mentionedMemos.has(path)) this.setMemoBox(path, true);
+    for (const path of this.mentionedMemos) if (!memos.has(path)) this.setMemoBox(path, false);
+    this.mentionedMemos = memos;
+  }
+
+  private setMemoBox(path: string, on: boolean): void {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || (this.app.metadataCache.getFileCache(file)?.frontmatter?.send === true) === on) return;
+    this.app.fileManager
+      .processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+        frontmatter.send = on;
+      })
+      .catch((error: unknown) => log('setting a memo box failed', error));
+  }
+
+  /** Whether the input @-mentions the file at `path`. */
+  mentions(path: string): boolean {
+    return this.mentionedItems(this.inputEl.value).some(({ item }) => item.path === path);
+  }
+
+  /** Takes the input's @-mentions of the file at `path` out: its memo's Send box was cleared in the Memos base. */
+  unmention(path: string): void {
+    const text = this.inputEl.value.replace(/@\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\][ \t]?/g, (whole, target: string) =>
+      this.mentionedItems(`@[[${target.trim()}]]`)[0]?.item.path === path ? '' : whole,
+    );
+    if (text === this.inputEl.value) return;
+    this.inputEl.value = text;
+    this.inputEdited();
   }
 
   private mentionsKey(mentions: Mention[]): string {

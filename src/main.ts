@@ -327,10 +327,10 @@ export default class VaultClaudePlugin extends Plugin {
     );
     this.registerNoteEvents();
     this.registerEvent(this.app.workspace.on('files-menu', (menu, files) => attachItem(menu, files)));
-    // A memo's Send box ticked, in the Memos base: the memo goes to the chat's input (see sendMemo).
+    // A memo's Send box ticked or cleared, in the Memos base: the memo goes into the chat's input, or out of it (see followMemoBox).
     this.registerEvent(
       this.app.metadataCache.on('changed', (file, _data, cache) => {
-        if (cache.frontmatter?.type === 'memo' && cache.frontmatter.send === true) void this.sendMemo(file);
+        if (cache.frontmatter?.type === 'memo') void this.followMemoBox(file, cache.frontmatter.send === true);
       }),
     );
     this.registerEvent(
@@ -1002,27 +1002,25 @@ export default class VaultClaudePlugin extends Plugin {
     if (drift) new Notice(drift, 15_000);
   }
 
-  /** Memos being sent, so that the change clearing a box does not send one twice. */
-  private readonly sendingMemos = new Set<string>();
+  /** Each memo's Send box as last seen, so that only a change of it is acted on (see followMemoBox). */
+  private readonly memoBoxes = new Map<string, boolean>();
 
   /**
-   * A memo whose Send box was ticked (a button in the Memos base): its box is cleared, and it goes to
-   * the chat's input as an `@` mention, whose chip shows what of it goes with the message.
+   * A memo's Send box, ticked or cleared in the Memos base, puts the memo in the chat's input as an
+   * `@` mention, or takes it out of every panel's input. Only a change of the box counts: a memo's
+   * other edits leave the inputs alone, and the boxes the panels set themselves find them as they are.
    */
-  async sendMemo(file: TFile): Promise<void> {
-    if (this.sendingMemos.has(file.path)) return;
-    this.sendingMemos.add(file.path);
-    try {
-      await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-        frontmatter.send = false;
-      });
-      await this.attachToClaude([file]);
-    } catch (error) {
-      log('sending a memo failed', error);
-      new Notice(`Could not send the memo: ${errorText(error)}`);
-    } finally {
-      this.sendingMemos.delete(file.path);
+  async followMemoBox(file: TFile, on: boolean): Promise<void> {
+    const before = this.memoBoxes.get(file.path);
+    this.memoBoxes.set(file.path, on);
+    if (before === on) return;
+    const views = this.app.workspace.getLeavesOfType(VIEW_TYPE).flatMap((leaf) => (leaf.view instanceof ChatView ? [leaf.view] : []));
+    if (!on) {
+      for (const view of views) view.unmention(file.path);
+      return;
     }
+    if (views.some((view) => view.mentions(file.path))) return;
+    await this.attachToClaude([file]);
   }
 
   async attachToClaude(items: TAbstractFile[]): Promise<void> {

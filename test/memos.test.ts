@@ -91,19 +91,16 @@ test("the Memos base opens on the chat's memos, then those about the note in fro
   assert.ok(base.startsWith('# Written by Vault Claude when a chat'));
 });
 
-test("a memo's Send box sends it to the chat once and is cleared", async () => {
+test("a memo's Send box puts it in the input when ticked, takes it out when cleared, and only a change counts", async () => {
   const { default: VaultClaudePlugin } = await import('../src/main');
   const p = new (VaultClaudePlugin as unknown as new () => InstanceType<typeof VaultClaudePlugin>)();
-  const frontmatter: Record<string, unknown> = { type: 'memo', send: true };
-  const sent: string[][] = [];
-  (p as unknown as { app: unknown }).app = {
-    fileManager: {
-      processFrontMatter: async (_file: unknown, change: (fm: Record<string, unknown>) => void) => change(frontmatter),
-    },
-  };
-  p.attachToClaude = async (items) => void sent.push(items.map((item) => item.path));
+  const attached: string[] = [];
+  (p as unknown as { app: unknown }).app = { workspace: { getLeavesOfType: () => [] } };
+  p.attachToClaude = async (items) => void attached.push(...items.map((item) => item.path));
   const memo = { path: 'Claude chats/Memos/A memo.md' } as never;
-  await Promise.all([p.sendMemo(memo), p.sendMemo(memo)]);
-  assert.equal(frontmatter.send, false);
-  assert.deepEqual(sent, [['Claude chats/Memos/A memo.md']]);
+  await p.followMemoBox(memo, true);
+  // Another edit of the memo, its box still ticked: nothing more.
+  await p.followMemoBox(memo, true);
+  await p.followMemoBox(memo, false);
+  assert.deepEqual(attached, ['Claude chats/Memos/A memo.md']);
 });
