@@ -235,6 +235,14 @@ Open chat · New chat · New chat in a new tab · Edit selection with Claude · 
 - **Windows, with Claude Code installed through npm:** the plugin cannot start `claude.cmd`; install it with the native Windows installer, which provides `claude.exe`.
 - **Anything else:** attach the diagnostic log (see Your data) to a bug report; it holds your vault's path.
 
+## Alternatives
+
+Other plugins that bring Claude Code, or AI chat generally, into Obsidian:
+
+- [Claudian](https://github.com/YishenTu/claudian): Claude Code or Codex as a chat in the vault's sidebar.
+- [Copilot for Obsidian](https://github.com/logancyang/obsidian-copilot): chat with your notes, and agents such as Claude Code, Codex and OpenCode.
+- [Agent Client](https://github.com/RAIT-09/obsidian-agent-client): Claude Code, Codex, Gemini CLI and other agents through the Agent Client Protocol.
+
 ## License
 
 [MIT](LICENSE). The workarounds for Obsidian's renderer in `esbuild.config.mjs`, `src/electronCompat.ts` and `src/session.ts` follow [Claudian](https://github.com/YishenTu/claudian) (MIT).
