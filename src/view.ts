@@ -43,6 +43,8 @@ import {
 } from './attachments';
 import { chipFor, renderChip } from './chip';
 import { estimateTokens, formatTokens, mentionTargets } from './contextSize';
+import { CaptureIdeaModal, type IdeaChoice } from './captureIdeaModal';
+import { addIdeaSources, ideaNoteMarkdown, ideaNoteName, passageNeedle, type IdeaExcerpt, type IdeaSources } from './ideas';
 import { FindBar } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -483,6 +485,8 @@ export class ChatView extends ItemView {
   /** Counts the chats opened or started in this panel: an open still reading its file gives way when it changes. */
   private chatGeneration = 0;
   private findBar!: FindBar;
+  /** "Idea" beside Quote and Side chat over a selection in the chat (see captureIdea). */
+  private ideaButton!: HTMLButtonElement;
   /** A question asked beside the chat, in a pane over its messages (see SideChat). */
   private sideChat!: SideChat;
   /** Beside the Quote button over a selection: asks about the selection in the side chat. */
@@ -742,6 +746,12 @@ export class ChatView extends ItemView {
     this.sideButton.hide();
     this.registerDomEvent(this.sideButton, 'mousedown', (evt) => evt.preventDefault());
     this.registerDomEvent(this.sideButton, 'click', () => this.openSideChat());
+    this.ideaButton = messagesWrap.createEl('button', { cls: 'vc-quote-button vc-side-button vc-idea-button', attr: { 'aria-label': 'Record the selected passages as the source of an idea' } });
+    setIcon(this.ideaButton.createSpan({ cls: 'vc-quote-button-icon' }), 'lightbulb');
+    this.ideaButton.createSpan({ text: 'Idea' });
+    this.ideaButton.hide();
+    this.registerDomEvent(this.ideaButton, 'mousedown', (evt) => evt.preventDefault());
+    this.registerDomEvent(this.ideaButton, 'click', () => this.captureIdea());
     this.sideChat = new SideChat(messagesWrap, {
       startSession: (handlers, id, own) => this.startSideSession(handlers, id, own),
       renderMarkdown: (markdown, el, component) => void this.renderMarkdown(markdown, el, component),
@@ -5039,14 +5049,16 @@ export class ChatView extends ItemView {
       return;
     }
     const side = this.sideButton;
+    const idea = this.ideaButton;
     button.show();
     side.show();
+    idea.show();
     const width = button.offsetWidth;
     const height = button.offsetHeight;
     // Quote over the start of the selection, where reading began, and Side chat just after it: the
     // two kept inside the panel together.
     const gap = 6;
-    const left = Math.max(4, Math.min(first.left - wrap.left, wrap.width - width - gap - side.offsetWidth - 4));
+    const left = Math.max(4, Math.min(first.left - wrap.left, wrap.width - width - gap - side.offsetWidth - gap - idea.offsetWidth - 4));
     // Above the selection when there is room, below it otherwise.
     // 8 px: room for the pointer between the button and the text it points at.
     const above = top - wrap.top - height - 8;
@@ -5057,11 +5069,121 @@ export class ChatView extends ItemView {
     button.style.top = `${buttonTop}px`;
     side.style.left = `${left + width + gap}px`;
     side.style.top = `${buttonTop}px`;
+    idea.style.left = `${left + width + gap + side.offsetWidth + gap}px`;
+    idea.style.top = `${buttonTop}px`;
   }
 
   private hideSelectionButtons(): void {
     this.quoteButton?.hide();
     this.sideButton?.hide();
+    this.ideaButton?.hide();
+  }
+
+  // ---- Ideas -------------------------------------------------------------
+
+  /**
+   * The selection in the chat as passages, one for each message it takes in, in the conversation's
+   * order: who wrote the message, the selected part of it with equations as LaTeX, and plain words
+   * from it to find it again by. Empty when nothing in the chat is selected.
+   */
+  selectedExcerpts(): IdeaExcerpt[] {
+    const selection = this.chatSelection();
+    if (!selection || selection.rangeCount === 0) return [];
+    const range = selection.getRangeAt(0);
+    const doc = this.messagesEl.ownerDocument;
+    const messages = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user-text, .vc-text')].filter((el) => range.intersectsNode(el));
+    const excerpts: IdeaExcerpt[] = [];
+    for (const el of messages) {
+      // A message inside another taken whole (a background agent's result) is the outer one's.
+      if (messages.some((other) => other !== el && other.contains(el))) continue;
+      const part = doc.createRange();
+      part.selectNodeContents(el);
+      if (range.compareBoundaryPoints(range.START_TO_START, part) > 0) part.setStart(range.startContainer, range.startOffset);
+      if (range.compareBoundaryPoints(range.END_TO_END, part) < 0) part.setEnd(range.endContainer, range.endOffset);
+      const text = (selectionWithMath(part) ?? part.toString()).trim();
+      if (!text) continue;
+      // Words outside the equations: the chat's Find searches the text as drawn, without their LaTeX.
+      const plain = part.cloneContents();
+      for (const math of Array.from(plain.querySelectorAll('.math'))) math.replaceWith('\n');
+      excerpts.push({ role: el.closest('.vc-user') ? 'you' : 'claude', text, needle: passageNeedle(plain.textContent ?? '') });
+    }
+    return excerpts;
+  }
+
+  /** "Idea" over a selection in the chat: the form for recording the selected passages as the source of an idea (see CaptureIdeaModal). */
+  captureIdea(): void {
+    const excerpts = this.selectedExcerpts();
+    this.hideSelectionButtons();
+    const chatId = this.chatId ?? this.resumeId;
+    if (excerpts.length === 0) {
+      new Notice('Select the passages of the chat the idea came from first.');
+      return;
+    }
+    if (!chatId) {
+      new Notice('This chat has not started yet: there is nothing to link the idea to.');
+      return;
+    }
+    const sources: IdeaSources = {
+      vault: this.app.vault.getName(),
+      chatId,
+      chatTitle: this.chatName ?? 'Chat',
+      date: formatDate(Date.now()).slice(0, 10),
+      excerpts,
+    };
+    new CaptureIdeaModal(this.app, excerpts, this.plugin.ideaNotes(), (title) => this.ideaTitleProblem(title), (choice) => void this.saveIdea(choice, sources)).open();
+  }
+
+  /** Why a new idea cannot be called `title`: note names are unique in the vault, and a link to the idea must find it. */
+  private ideaTitleProblem(title: string): string | null {
+    const name = ideaNoteName(title);
+    if (!name) return 'Give the idea a title with letters or numbers in it.';
+    const taken = this.app.metadataCache.getFirstLinkpathDest(name, '');
+    return taken ? `A note named “${name}” already exists: add the passages to it, or give the idea another title.` : null;
+  }
+
+  /** Writes the passages to a new idea note, or to the end of the one chosen, and links the note to the chat. */
+  async saveIdea(choice: IdeaChoice, sources: IdeaSources): Promise<TFile | null> {
+    try {
+      let file = choice.idea;
+      if (file) {
+        await this.app.vault.process(file, (text) => addIdeaSources(text, sources));
+        await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+          const chats = Array.isArray(frontmatter.claude_chats) ? frontmatter.claude_chats : [];
+          if (!chats.includes(sources.chatId)) frontmatter.claude_chats = [...chats, sources.chatId];
+          frontmatter.updated = sources.date;
+        });
+      } else {
+        const folder = normalizePath(this.plugin.settings.ideasFolder || '/');
+        if (folder !== '/' && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+        const path = `${folder === '/' ? '' : `${folder}/`}${ideaNoteName(choice.title)}.md`;
+        file = await this.app.vault.create(path, ideaNoteMarkdown({ title: choice.title, description: choice.description, sources }));
+      }
+      this.plugin.linkNoteChat(file.path, sources.chatId);
+      const saved = file;
+      const frag = createFragment((parts) => {
+        parts.appendText(`${choice.idea ? 'Added to' : 'Saved'} “${saved.basename}”. `);
+        parts.createEl('a', { text: 'Open it', href: '#' }).addEventListener('click', (evt) => {
+          evt.preventDefault();
+          void this.app.workspace.getLeaf('tab').openFile(saved);
+        });
+      });
+      new Notice(frag, 8000);
+      return saved;
+    } catch (error) {
+      log('saving an idea failed', error);
+      new Notice(`Could not save the idea: ${errorText(error)}`);
+      return null;
+    }
+  }
+
+  /** Puts `text` in the input as a quote, to carry on from it (a link from an idea note). */
+  quote(text: string): void {
+    this.quoteText(text);
+  }
+
+  /** Finds `needle` in the chat on screen with Find, drawing earlier turns back to it (a link from an idea note). */
+  async findPassage(needle: string): Promise<void> {
+    if (!(await this.findBar.find(needle))) new Notice('The passage was not found in this chat: it may have been compacted away. It is kept in the idea note.');
   }
 
   /** Opens the side chat, with `quote` (or the text selected in the chat) quoted in its input. */

@@ -66,6 +66,8 @@ export interface VaultClaudeSettings {
   historyIncludesAllSessions: boolean;
   /** Vault folder where "Save chat as note" writes; empty for the vault root. */
   savedChatsFolder: string;
+  /** Vault folder for idea notes (see CaptureIdeaModal); empty for the vault root. */
+  ideasFolder: string;
   /** System notification when a long reply finishes (or approval is needed) while Obsidian is not in front. */
   notifyWhenDone: boolean;
   notifyAfterSeconds: number;
@@ -119,6 +121,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   attachActiveNote: false,
   historyIncludesAllSessions: false,
   savedChatsFolder: 'Claude chats',
+  ideasFolder: 'Claude chats/Ideas',
   notifyWhenDone: true,
   notifyAfterSeconds: 30,
   allowBypass: false,
@@ -385,6 +388,19 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           .setValue(settings.savedChatsFolder)
           .onChange(async (value) => {
             settings.savedChatsFolder = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Folder for ideas')
+      .setDesc('Where "Capture idea" writes a note for each idea, relative to the vault root; created if missing. Leave empty for the vault root.')
+      .addText((text) =>
+        text
+          .setPlaceholder('Claude chats/Ideas')
+          .setValue(settings.ideasFolder)
+          .onChange(async (value) => {
+            settings.ideasFolder = value.trim();
             await this.plugin.saveSettings();
           }),
       );

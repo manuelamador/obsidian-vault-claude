@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { FileSystemAdapter, Menu, Notice, Plugin, TFile, type Editor, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, Menu, Notice, Plugin, TFile, normalizePath, type Editor, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
 import { join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
@@ -9,6 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
+import { PROTOCOL_ACTION } from './ideas';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -160,6 +161,8 @@ export default class VaultClaudePlugin extends Plugin {
     // Links in replies show Obsidian's page preview, with the modifier key held unless the Page preview settings say otherwise.
     this.registerHoverLinkSource(VIEW_TYPE, { display: 'Vault Claude', defaultMod: true });
     this.addRibbonIcon('bot', 'Open Claude', () => void this.activateView());
+    // Links in idea notes back to the passages they came from (see ideas.ts).
+    this.registerObsidianProtocolHandler(PROTOCOL_ACTION, (params) => void this.openChatLink(params));
     this.addCommand({ id: 'open-chat', name: 'Open chat', callback: () => void this.activateView() });
     this.addCommand({
       id: 'new-chat',
@@ -1107,11 +1110,43 @@ export default class VaultClaudePlugin extends Plugin {
     await view?.sendText(text);
   }
 
-  /** Opens a chat by its session id in the panel, as listed when it was (its copies with it): a kept side chat whose panel has closed. */
-  async openChatById(id: string, title: string): Promise<void> {
+  /**
+   * Opens a chat by its session id in the panel, as listed when it was (its copies with it): a kept
+   * side chat whose panel has closed, a passage an idea came from. The panel that shows it, once
+   * shown; null when it could not be.
+   */
+  async openChatById(id: string, title: string): Promise<ChatView | null> {
     const view = await this.activateView();
     const listed = this.lastListing?.find((item) => item.id === id);
-    await view?.openChat(listed ? { ...listed, title } : { id, title, updatedAt: Date.now(), fromPanel: this.isPanelChat(id) });
+    const opened = await view?.openChat(listed ? { ...listed, title } : { id, title, updatedAt: Date.now(), fromPanel: this.isPanelChat(id) });
+    return opened ? view : null;
+  }
+
+  /**
+   * A link from an idea note (see ideas.ts chatLink): opens its chat, then finds the passage in it
+   * (`find`) or quotes it in the input to carry on from it (`quote`).
+   */
+  private async openChatLink(params: Record<string, string>): Promise<void> {
+    const id = params.chat;
+    if (!id) return;
+    const title = this.chats.find((chat) => chat.id === id)?.title ?? this.lastListing?.find((item) => item.id === id)?.title ?? 'Chat';
+    const view = await this.openChatById(id, title);
+    if (!view) {
+      new Notice('That chat could not be opened: it may have been deleted. The passage is kept in the idea note.');
+      return;
+    }
+    if (params.quote) view.quote(params.quote);
+    else if (params.find) await view.findPassage(params.find);
+  }
+
+  /** The idea notes in the ideas folder (see CaptureIdeaModal), the most recently changed first. */
+  ideaNotes(): TFile[] {
+    const folder = normalizePath(this.settings.ideasFolder || '/');
+    const inside = (file: TFile) => folder === '/' || file.path.startsWith(`${folder}/`);
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((file) => inside(file) && this.app.metadataCache.getFileCache(file)?.frontmatter?.type === 'idea')
+      .sort((a, b) => b.stat.mtime - a.stat.mtime);
   }
 
   async deleteChat(id: string): Promise<boolean> {

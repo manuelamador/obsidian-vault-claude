@@ -91,6 +91,19 @@ export class FindBar {
     if (this.input.value) this.search(false);
   }
 
+  /**
+   * Opens the bar on `needle` and goes to its first match, drawing earlier turns back to it when
+   * none is drawn yet (a link to a passage). Whether it was found.
+   */
+  async find(needle: string): Promise<boolean> {
+    this.generation += 1;
+    this.input.value = needle;
+    this.el.show();
+    this.search(true);
+    if (this.ranges.length === 0 && this.hidden > 0) await this.step(1);
+    return this.ranges.length > 0;
+  }
+
   close(): void {
     this.generation += 1;
     this.el.hide();
