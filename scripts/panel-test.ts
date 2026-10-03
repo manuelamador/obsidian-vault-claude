@@ -3143,7 +3143,7 @@ async function main(): Promise<void> {
     // equations as LaTeX and plain words to find it by; saved as a new memo note, or added to one.
     {
       const ideaView = view as unknown as {
-        selectedPassages(): { role: string; text: string; needle: string }[];
+        selectedPassages(): { role: string; text: string; needle: string; links?: string[] }[];
         saveMemo(choice: { memo: unknown; title: string; description: string; tags: string[] }, sources: unknown): Promise<{ path: string } | null>;
         findPassage(needle: string): Promise<void>;
         quote(text: string): void;
@@ -3153,7 +3153,7 @@ async function main(): Promise<void> {
       const exchange = internals.messagesEl.createDiv();
       exchange.innerHTML =
         '<div class="vc-user"><div class="vc-user-text">Does the result survive recursive repayment?</div></div>' +
-        '<div class="vc-text"><p>A mechanism: <span class="math math-inline" data-tex="q(b)"><mjx-container></mjx-container></span> falls with debt.</p></div>' +
+        '<div class="vc-text"><p>A mechanism: <span class="math math-inline" data-tex="q(b)"><mjx-container></mjx-container></span> falls with debt, as in <a class="internal-link" data-href="New.md">New</a>.</p></div>' +
         '<div class="vc-user"><div class="vc-user-text">Refine it with the recursive formulation.</div></div>';
       const [question, , refinement] = Array.from(exchange.children) as HTMLElement[];
       const across = document.createRange();
@@ -3179,6 +3179,11 @@ async function main(): Promise<void> {
       };
       const chatWas = ideaView.chatId;
       ideaView.chatId = 'idea-chat';
+      // The chat's attached note, and a note a passage links to: the notes the memo is about.
+      const memoNotes = view as unknown as { attachedNote: string | null };
+      const attachedWas = memoNotes.attachedNote;
+      memoNotes.attachedNote = 'Linked.md';
+      notesOnDisk.set('Linked.md', 'linked');
       const sources = { vault: 'Obsidian', chatId: 'idea-chat', chatTitle: 'Debt model', date: '2026-10-03', passages: excerpts };
       const linksBefore = plugin.noteLinks.length;
       const created = await ideaView.saveMemo({ memo: null, title: 'Repayment timing: selection', description: 'Test it.', tags: ['idea'] }, sources);
@@ -3196,6 +3201,8 @@ async function main(): Promise<void> {
       const quoted = ideaView.inputEl.value;
       ideaView.inputEl.value = inputWas;
       ideaView.chatId = chatWas;
+      memoNotes.attachedNote = attachedWas;
+      notesOnDisk.delete('Linked.md');
       delete vault.create;
       delete vault.createFolder;
       delete vault.process;
@@ -3205,16 +3212,20 @@ async function main(): Promise<void> {
       const ideaOk =
         JSON.stringify(excerpts.map((excerpt) => excerpt.role)) === '["you","claude","you"]' &&
         excerpts[0]?.text === 'result survive recursive repayment?' &&
-        excerpts[1]?.text === 'A mechanism: $q(b)$ falls with debt.' &&
+        excerpts[1]?.text === 'A mechanism: $q(b)$ falls with debt, as in New.' &&
+        JSON.stringify(excerpts[1]?.links) === '["New.md"]' &&
+        ideaText.includes('notes: ["[[Linked]]", "[[New]]"]') &&
         excerpts[1]?.needle === 'A mechanism:' &&
         excerpts[2]?.text === 'Refine it' &&
         ideaPath === 'Claude chats/Memos/Repayment timing selection.md' &&
         ideaText.includes('# Repayment timing: selection') &&
         ideaText.includes('tags: [memo, idea]') &&
-        ideaText.includes('> A mechanism: $q(b)$ falls with debt.') &&
+        ideaText.includes('chats: ["Debt model"]') &&
+        ideaText.includes('> A mechanism: $q(b)$ falls with debt, as in New.') &&
         JSON.stringify(linked) === JSON.stringify([`${ideaPath}@idea-chat`]) &&
         addedText.includes('### Later · 2026-10-03') &&
-        JSON.stringify(frontmatters[0]) === JSON.stringify({ claude_chats: ['idea-chat', 'later-chat'], tags: ['memo', 'idea', 'read'], updated: '2026-10-03' }) &&
+        JSON.stringify([frontmatters[0]?.claude_chats, frontmatters[0]?.chats, frontmatters[0]?.tags, frontmatters[0]?.updated]) ===
+          JSON.stringify([['idea-chat', 'later-chat'], ['Later'], ['memo', 'idea', 'read'], '2026-10-03']) &&
         found > 0 &&
         quoted.includes('> A mechanism: $q(b)$ falls');
       console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${ideaPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${ideaOk}`);
@@ -3287,7 +3298,7 @@ async function main(): Promise<void> {
         JSON.stringify(opened?.passages) ===
         JSON.stringify([
           { role: 'you', text: 'Does timing matter?', needle: 'Does timing matter?' },
-          { role: 'claude', text: 'Yes: $q(b)$ moves first.', needle: 'Yes:' },
+          { role: 'claude', text: 'Yes: $q(b)$ moves first.', needle: 'Yes:', links: [] },
         ]);
       console.log(`a reply saved as a memo: button ${memoButton !== null}; passages ${JSON.stringify(opened?.passages)} -> ${replyMemoOk}`);
       if (!replyMemoOk) process.exitCode = 1;

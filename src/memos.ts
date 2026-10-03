@@ -10,6 +10,8 @@ export interface MemoPassage {
   text: string;
   /** A stretch of its plain text, outside any equation, by which the chat's Find finds it again. */
   needle: string;
+  /** The notes and files it links to, by link text or vault path (see ChatView.passageLinks). */
+  links?: string[];
 }
 
 /** Passages saved together from one chat. */
@@ -82,11 +84,30 @@ export function memoSourcesMarkdown(sources: MemoSources): string {
   return lines.join('\n');
 }
 
-/** A new memo note: frontmatter, the title, the description, and the passages it came from. */
-export function memoNoteMarkdown(memo: { title: string; description: string; tags: string[]; sources: MemoSources }): string {
-  const { date, chatId } = memo.sources;
+/** A YAML list of `values`, each a double-quoted string (JSON's quoting is YAML's). */
+function yamlList(values: string[]): string {
+  return `[${values.map((value) => JSON.stringify(value)).join(', ')}]`;
+}
+
+/**
+ * A new memo note: frontmatter, the title, the description, and the passages it came from. Its
+ * properties name the chat it came from and, as links, the notes it is about (`notes`, wikilinks),
+ * so that a note's backlinks and the Memos base find it.
+ */
+export function memoNoteMarkdown(memo: { title: string; description: string; tags: string[]; notes: string[]; sources: MemoSources }): string {
+  const { date, chatId, chatTitle } = memo.sources;
   const tags = cleanTags(['memo', ...memo.tags]);
-  const frontmatter = ['---', 'type: memo', `tags: [${tags.join(', ')}]`, `created: ${date}`, `updated: ${date}`, `claude_chats: [${chatId}]`, '---'];
+  const frontmatter = [
+    '---',
+    'type: memo',
+    `tags: [${tags.join(', ')}]`,
+    `created: ${date}`,
+    `updated: ${date}`,
+    `chats: ${yamlList([chatTitle])}`,
+    ...(memo.notes.length > 0 ? [`notes: ${yamlList(memo.notes)}`] : []),
+    `claude_chats: [${chatId}]`,
+    '---',
+  ];
   const body = [`# ${memo.title.trim()}`, ''];
   if (memo.description.trim()) body.push(memo.description.trim(), '');
   body.push('## Sources', '', memoSourcesMarkdown(memo.sources));
@@ -150,4 +171,55 @@ export function readMemoSuggestion(reply: string): { title: string; description:
   } catch {
     return null;
   }
+}
+
+/** The name of the Memos base's view of one chat's memos, which the panel opens (see memoBaseYaml). */
+export const CHAT_MEMOS_VIEW = 'This chat';
+
+/**
+ * The Memos base the panel writes and opens, in the memos folder: first the memos of chat `chatId`,
+ * then those about the note in front (the note it is embedded in, or the active one when it is open
+ * in a sidebar), all memos, and those of each kind. Written anew each time it is opened from a chat.
+ */
+export function memoBaseYaml(folder: string, chatId: string, chatTitle: string): string {
+  const where = folder === '/' ? [] : [`file.inFolder(${JSON.stringify(folder)})`];
+  const columns = ['file.name', 'tags', 'chats', 'notes', 'updated'];
+  const view = (name: string, filters: string[], sort: { property: string; direction: 'ASC' | 'DESC' }) =>
+    [
+      '  - type: table',
+      `    name: ${JSON.stringify(name)}`,
+      '    filters:',
+      '      and:',
+      ...[...where, 'type == "memo"', ...filters].map((filter) => `        - ${JSON.stringify(filter)}`),
+      '    order:',
+      ...columns.map((column) => `      - ${column}`),
+      '    sort:',
+      `      - property: ${sort.property}`,
+      `        direction: ${sort.direction}`,
+    ].join('\n');
+  const newest = { property: 'updated', direction: 'DESC' } as const;
+  const oldest = { property: 'created', direction: 'ASC' } as const;
+  return [
+    `# Written by Vault Claude when a chat's memos are shown (now: ${chatTitle.replace(/\n/g, ' ')}); copy it to keep changes of your own.`,
+    'properties:',
+    '  file.name:',
+    '    displayName: Memo',
+    '  tags:',
+    '    displayName: Tags',
+    '  chats:',
+    '    displayName: Chats',
+    '  notes:',
+    '    displayName: Notes',
+    '  updated:',
+    '    displayName: Updated',
+    'views:',
+    view(CHAT_MEMOS_VIEW, [`claude_chats.contains(${JSON.stringify(chatId)})`], newest),
+    view('About this note', ['file.hasLink(this.file)'], newest),
+    view('All memos', [], newest),
+    view('To do', ['file.hasTag("todo")'], oldest),
+    view('To read', ['file.hasTag("read")'], oldest),
+    view('To explore', ['file.hasTag("explore")'], oldest),
+    view('Ideas', ['file.hasTag("idea")'], newest),
+    '',
+  ].join('\n');
 }

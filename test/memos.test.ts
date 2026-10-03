@@ -4,6 +4,7 @@ import {
   addMemoSources,
   chatLink,
   cleanTags,
+  memoBaseYaml,
   memoNoteMarkdown,
   memoNoteName,
   memoSuggestionPrompt,
@@ -24,10 +25,10 @@ const sources: MemoSources = {
 };
 
 test('a new memo note: frontmatter with its tags, title, description, and each passage with who wrote it and links back', () => {
-  const note = memoNoteMarkdown({ title: 'Repayment timing may change equilibrium selection', description: 'Test it under other continuation choices.', tags: ['idea', 'read'], sources });
+  const note = memoNoteMarkdown({ title: 'Repayment timing may change equilibrium selection', description: 'Test it under other continuation choices.', tags: ['idea', 'read'], notes: ['[[Model setup]]'], sources });
   assert.match(
     note,
-    /^---\ntype: memo\ntags: \[memo, idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
+    /^---\ntype: memo\ntags: \[memo, idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
   );
   assert.ok(note.includes('**You** · [Go to the passage](obsidian://vault-claude?vault=Obsidian&chat=chat-1&find=Does%20the%20result%20survive)'));
   assert.ok(note.includes('> Does the result survive\n> recursive repayment?'));
@@ -37,7 +38,7 @@ test('a new memo note: frontmatter with its tags, title, description, and each p
 });
 
 test('passages added later go at the end of the Sources section, before any section after it', () => {
-  const note = memoNoteMarkdown({ title: 'Memo', description: '', tags: [], sources });
+  const note = memoNoteMarkdown({ title: 'Memo', description: '', tags: [], notes: [], sources });
   const withNotes = `${note}\n## Notes\n\nMine.\n`;
   const added = addMemoSources(withNotes, { ...sources, chatId: 'chat-2', chatTitle: 'Follow-up', passages: [{ role: 'you', text: 'A refinement.', needle: 'A refinement.' }] });
   const follow = added.indexOf('### Follow-up · 2026-10-03');
@@ -78,4 +79,14 @@ test('the suggestion request names who wrote each passage, and the reply is read
   });
   assert.equal(readMemoSuggestion('no json'), null);
   assert.equal(readMemoSuggestion('{"title": 3}'), null);
+});
+
+test("the Memos base opens on the chat's memos, then those about the note in front, all, and each kind", () => {
+  const base = memoBaseYaml('Claude chats/Memos', 'chat-1', 'Debt model');
+  const views = [...base.matchAll(/^    name: "(.*)"$/gm)].map((match) => match[1]);
+  assert.deepEqual(views, ['This chat', 'About this note', 'All memos', 'To do', 'To read', 'To explore', 'Ideas']);
+  assert.ok(base.includes('        - "claude_chats.contains(\\"chat-1\\")"'));
+  assert.ok(base.includes('        - "file.hasLink(this.file)"'));
+  assert.ok(base.includes('        - "file.inFolder(\\"Claude chats/Memos\\")"'));
+  assert.ok(base.startsWith('# Written by Vault Claude when a chat'));
 });

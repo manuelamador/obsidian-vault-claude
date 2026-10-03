@@ -3396,7 +3396,7 @@ export class ChatView extends ItemView {
     }
     const section = (title: string, entries: NoteLink[], icon: string) => {
       if (entries.length === 0) return;
-      menu.addItem((item) => item.setTitle(title).setIsLabel(true));
+      if (title) menu.addItem((item) => item.setTitle(title).setIsLabel(true));
       for (const entry of entries.slice(0, MAX_NOTES_LISTED)) {
         menu.addItem((item) =>
           item
@@ -3409,7 +3409,16 @@ export class ChatView extends ItemView {
         );
       }
     };
-    section('Memos', memos, 'sticky-note');
+    if (memos.length > 0 && chatId) {
+      menu.addItem((item) => item.setTitle('Memos').setIsLabel(true));
+      menu.addItem((item) =>
+        item
+          .setTitle("This chat's memos in a table")
+          .setIcon('table')
+          .onClick(() => void this.plugin.openChatMemos(chatId, this.chatName ?? 'Chat')),
+      );
+    }
+    section(memos.length > 0 && chatId ? '' : 'Memos', memos, 'sticky-note');
     section('Changed', others(changed), 'file-pen');
     section('Mentioned', others(mentioned), 'file-text');
     menu.showAtMouseEvent(evt);
@@ -5150,8 +5159,9 @@ export class ChatView extends ItemView {
       if (!text) continue;
       // Words outside the equations: the chat's Find searches the text as drawn, without their LaTeX.
       const plain = part.cloneContents();
+      const links = this.passageLinks(plain);
       for (const math of Array.from(plain.querySelectorAll('.math'))) math.replaceWith('\n');
-      passages.push({ role: el.closest('.vc-user') ? 'you' : 'claude', text, needle: passageNeedle(plain.textContent ?? '') });
+      passages.push({ role: el.closest('.vc-user') ? 'you' : 'claude', text, needle: passageNeedle(plain.textContent ?? ''), links });
     }
     return passages;
   }
@@ -5168,8 +5178,33 @@ export class ChatView extends ItemView {
     if (prompt) passages.push({ role: 'you', text: prompt, needle: passageNeedle(prompt) });
     const plain = textEls[0]?.cloneNode(true) as HTMLElement | undefined;
     for (const math of Array.from(plain?.querySelectorAll('.math') ?? [])) math.replaceWith('\n');
-    passages.push({ role: 'claude', text: this.replyMarkdown(textEls), needle: passageNeedle(plain?.textContent ?? '') });
+    const links = textEls.flatMap((el) => this.passageLinks(el));
+    passages.push({ role: 'claude', text: this.replyMarkdown(textEls), needle: passageNeedle(plain?.textContent ?? ''), links });
     return passages;
+  }
+
+  /** The notes and files a drawn passage links to: its wikilinks by link text, the file names made links by vault path. */
+  private passageLinks(root: ParentNode): string[] {
+    const links = [...root.querySelectorAll<HTMLElement>('a.internal-link, .vc-file-link[data-path]')].map(
+      (el) => el.dataset.path ?? el.dataset.href ?? el.getAttribute('href') ?? '',
+    );
+    return [...new Set(links.filter(Boolean))];
+  }
+
+  /**
+   * The notes a memo is about, as wikilinks: the note attached to the chat, then the notes its
+   * passages link to, each once. Files that are not notes, and links that find nothing, are left out.
+   */
+  private memoNotesFor(passages: MemoPassage[]): string[] {
+    const targets = [...(this.attachedNote ? [this.attachedNote] : []), ...passages.flatMap((passage) => passage.links ?? [])];
+    const notes: string[] = [];
+    for (const target of targets) {
+      const file = this.app.vault.getAbstractFileByPath(target) ?? this.app.metadataCache.getFirstLinkpathDest(target, '');
+      if (!(file instanceof TFile) || file.extension !== 'md') continue;
+      const link = `[[${this.app.metadataCache.fileToLinktext(file, '', true)}]]`;
+      if (!notes.includes(link)) notes.push(link);
+    }
+    return notes;
   }
 
   /** "Memo" over a selection in the chat: the form for saving the selected passages as a memo (see MemoModal). */
@@ -5221,9 +5256,15 @@ export class ChatView extends ItemView {
       let file = choice.memo;
       if (file) {
         await this.app.vault.process(file, (text) => addMemoSources(text, sources));
+        const notes = this.memoNotesFor(sources.passages);
         await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-          const chats = Array.isArray(frontmatter.claude_chats) ? frontmatter.claude_chats : [];
+          const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : typeof value === 'string' ? [value] : []);
+          const chats = list(frontmatter.claude_chats);
           if (!chats.includes(sources.chatId)) frontmatter.claude_chats = [...chats, sources.chatId];
+          const titles = list(frontmatter.chats);
+          if (!titles.includes(sources.chatTitle)) frontmatter.chats = [...titles, sources.chatTitle];
+          const known = list(frontmatter.notes);
+          if (notes.some((note) => !known.includes(note))) frontmatter.notes = [...known, ...notes.filter((note) => !known.includes(note))];
           const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags.map(String) : typeof frontmatter.tags === 'string' ? [frontmatter.tags] : [];
           if (choice.tags.some((tag) => !tags.includes(tag))) frontmatter.tags = cleanTags([...tags, ...choice.tags]);
           frontmatter.updated = sources.date;
@@ -5232,7 +5273,7 @@ export class ChatView extends ItemView {
         const folder = normalizePath(this.plugin.settings.memosFolder || '/');
         if (folder !== '/' && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
         const path = `${folder === '/' ? '' : `${folder}/`}${memoNoteName(choice.title)}.md`;
-        file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, tags: choice.tags, sources }));
+        file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, tags: choice.tags, notes: this.memoNotesFor(sources.passages), sources }));
       }
       this.plugin.linkNoteChat(file.path, sources.chatId);
       const saved = file;

@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { MEMO_SUGGESTION_SYSTEM, PROTOCOL_ACTION, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
+import { CHAT_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, PROTOCOL_ACTION, memoBaseYaml, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -1152,6 +1152,31 @@ export default class VaultClaudePlugin extends Plugin {
         return chat === undefined || (Array.isArray(frontmatter.claude_chats) && frontmatter.claude_chats.includes(chat));
       })
       .sort((a, b) => b.stat.mtime - a.stat.mtime);
+  }
+
+  /**
+   * Opens the Memos base on chat `chatId`'s memos: the base, in the memos folder, is written for that
+   * chat (see memoBaseYaml) and opened in a tab on its first view.
+   */
+  async openChatMemos(chatId: string, chatTitle: string): Promise<void> {
+    try {
+      const folder = normalizePath(this.settings.memosFolder || '/');
+      if (folder !== '/' && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+      const path = `${folder === '/' ? '' : `${folder}/`}Memos.base`;
+      const text = memoBaseYaml(folder, chatId, chatTitle);
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      let file: TFile;
+      if (existing instanceof TFile) {
+        if ((await this.app.vault.read(existing)) !== text) await this.app.vault.modify(existing, text);
+        file = existing;
+      } else {
+        file = await this.app.vault.create(path, text);
+      }
+      await this.app.workspace.openLinkText(`${file.path}#${CHAT_MEMOS_VIEW}`, '', 'tab');
+    } catch (error) {
+      log('opening the memos base failed', error);
+      new Notice(`Could not show the memos: ${errorText(error)}`);
+    }
   }
 
   /**
