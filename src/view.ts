@@ -983,7 +983,10 @@ export class ChatView extends ItemView {
     const heir = this.plugin.otherChatView(this);
     if (heir) this.handOver(heir);
     else this.reportStopped();
-    // Nothing left scheduled to run against a closed panel.
+    // Nothing left scheduled to run against a closed panel, nor holding on to its page: Find's
+    // highlights are the app's, and keep the matches' elements until cleared.
+    this.findBar.close();
+    this.earlier?.stop();
     this.dropLive();
     if (this.selectionTimer !== null) window.clearTimeout(this.selectionTimer);
     this.selectionTimer = null;

@@ -54,6 +54,8 @@ function snippetAround(text: string, at: number, length: number): string {
 export class HistoryModal extends SuggestModal<Match> {
   /** The listed chats' texts by id, for searching inside chats; read in the background from the moment the history opens. */
   private readonly texts = new Map<string, string>();
+  /** Closed: the texts not read yet are left unread. */
+  private dismissed = false;
   /** The reading of the texts not read yet, while it runs (see readTexts). */
   private reading: Promise<void> | null = null;
   private items: HistoryItem[] = [];
@@ -102,6 +104,11 @@ export class HistoryModal extends SuggestModal<Match> {
     }
     // Read before the first search needs them, so that it usually finds them in.
     void this.listed.then(() => this.readTexts());
+  }
+
+  onClose(): void {
+    super.onClose();
+    this.dismissed = true;
   }
 
   async getSuggestions(query: string): Promise<Match[]> {
@@ -192,7 +199,9 @@ export class HistoryModal extends SuggestModal<Match> {
   private readTexts(): Promise<void> {
     this.reading ??= eachInParallel(
       this.items.filter((item) => !this.texts.has(item.id)),
-      async (item) => void this.texts.set(item.id, await this.actions.searchText(item).catch(() => '')),
+      async (item) => {
+        if (!this.dismissed) this.texts.set(item.id, await this.actions.searchText(item).catch(() => ''));
+      },
     ).finally(() => {
       this.reading = null;
     });

@@ -1,27 +1,12 @@
 import esbuild from 'esbuild';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { patchAgentSdk } from './scripts/patch-agent-sdk.mjs';
 
 const prod = process.argv[2] === 'production';
 const entry = process.argv[3] ?? 'src/main.ts';
 const outfile = process.argv[4] ?? 'main.js';
 
-// The Agent SDK ships as an ES module for Node. Two patches let it run inside
-// Obsidian's renderer once bundled to CommonJS:
-// - `import.meta.url` does not exist in CommonJS; it becomes a file URL set in the banner.
-// - Electron renderer timers are browser timers with no `.unref()`; the calls become optional.
-const patchAgentSdk = {
-  name: 'patch-agent-sdk',
-  setup(build) {
-    build.onLoad({ filter: /claude-agent-sdk[\\/]sdk\.mjs$/ }, async (args) => {
-      const source = await readFile(args.path, 'utf8');
-      const contents = source
-        .replaceAll('import.meta.url', '__vcImportMetaUrl')
-        .replaceAll('.unref()', '.unref?.()');
-      return { contents, loader: 'js' };
-    });
-  },
-};
 
 // The Claude Code version the SDK was released with, for the plugin's version-drift notice.
 const sdkPackage = JSON.parse(await readFile('node_modules/@anthropic-ai/claude-agent-sdk/package.json', 'utf8'));

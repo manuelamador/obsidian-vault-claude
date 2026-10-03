@@ -3,20 +3,12 @@
 // aliased to the same stub as the panel test, for modules that import it next to pure helpers, and
 // the Agent SDK gets the plugin build's patch, for tests of modules that import it.
 import esbuild from 'esbuild';
+import { patchAgentSdk } from './patch-agent-sdk.mjs';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const patchAgentSdk = {
-  name: 'patch-agent-sdk',
-  setup(build) {
-    build.onLoad({ filter: /claude-agent-sdk[\\/]sdk\.mjs$/ }, async (args) => {
-      const source = await readFile(args.path, 'utf8');
-      return { contents: source.replaceAll('import.meta.url', '__vcImportMetaUrl').replaceAll('.unref()', '.unref?.()'), loader: 'js' };
-    });
-  },
-};
 
 const sdkPackage = JSON.parse(await readFile('node_modules/@anthropic-ai/claude-agent-sdk/package.json', 'utf8'));
 const entries = (await readdir('test')).filter((name) => name.endsWith('.test.ts')).map((name) => `test/${name}`);

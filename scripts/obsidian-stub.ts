@@ -179,7 +179,9 @@ export class SuggestModal<T> {
   }
   close(): void {
     this.closed = true;
+    this.onClose();
   }
+  onClose(): void {}
   selectSuggestion(value: T, evt: unknown): void {
     this.close();
     (this as unknown as { onChooseSuggestion(value: T, evt: unknown): void }).onChooseSuggestion(value, evt);

@@ -37,6 +37,8 @@ export class FindBar {
   private readonly input: HTMLInputElement;
   private readonly countEl: HTMLElement;
   private ranges: Range[] = [];
+  /** The highlight of its matches this bar last set in the app's registry, while that is still the one there (see paint). */
+  private painted: object | null = null;
   private index = -1;
   /** Matches in the turns not drawn yet. */
   private hidden = 0;
@@ -177,15 +179,23 @@ export class FindBar {
     const total = this.hidden + this.ranges.length;
     const at = this.index < 0 ? '–' : String(this.hidden + this.index + 1);
     this.countEl.setText(this.input.value ? (total > 0 ? `${at}/${total}` : 'No matches') : '');
-    // One set of highlight names for the whole app: the find bar last used wins.
+    // One set of highlight names for the whole app: the find bar last used wins, and a bar clears
+    // them only while they are its own, so that closing one panel leaves another's matches lit.
     const registry = (globalThis as { CSS?: { highlights?: Map<string, object> } }).CSS?.highlights;
     const Highlight = (globalThis as { Highlight?: HighlightConstructor }).Highlight;
     if (!registry || !Highlight) return;
-    registry.delete('vc-find');
-    registry.delete('vc-find-current');
+    const ours = this.painted !== null && registry.get('vc-find') === this.painted;
+    this.painted = null;
     const current = this.ranges[this.index];
-    if (!current) return;
-    registry.set('vc-find', new Highlight(...this.ranges));
+    if (!current) {
+      if (ours) {
+        registry.delete('vc-find');
+        registry.delete('vc-find-current');
+      }
+      return;
+    }
+    this.painted = new Highlight(...this.ranges);
+    registry.set('vc-find', this.painted);
     registry.set('vc-find-current', new Highlight(current));
   }
 

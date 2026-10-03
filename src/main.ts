@@ -121,6 +121,9 @@ export default class VaultClaudePlugin extends Plugin {
   sideSessions: string[] = [];
   /** A save waiting to cover a burst of changes (see saveSoon). */
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The last write of data.json asked for, and whether it waits to start (see saveSettings). */
+  private saving: Promise<void> = Promise.resolve();
+  private saveWaiting = false;
   /** Sessions whose process is still ending (a kept side chat's), each with what resolves when it has. */
   private readonly endingSessions = new Map<string, Promise<void>>();
   /** Model and effort from Claude Code's settings files: what "Default" means for a new chat. */
@@ -138,6 +141,8 @@ export default class VaultClaudePlugin extends Plugin {
   private readonly exiting = new Map<string, Promise<void>>();
   /** Each chat's text for the history's search, with the stamp of the file it was read from (see chatSearchText). */
   private readonly searchTexts = new Map<string, { stamp: string; text: string }>();
+  /** Search texts being read, by chat id, so that two histories open one after the other read a chat once. */
+  private readonly searchReads = new Map<string, Promise<string>>();
 
   async onload(): Promise<void> {
     patchSetMaxListenersForRenderer();
@@ -438,7 +443,15 @@ export default class VaultClaudePlugin extends Plugin {
    * Obsidian runs: a chat is read again only when its file has changed. Reading every chat takes a
    * couple of seconds (their files hold tool output and images too); the text is a small part.
    */
-  async chatSearchText(id: string): Promise<string> {
+  chatSearchText(id: string): Promise<string> {
+    const reading = this.searchReads.get(id);
+    if (reading) return reading;
+    const read = this.readSearchText(id).finally(() => this.searchReads.delete(id));
+    this.searchReads.set(id, read);
+    return read;
+  }
+
+  private async readSearchText(id: string): Promise<string> {
     const dir = this.vaultRoot();
     if (!dir) return '';
     const stamp = await sessionStamp(id, dir);
@@ -1314,8 +1327,25 @@ export default class VaultClaudePlugin extends Plugin {
     this.commandsFetchedAt = typeof raw.commandsFetchedAt === 'number' ? raw.commandsFetchedAt : 0;
   }
 
-  async saveSettings(): Promise<void> {
-    const data: PluginData = {
+  /**
+   * Saves the plugin's data. One write at a time, each of the data as it is when it starts: writes
+   * of the whole file that overlapped could finish out of order and leave an older copy. A save asked
+   * for while another waits to start is that one, which takes its change along.
+   */
+  saveSettings(): Promise<void> {
+    if (this.saveWaiting) return this.saving;
+    this.saveWaiting = true;
+    const write = async () => {
+      this.saveWaiting = false;
+      await this.saveData(this.dataToSave());
+    };
+    this.saving = this.saving.then(write, write);
+    return this.saving;
+  }
+
+  /** The plugin's data as data.json holds it. */
+  private dataToSave(): PluginData {
+    return {
       settings: this.settings,
       chats: this.chats,
       scratch: this.scratch ?? undefined,
@@ -1334,6 +1364,5 @@ export default class VaultClaudePlugin extends Plugin {
       ticks: this.ticks,
       sideSessions: this.sideSessions,
     };
-    await this.saveData(data);
   }
 }

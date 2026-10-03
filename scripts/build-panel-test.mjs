@@ -1,20 +1,12 @@
 // Bundles scripts/panel-test.ts with `obsidian` replaced by scripts/obsidian-stub.ts and the
 // same Agent SDK patches as the plugin build, then runs it.
 import esbuild from 'esbuild';
+import { patchAgentSdk } from './patch-agent-sdk.mjs';
 import { readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const patchAgentSdk = {
-  name: 'patch-agent-sdk',
-  setup(build) {
-    build.onLoad({ filter: /claude-agent-sdk[\\/]sdk\.mjs$/ }, async (args) => {
-      const source = await readFile(args.path, 'utf8');
-      return { contents: source.replaceAll('import.meta.url', '__vcImportMetaUrl').replaceAll('.unref()', '.unref?.()'), loader: 'js' };
-    });
-  },
-};
 
 const sdkPackage = JSON.parse(await readFile('node_modules/@anthropic-ai/claude-agent-sdk/package.json', 'utf8'));
 

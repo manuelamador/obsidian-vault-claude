@@ -25,12 +25,16 @@ export interface RemoteOptions {
 }
 
 const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
+/** How much of the output read before is read again with the next piece (see parse). */
+const TAIL_CHARS = 512;
 
 export class RemoteControlServer {
   status: RemoteStatus = { state: 'stopped', url: null, activeSessions: null, error: null };
   private child: ChildProcess | null = null;
   private stopping = false;
   private lastStderr = '';
+  /** The end of the output read so far, so that a status or link split between two reads is still found. */
+  private tail = '';
   private readonly listeners = new Set<() => void>();
 
   onChange(listener: () => void): () => void {
@@ -50,6 +54,7 @@ export class RemoteControlServer {
     log('remote control: starting', { cwd: options.cwd, name: options.name, permissionMode: options.permissionMode });
     this.stopping = false;
     this.lastStderr = '';
+    this.tail = '';
     const child = spawn(options.claudePath, args, {
       cwd: options.cwd,
       env: claudeEnv(options.claudePath, options.extraPath),
@@ -95,15 +100,25 @@ export class RemoteControlServer {
     }, 5000);
   }
 
+  /**
+   * Reads the server's status from its output: connected or not, its link, its sessions. A piece of
+   * output may end mid-line, so it is read with the end of the output before it, and the latest of
+   * each wins; only what changed is reported.
+   */
   private parse(chunk: string): void {
-    const text = chunk.replace(ANSI, '');
+    const raw = this.tail + chunk;
+    this.tail = raw.slice(-TAIL_CHARS);
+    const text = raw.replace(ANSI, '');
     const patch: Partial<RemoteStatus> = {};
-    if (/Connected ·/.test(text)) patch.state = 'connected';
-    else if (/(Connecting|Reconnecting)/.test(text)) patch.state = 'starting';
-    const url = text.match(/https:\/\/claude\.ai\/code\?environment=[\w-]+/)?.[0];
+    const connectedAt = text.lastIndexOf('Connected ·');
+    const connectingAt = Math.max(text.lastIndexOf('Connecting'), text.lastIndexOf('Reconnecting'));
+    if (connectedAt > connectingAt) patch.state = 'connected';
+    else if (connectingAt > connectedAt) patch.state = 'starting';
+    const url = [...text.matchAll(/https:\/\/claude\.ai\/code\?environment=[\w-]+/g)].pop()?.[0];
     if (url) patch.url = url;
-    const capacity = text.match(/Capacity: (\d+)\/\d+/);
+    const capacity = [...text.matchAll(/Capacity: (\d+)\/\d+/g)].pop();
     if (capacity) patch.activeSessions = Number(capacity[1]);
+    for (const key of Object.keys(patch) as (keyof RemoteStatus)[]) if (patch[key] === this.status[key]) delete patch[key];
     if (Object.keys(patch).length === 0) return;
     if (patch.state === 'connected' && this.status.state !== 'connected') log('remote control: connected', { url: patch.url ?? this.status.url });
     this.update(patch);

@@ -606,6 +606,36 @@ async function main(): Promise<void> {
       bar.state().count === 0;
     console.log(`find in chat: ${findStates.map((s) => `${s.current}/${s.count}`).join(' ')}, scroll ${scrolls.join(',')} (expected 865,805,865,915), closed by Esc: ${!bar.isOpen()} -> ${findOk}`);
     if (!findOk) process.exitCode = 1;
+    // The app's highlight registry: a bar's matches go when it closes (a panel closing closes it),
+    // and another bar's, set since, are left alone.
+    {
+      const scope = globalThis as unknown as { CSS?: { highlights?: Map<string, object> }; Highlight?: new (...ranges: Range[]) => object };
+      const before = { css: scope.CSS, highlight: scope.Highlight };
+      const registry = new Map<string, object>();
+      scope.CSS = { highlights: registry };
+      scope.Highlight = class {
+        constructor(...ranges: Range[]) {
+          Object.assign(this, { ranges });
+        }
+      };
+      bar.open();
+      findInput.value = 'beta';
+      findInput.dispatchEvent(new dom.window.Event('input'));
+      const lit = registry.has('vc-find');
+      bar.close();
+      const clearedOwn = !registry.has('vc-find');
+      bar.open();
+      findInput.dispatchEvent(new dom.window.Event('input'));
+      const another = {};
+      registry.set('vc-find', another);
+      bar.close();
+      const keptOther = registry.get('vc-find') === another;
+      scope.CSS = before.css;
+      scope.Highlight = before.highlight;
+      const registryOk = lit && clearedOwn && keptOther;
+      console.log(`find highlights: lit ${lit}, its own cleared on close ${clearedOwn}, another bar's kept ${keptOther} -> ${registryOk}`);
+      if (!registryOk) process.exitCode = 1;
+    }
     // Matches that appear after a query found none: the first Enter lands on the first of them.
     const lateRoot = findHost.createDiv();
     const lateBar = new FindBar(findHost, lateRoot, lateRoot);
@@ -757,6 +787,29 @@ async function main(): Promise<void> {
     const titlesFirst = early === '2,1' && slowInput.inputs > rerunsBefore && later === '2';
     console.log(`history search: titles at once ${early}, run again once the texts are in ${slowInput.inputs > rerunsBefore}, then text matches ${later} -> ${titlesFirst}`);
     if (!titlesFirst) process.exitCode = 1;
+    // Closed before its texts are read: the chats not started are left unread.
+    {
+      const many = Array.from({ length: 20 }, (_, n) => ({ id: `m${n}`, title: `Chat ${n}`, updatedAt: n, fromPanel: true }));
+      let reads = 0;
+      let open: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => (open = resolve));
+      const closing = new HistoryModal({} as never, many, Promise.resolve(null), {
+        ...historyActions,
+        searchText: async () => {
+          reads += 1;
+          await gate;
+          return '';
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const started = reads;
+      closing.close();
+      open();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const stopOk = started > 0 && started < many.length && reads === started;
+      console.log(`history closed while reading: ${started} reads started, ${reads} after closing, of ${many.length} -> ${stopOk}`);
+      if (!stopOk) process.exitCode = 1;
+    }
     console.log(`outside sessions muted in the history: ${mutedOk}`);
     if (!mutedOk) process.exitCode = 1;
     // Chats by note: Tab types "with:"; the notes whose path matches, newest first, with their chats

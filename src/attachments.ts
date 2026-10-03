@@ -65,11 +65,12 @@ function encode(canvas: HTMLCanvasElement, type: string, quality?: number): Prom
 /**
  * Reads an image into an attachment. Images the API would reject (unsupported type, too
  * large in bytes or pixels) are redrawn at most 2576 px on the long edge. Returns null
- * when the image cannot be decoded.
+ * when the image cannot be decoded, or redrawn small enough.
  */
 export async function imageFromBlob(blob: Blob, name: string): Promise<ImageAttachment | null> {
+  let bitmap: ImageBitmap | null = null;
   try {
-    const bitmap = await createImageBitmap(blob);
+    bitmap = await createImageBitmap(blob);
     const longEdge = Math.max(bitmap.width, bitmap.height);
     const supported = (Object.values(MEDIA_TYPES) as string[]).includes(blob.type);
     let output = blob;
@@ -78,16 +79,21 @@ export async function imageFromBlob(blob: Blob, name: string): Promise<ImageAtta
       const canvas = activeDocument.createElement('canvas');
       canvas.width = Math.max(1, Math.round(bitmap.width * scale));
       canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-      canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const context = canvas.getContext('2d');
+      // No canvas to draw on would give a blank image.
+      if (!context) return null;
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
       const keepPng = blob.type === 'image/png' || blob.type === 'image/gif';
       output = await encode(canvas, keepPng ? 'image/png' : 'image/jpeg', 0.88);
       if (output.size > MAX_BYTES) output = await encode(canvas, 'image/jpeg', 0.8);
+      if (output.size > MAX_BYTES) return null;
     }
-    bitmap.close();
     const data = Buffer.from(await output.arrayBuffer()).toString('base64');
     return { kind: 'image', name, mediaType: output.type as ImageMediaType, data };
   } catch {
     return null;
+  } finally {
+    bitmap?.close();
   }
 }
 
