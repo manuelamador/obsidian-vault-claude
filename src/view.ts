@@ -4352,7 +4352,13 @@ export class ChatView extends ItemView {
       }
       resolve(result);
     };
-    const onAbort = () => finish({ behavior: 'deny', message: 'Cancelled.' }, 'Cancelled');
+    // Withdrawn by Claude Code: Esc stopped the reply, or the chat closed. A plan or questions say what
+    // that means, since Plan mode stays on and nothing was approved or answered.
+    const onAbort = () => {
+      const why = this.interrupted ? ': you stopped the reply' : '';
+      const said = toolName === 'ExitPlanMode' ? `Plan withdrawn${why}` : toolName === 'AskUserQuestion' ? `Questions withdrawn${why}` : undefined;
+      finish({ behavior: 'deny', message: 'Cancelled.' }, 'Cancelled', said);
+    };
     request.signal.addEventListener('abort', onAbort, { once: true });
 
     // Claude's multiple-choice questions: answered here, the answers going back as the tool's input.
