@@ -954,8 +954,74 @@
   overflow-x: auto;
 }
 
+/*
+ * Tables as Obsidian draws them in notes, which it does only under `.markdown-rendered`: cell
+ * borders, headers aligned with their columns, and the theme's table variables. Words are kept
+ * whole, as there; a table wider than the panel scrolls.
+ */
 .vc-text table {
   display: block;
+  border-collapse: collapse;
+  line-height: var(--table-line-height);
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.vc-text th,
+.vc-text td {
+  padding: var(--size-2-2) var(--size-4-2);
+  border: var(--table-border-width) solid var(--table-border-color);
+  min-width: var(--table-column-min-width);
+  max-width: var(--table-column-max-width);
+  vertical-align: var(--table-cell-vertical-alignment);
+  text-align: start;
+}
+
+.vc-text td {
+  font-size: var(--table-text-size);
+  color: var(--table-text-color);
+}
+
+.vc-text th {
+  font-size: var(--table-header-size);
+  font-weight: var(--table-header-weight);
+  font-family: var(--table-header-font);
+  color: var(--table-header-color);
+  line-height: var(--line-height-tight);
+  border-top-width: var(--table-header-border-width);
+  border-color: var(--table-header-border-color);
+}
+
+.vc-text :is(th, td)[align="center"] {
+  text-align: center;
+}
+
+.vc-text :is(th, td)[align="right"] {
+  text-align: end;
+}
+
+.vc-text thead tr {
+  background-color: var(--table-header-background);
+}
+
+.vc-text tbody tr:nth-child(odd) {
+  background-color: var(--table-row-alt-background);
+}
+
+.vc-text tr > :nth-child(2n + 2) {
+  background-color: var(--table-column-alt-background);
+}
+
+.vc-text tr > :first-child {
+  border-left-width: var(--table-column-first-border-width);
+}
+
+.vc-text tr > :last-child {
+  border-right-width: var(--table-column-last-border-width);
+}
+
+.vc-text tbody tr:last-child > td {
+  border-bottom-width: var(--table-row-last-border-width);
 }
 
 .vc-task-body {
