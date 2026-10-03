@@ -217,6 +217,8 @@ interface Approval {
   notePath?: string | null;
   /** Its card has been shown once: drawn again (its chat back from the background), it is not logged again. */
   shown?: boolean;
+  /** For a plan: its text as shown, against which its note is found edited or not. */
+  plan?: string;
 }
 
 /** `/plan`, offered among the slash commands: the panel handles it (see ChatView.send). */
@@ -344,6 +346,8 @@ export class ChatView extends ItemView {
   private modeBeforePlan: PermissionMode = 'default';
   /** The line above the input while in Plan mode, with a way out (see updatePlanCue). */
   private planEl!: HTMLElement;
+  /** Plan notes holding edits, kept from a plan withdrawn in a chat for that chat's next plan, by chat id (see withdrawPlanNote). */
+  private readonly keptPlanNotes = new Map<string, string>();
   private modelOverride: string | undefined;
   /** Whether this panel is showing the scratch chat, which starts over when it has been idle. */
   private scratch = false;
@@ -1403,7 +1407,7 @@ export class ChatView extends ItemView {
       'abort',
       () => {
         entry.approvals = entry.approvals.filter((open) => open !== approval);
-        this.dropPlanNote(approval);
+        void this.withdrawPlanNote(approval, entry.chatId);
         approval.resolve({ behavior: 'deny', message: 'Cancelled.' });
       },
       { once: true },
@@ -4437,11 +4441,28 @@ export class ChatView extends ItemView {
       await this.discardNote(file);
       return text && text !== plan.trim() ? text : null;
     };
-    // A card drawn again (its chat back from the background) listens again: taking the note twice is harmless.
-    signal.addEventListener('abort', () => void takeNote(), { once: true });
+    // A plan note kept, with its edits, from a plan withdrawn in this chat carries over to this one.
+    const chatKey = this.chatId ?? this.resumeId;
+    const kept = chatKey ? this.keptPlanNotes.get(chatKey) : undefined;
+    if (chatKey) this.keptPlanNotes.delete(chatKey);
+    if (kept && !approval.notePath && this.app.vault.getAbstractFileByPath(kept) instanceof TFile) approval.notePath = kept;
+    // Withdrawn (Esc, or the chat closing): edits in its note are kept for the chat's next plan. A card
+    // drawn again (its chat back from the background) listens again, which is harmless.
+    signal.addEventListener('abort', () => void this.withdrawPlanNote(approval, chatKey), { once: true });
 
     card.addClass('vc-plan-card');
     card.createDiv({ cls: 'vc-permission-title', text: "Claude's plan" });
+    if (kept && approval.notePath === kept) {
+      const carried = card.createDiv({ cls: 'vc-muted vc-plan-carried' });
+      carried.appendText('Your edits to the plan you withdrew are in the plan note, and Approve sends them. ');
+      carried.createSpan({ cls: 'vc-welcome-link', text: "Use Claude's plan instead" }).addEventListener('click', () => {
+        const file = noteFile();
+        approval.notePath = null;
+        if (file) void this.discardNote(file);
+        editButton.setText('Edit in a note');
+        carried.remove();
+      });
+    }
     const body = card.createDiv({ cls: 'vc-permission-detail vc-plan' });
     const buttons = card.createDiv({ cls: 'vc-permission-buttons' });
     // The first answer holds: the card's controls go still while the note is read and put away.
@@ -4518,6 +4539,7 @@ export class ChatView extends ItemView {
     const shown = (text: string) => {
       planShown = true;
       plan = text.trim();
+      approval.plan = plan;
       body.empty();
       this.renderMarkdown(plan, body);
       approveButton.disabled = false;
@@ -4788,7 +4810,20 @@ export class ChatView extends ItemView {
     await this.app.fileManager.trashFile(file).catch((error: unknown) => log('removing a note failed', error));
   }
 
-  /** The note of a plan refused without its card (its chat dropped, or its request cancelled, in the background). */
+  /**
+   * A withdrawn plan's note (its request cancelled: Esc, or Claude Code): kept, still open, for the
+   * chat's next plan when it holds edits (see renderPlanCard), else deleted.
+   */
+  private async withdrawPlanNote(approval: Approval, chatKey: string | null): Promise<void> {
+    const file = approval.notePath ? this.app.vault.getAbstractFileByPath(approval.notePath) : null;
+    approval.notePath = null;
+    if (!(file instanceof TFile)) return;
+    const text = (await this.app.vault.read(file)).trim();
+    if (chatKey && text && text !== (approval.plan ?? '').trim()) this.keptPlanNotes.set(chatKey, file.path);
+    else await this.discardNote(file);
+  }
+
+  /** The note of a plan refused without its card (its chat dropped from the background). */
   private dropPlanNote(approval: Approval): void {
     const file = approval.notePath ? this.app.vault.getAbstractFileByPath(approval.notePath) : null;
     approval.notePath = null;

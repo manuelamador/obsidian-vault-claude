@@ -1057,6 +1057,56 @@ async function main(): Promise<void> {
       (view as unknown as { dropPlanNote(approval: { notePath: string | null }): void }).dropPlanNote({ notePath: 'Claude chats/Plans/Dropped.md' });
       await settle();
       const droppedGone = !notesOnDisk.has('Claude chats/Plans/Dropped.md');
+      // Withdrawn (Esc) with edits in its note: the note stays for the chat's next plan, whose card says so
+      // and whose Approve sends the edits; unedited, it goes. "Use Claude's plan instead" drops it.
+      const keepChat = view as unknown as { chatId: string | null; interrupted: boolean };
+      const chatWas = keepChat.chatId;
+      keepChat.chatId = 'plan-chat';
+      const firstController = new AbortController();
+      const first = propose(firstController.signal);
+      first.button('Edit in a note').click();
+      await settle();
+      const keptPath = [...notesOnDisk.keys()].find((path) => path.includes('/Plans/')) ?? '';
+      notesOnDisk.set(keptPath, `${plan}\n3. Kept across Esc.`);
+      keepChat.interrupted = true;
+      firstController.abort();
+      await first.answered;
+      keepChat.interrupted = false;
+      await settle();
+      const keptAfterEsc = notesOnDisk.has(keptPath);
+      const next = propose();
+      const carriedLine = next.card.querySelector('.vc-plan-carried')?.textContent ?? '';
+      const carriedButton = next.button('Open the plan note') !== undefined;
+      next.button('Approve').click();
+      const nextResult = await next.answered;
+      const keptGoneAfter = !notesOnDisk.has(keptPath);
+      // Again, but Claude's plan is chosen instead: the kept note goes, and the plan is sent as Claude wrote it.
+      const againController = new AbortController();
+      const again = propose(againController.signal);
+      again.button('Edit in a note').click();
+      await settle();
+      const againPath = [...notesOnDisk.keys()].find((path) => path.includes('/Plans/')) ?? '';
+      notesOnDisk.set(againPath, `${plan}\n3. Edited, then dropped.`);
+      againController.abort();
+      await again.answered;
+      await settle();
+      const instead = propose();
+      (instead.card.querySelector('.vc-plan-carried .vc-welcome-link') as HTMLElement).click();
+      await settle();
+      const droppedNote = !notesOnDisk.has(againPath);
+      instead.button('Approve').click();
+      const insteadResult = await instead.answered;
+      keepChat.chatId = chatWas;
+      const keepOk =
+        keptAfterEsc &&
+        carriedLine.startsWith('Your edits to the plan you withdrew are in the plan note') &&
+        carriedButton &&
+        nextResult.updatedInput?.plan === `${plan}\n3. Kept across Esc.` &&
+        keptGoneAfter &&
+        droppedNote &&
+        insteadResult.updatedInput?.plan === plan;
+      console.log(`plan edits kept across Esc: kept ${keptAfterEsc}; next card "${carriedLine.slice(0, 60)}…" sends ${JSON.stringify(nextResult.updatedInput?.plan?.split('\n').pop())}, note gone after ${keptGoneAfter}; Claude's plan instead: note dropped ${droppedNote}, sends Claude's ${insteadResult.updatedInput?.plan === plan} -> ${keepOk}`);
+      if (!keepOk) process.exitCode = 1;
       // Feedback, and Reject.
       const sentBack = propose();
       const feedbackBox = sentBack.card.querySelector('.vc-plan-feedback input') as HTMLInputElement;
