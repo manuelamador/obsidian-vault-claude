@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, firstPassageNeedle, PROTOCOL_ACTION, memoBaseYaml, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, firstPassageNeedle, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -1162,6 +1162,7 @@ export default class VaultClaudePlugin extends Plugin {
    */
   private async openChatLink(params: Record<string, string>): Promise<void> {
     const id = params.chat;
+    log('chat link', { chat: id, find: params.find !== undefined, quote: params.quote !== undefined, memo: params.memo !== undefined });
     if (!id) return;
     const title = this.chats.find((chat) => chat.id === id)?.title ?? this.lastListing?.find((item) => item.id === id)?.title ?? 'Chat';
     const view = await this.openChatById(id, title);
@@ -1200,10 +1201,10 @@ export default class VaultClaudePlugin extends Plugin {
     try {
       const file = await this.writeMemosBase(chatId, chatTitle);
       // On the chat's memos, or all of them (asked for, or a chat with no memos to have yet), in the
-      // tab already showing the base when there is one.
-      const subpath = `#${all || !chatId ? ALL_MEMOS_VIEW : chatMemosView(chatTitle)}`;
+      // tab already showing the base when there is one: a Bases tab is told its view by name.
+      const viewName = all || !chatId ? ALL_MEMOS_VIEW : chatMemosView(chatTitle);
       const leaf = this.memosBaseLeaf() ?? this.app.workspace.getLeaf('tab');
-      await leaf.openFile(file, { active: true, eState: { subpath } });
+      await leaf.setViewState({ type: 'bases', state: { file: file.path, viewName }, active: true });
       await this.app.workspace.revealLeaf(leaf);
     } catch (error) {
       log('opening the memos base failed', error);
@@ -1249,8 +1250,24 @@ export default class VaultClaudePlugin extends Plugin {
     }
     const turned = retargetMemoBase(parsed, chatId, chatTitle, vault);
     const text = turned ? stringifyYaml(turned) : memoBaseYaml(chatId, chatTitle, vault);
-    if (text !== before) await this.app.vault.modify(existing, text);
+    if (text !== before) {
+      await this.app.vault.modify(existing, text);
+      await this.followRenamedView(chatMemosView(chatTitle));
+    }
     return existing;
+  }
+
+  /**
+   * A Bases tab remembers its view by name, so a tab on the chat view (named after its chat) would
+   * lose it when the view is renamed for another chat, saying the view was not found: such a tab is
+   * moved to the view's new name.
+   */
+  private async followRenamedView(viewName: string): Promise<void> {
+    const leaf = this.memosBaseLeaf();
+    const state = leaf?.getViewState();
+    const showing = (state?.state as { viewName?: unknown } | undefined)?.viewName;
+    if (!leaf || !state || !isChatViewName(showing) || showing === viewName) return;
+    await leaf.setViewState({ ...state, state: { ...state.state, viewName } });
   }
 
   /**

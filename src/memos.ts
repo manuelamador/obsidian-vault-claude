@@ -324,6 +324,11 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
 }
 
 
+/** Whether a view's name is that of a view of one chat's memos, as the plugin names them (see chatMemosView). */
+export function isChatViewName(name: unknown): boolean {
+  return typeof name === 'string' && name.startsWith('Chat: ');
+}
+
 /** Whether `value`, part of a view's filters, holds the filter of one chat's memos. */
 function picksChat(value: unknown): boolean {
   if (typeof value === 'string') return value.startsWith('claude_chats.contains(');

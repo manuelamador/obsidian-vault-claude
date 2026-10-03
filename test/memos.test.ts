@@ -149,8 +149,11 @@ test('a Memos base open in a tab follows the chat on the panel; one closed is le
   const base = Object.assign(new TFile(), { path: 'Claude chats/Memos/Memos.base' });
   let text = 'old';
   let open = false;
+  // A tab showing the base, on the view of the chat it was opened for.
+  let tabState = { type: 'bases', state: { file: base.path, viewName: 'Chat: First chat' } };
+  const tab = { view: { file: base }, getViewState: () => tabState, setViewState: async (state: typeof tabState) => void (tabState = state) };
   (p as unknown as { app: unknown }).app = {
-    workspace: { getLeavesOfType: (type: string) => (type === 'bases' && open ? [{ view: { file: base } }] : []) },
+    workspace: { getLeavesOfType: (type: string) => (type === 'bases' && open ? [tab] : []) },
     vault: {
       getName: () => 'Obsidian',
       getAbstractFileByPath: (path: string) => (path === base.path ? base : { path }),
@@ -164,6 +167,8 @@ test('a Memos base open in a tab follows the chat on the panel; one closed is le
   await p.followChatMemos('chat-2', 'Second chat');
   assert.ok(text.includes('name: "Chat: Second chat"'));
   assert.ok(text.includes('claude_chats.contains(\\"chat-2\\")'));
+  // The open tab follows its view to the new name, instead of finding it gone.
+  assert.equal(tabState.state.viewName, 'Chat: Second chat');
 });
 
 test('a link from a memo opens its chat, then finds the passage or quotes it; a chat gone says so', async () => {

@@ -101,6 +101,9 @@ export class FindBar {
     this.el.show();
     this.search(true);
     if (this.ranges.length === 0 && this.hidden > 0) await this.step(1);
+    // Again once the panel has settled (revealed, or its chat drawn): what moves its scroll meanwhile
+    // would otherwise leave the passage out of sight on a second click of the same link.
+    if (this.ranges.length > 0) (this.root.ownerDocument.defaultView ?? window).requestAnimationFrame(() => this.reveal());
     return this.ranges.length > 0;
   }
 
