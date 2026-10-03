@@ -62,6 +62,8 @@ export class SideChat {
   private component = new Component();
   /** Counts the side chat's ends, so a session that finishes starting after one is not used. */
   private ends = 0;
+  /** The scroll asked for this frame (see scrollToEnd). */
+  private scrollFrame: number | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -119,9 +121,12 @@ export class SideChat {
     this.el.hide();
   }
 
-  /** Adds `images` to go with the next question: pasted into its input, or dropped on it (see ChatView.onDrop). */
+  /**
+   * Adds `images` to go with the next question: pasted into its input, or dropped on it (see
+   * ChatView.onDrop). None once it is closed: images read as it closed were for the chat it showed.
+   */
   attach(images: ImageAttachment[]): void {
-    if (images.length === 0) return;
+    if (images.length === 0 || !this.isOpen()) return;
     this.setImages([...this.images, ...images]);
     this.input.focus();
   }
@@ -313,7 +318,12 @@ export class SideChat {
     this.status.toggle(text.length > 0);
   }
 
+  /** Scrolls to the newest text, once a frame however many pieces of a reply arrive in it. */
   private scrollToEnd(): void {
-    this.messages.scrollTop = this.messages.scrollHeight;
+    if (this.scrollFrame !== null) return;
+    this.scrollFrame = (this.el.ownerDocument.defaultView ?? window).requestAnimationFrame(() => {
+      this.scrollFrame = null;
+      this.messages.scrollTop = this.messages.scrollHeight;
+    });
   }
 }

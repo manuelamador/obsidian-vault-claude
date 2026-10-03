@@ -114,7 +114,8 @@ export class RemoteControlServer {
     const connectingAt = Math.max(text.lastIndexOf('Connecting'), text.lastIndexOf('Reconnecting'));
     if (connectedAt > connectingAt) patch.state = 'connected';
     else if (connectingAt > connectedAt) patch.state = 'starting';
-    const url = [...text.matchAll(/https:\/\/claude\.ai\/code\?environment=[\w-]+/g)].pop()?.[0];
+    // Only a link the output has finished: one at the end of a read may be cut off.
+    const url = [...text.matchAll(/https:\/\/claude\.ai\/code\?environment=[\w-]+(?=[^\w-])/g)].pop()?.[0];
     if (url) patch.url = url;
     const capacity = [...text.matchAll(/Capacity: (\d+)\/\d+/g)].pop();
     if (capacity) patch.activeSessions = Number(capacity[1]);

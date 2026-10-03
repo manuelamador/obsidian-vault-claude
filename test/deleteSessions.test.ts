@@ -8,6 +8,8 @@ test('deleteSessions tries each session but those kept, and a failure does not s
     tried.push(`${id}@${dir}`);
     if (id === 'gone') throw new Error(`Session ${id} not found`);
   };
-  await deleteSessions(['gone', 'kept', 'left'], '/vault', new Set(['kept']), remove);
+  const failed = await deleteSessions(['gone', 'kept', 'left'], '/vault', new Set(['kept']), remove);
   assert.deepEqual(tried, ['gone@/vault', 'left@/vault']);
+  // The one that failed, to try again.
+  assert.deepEqual(failed, ['gone']);
 });

@@ -4042,6 +4042,46 @@ async function main(): Promise<void> {
       console.log(`/plan: busy ${JSON.stringify(whileBusy)}; after ${JSON.stringify(afterPlan)}; offered ${offeredPlan}; modes set ${JSON.stringify(modes)}; sent ${JSON.stringify(sentPlan)}; alone sends nothing ${alone.sent === 1}, leaves ${JSON.stringify(alone.input)} -> ${slashOk}`);
       if (!slashOk) process.exitCode = 1;
     }
+    // A message whose mentioned note cannot be read is not sent: it goes back to the input with its
+    // attachments, and its bubble goes; an image still being read when the chat changes is not attached.
+    {
+      const failView = view as unknown as {
+        session: unknown;
+        busy: boolean;
+        send(): Promise<void>;
+        attachments: { name: string }[];
+        attachVaultFile(file: unknown, generation?: number): Promise<void>;
+        chatGeneration: number;
+      };
+      const failInput = root.querySelector('.vc-input') as HTMLTextAreaElement;
+      view.newChat();
+      const sentFail: unknown[] = [];
+      failView.session = { send: (content: unknown) => void sentFail.push(content), setHandlers() {}, close() {} };
+      failView.busy = false;
+      const vault = app.vault as unknown as { cachedRead: (file: { path: string }) => Promise<string> };
+      const readWas = vault.cachedRead;
+      vault.cachedRead = async () => {
+        throw new Error('gone');
+      };
+      failView.attachments = [{ kind: 'file', name: 'paper.pdf', path: '/x/paper.pdf' } as never];
+      failInput.value = 'see @[[New.md]]';
+      await failView.send();
+      vault.cachedRead = readWas;
+      const restored = { input: failInput.value, attachments: failView.attachments.map((a) => a.name), bubbles: internals.messagesEl.querySelectorAll('.vc-user').length, sent: sentFail.length };
+      // A vault image given to the chat that changes before it is read.
+      failView.attachments = [];
+      const image = Object.assign(new stub.TFile(), { path: 'pic.png', name: 'pic.png', extension: 'png' });
+      const given = failView.chatGeneration;
+      view.newChat();
+      await failView.attachVaultFile(image, given);
+      const strayed = failView.attachments.length;
+      failView.session = null;
+      failInput.value = '';
+      view.newChat();
+      const failOk = restored.input === 'see @[[New.md]]' && JSON.stringify(restored.attachments) === '["paper.pdf"]' && restored.bubbles === 0 && restored.sent === 0 && strayed === 0;
+      console.log(`unsent message: ${JSON.stringify(restored)}; image for another chat attached ${strayed} -> ${failOk}`);
+      if (!failOk) process.exitCode = 1;
+    }
 
     const adopted: unknown[] = [];
     (plugin as { heir: unknown }).heir = { adoptBackground: (entry: unknown) => void adopted.push(entry) };

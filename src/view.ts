@@ -2895,9 +2895,12 @@ export class ChatView extends ItemView {
   }
 
   private async attachExternalFiles(files: File[]): Promise<void> {
+    // Read while another chat is opened: they were meant for the chat they were given to.
+    const generation = this.chatGeneration;
     for (const file of files) {
       if (file.type.startsWith('image/')) {
         const image = await imageFromBlob(file, file.name || 'Pasted image');
+        if (generation !== this.chatGeneration) return;
         if (image) {
           this.addAttachment(image);
           continue;
@@ -2912,7 +2915,9 @@ export class ChatView extends ItemView {
     }
   }
 
-  private async attachVaultFile(file: TFile): Promise<void> {
+  /** `generation`: the chat it was given to (see chatGeneration); nothing is attached once another is open. */
+  private async attachVaultFile(file: TFile, generation = this.chatGeneration): Promise<void> {
+    if (generation !== this.chatGeneration) return;
     if (file.extension === 'md') {
       const mention = `@[[${this.app.metadataCache.fileToLinktext(file, '', true)}]] `;
       this.inputEl.setRangeText(mention, this.inputEl.selectionStart, this.inputEl.selectionEnd, 'end');
@@ -2921,6 +2926,8 @@ export class ChatView extends ItemView {
       return;
     }
     const image = await this.vaultImage(file);
+    // Read while another chat is opened: it was meant for the chat it was given to.
+    if (generation !== this.chatGeneration) return;
     if (image) {
       this.addAttachment(image);
       return;
@@ -2958,7 +2965,8 @@ export class ChatView extends ItemView {
       return;
     }
     if (vaultFiles.length > 0) {
-      for (const file of vaultFiles) await this.attachVaultFile(file);
+      const generation = this.chatGeneration;
+      for (const file of vaultFiles) await this.attachVaultFile(file, generation);
     } else {
       await this.attachExternalFiles(external);
     }
@@ -3052,13 +3060,26 @@ export class ChatView extends ItemView {
       this.draw.group = null;
       this.scrollToBottom(true);
     }
-    if (!this.chatName) this.setChatTitle(chatTitle(text || attachments[0]?.name || ''));
-    const { content, notes } = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly);
+    let built: { content: UserContent; notes: string[] };
+    try {
+      built = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly);
+    } catch (error) {
+      // A mentioned note could not be read: nothing is sent, and the message goes back to the input.
+      log('the message could not be prepared', error);
+      bubble.remove();
+      this.pending.delete(uuid);
+      const here = session === this.session;
+      if (here) this.restoreUnsent(text, attachments, pathOnly);
+      new Notice(`The message was not sent: ${errorText(error)}.${here ? ' It is back in the input.' : ''}`);
+      return;
+    }
+    const { content, notes } = built;
     if (session !== this.session) {
       // Another chat was opened while the mentioned notes were read.
       new Notice('The chat changed before the message was sent, so it was not sent.');
       return;
     }
+    if (!this.chatName) this.setChatTitle(chatTitle(text || attachments[0]?.name || ''));
     this.sentIds.add(uuid);
     // The turn may have ended while the prompt was being built.
     if (!this.busy) {
@@ -3068,6 +3089,16 @@ export class ChatView extends ItemView {
     // Claude Code queues it and folds it into the running reply at its next pause.
     session.send(content, undefined, uuid);
     this.linkSentNotes(notes);
+  }
+
+  /** Puts a message that was not sent back in the input, before anything typed since, with its attachments and path-only mentions. */
+  private restoreUnsent(text: string, attachments: Attachment[], pathOnly: ReadonlySet<string>): void {
+    const typed = this.inputEl.value;
+    this.inputEl.value = typed.trim() ? `${text}\n${typed}` : text;
+    this.attachments = [...attachments, ...this.attachments];
+    for (const path of pathOnly) this.pathOnlyMentions.add(path);
+    this.inputEdited();
+    this.renderTray();
   }
 
   /**

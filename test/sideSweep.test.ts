@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -37,6 +37,35 @@ test('the startup sweep deletes the side chats left from the last run, but not a
     );
     assert.deepEqual(plugin.sideSessions, [opened]);
   } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+    rmSync(config, { recursive: true, force: true });
+    rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('a side chat that could not be deleted is kept, to try again at the next start', async () => {
+  const config = mkdtempSync(join(tmpdir(), 'vc-sweep-config-'));
+  const vault = realpathSync(mkdtempSync(join(tmpdir(), 'vc-sweep-vault-')));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = config;
+  const folder = join(config, 'projects', projectFolder(vault));
+  try {
+    mkdirSync(folder, { recursive: true });
+    const id = '55555555-5555-4555-8555-555555555555';
+    const row = { type: 'user', uuid: `${id}-u`, parentUuid: null, sessionId: id, cwd: vault, timestamp: new Date().toISOString(), message: { role: 'user', content: 'side question' } };
+    writeFileSync(join(folder, `${id}.jsonl`), `${JSON.stringify(row)}\n`);
+    // A folder its file cannot be removed from.
+    chmodSync(folder, 0o555);
+    const plugin = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
+    plugin.saveSettings = async () => undefined;
+    plugin.vaultRoot = () => vault;
+    plugin.sideSessions = [id];
+    await (plugin as unknown as { sweepSideSessions(ids: string[]): Promise<void> }).sweepSideSessions([id]);
+    assert.equal(existsSync(join(folder, `${id}.jsonl`)), true);
+    assert.deepEqual(plugin.sideSessions, [id]);
+  } finally {
+    chmodSync(folder, 0o755);
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = before;
     rmSync(config, { recursive: true, force: true });
