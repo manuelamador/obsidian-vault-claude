@@ -221,6 +221,8 @@ interface Approval {
   plan?: string;
   /** The chat it was asked in, whose plan note it keeps (see ChatView.withdrawPlanNote). */
   chatKey: string | null;
+  /** What its withdrawal does where it is now: its card's, or its background chat's (see ChatView.onWithdrawn). */
+  onAbort?: () => void;
 }
 
 /** `/plan`, offered among the slash commands: the panel handles it (see ChatView.send). */
@@ -920,8 +922,9 @@ export class ChatView extends ItemView {
     // A tab can change what it shows in place (a note opened from a canvas in its own tab), which
     // changes no leaf: what is in front is looked at again.
     this.registerEvent(this.app.workspace.on('file-open', () => this.followActiveLeaf()));
-    // Selections in the editor and in reading view; redrawn shortly after the selection settles.
-    this.registerDomEvent(document, 'selectionchange', () => {
+    // Selections in the editor and in reading view, and in the chat; redrawn shortly after the
+    // selection settles. In every window: the panel's own (a popout, say) and the notes' may differ.
+    const onSelection = () => {
       this.markSelectedMath();
       if (this.selectionTimer !== null) window.clearTimeout(this.selectionTimer);
       this.selectionTimer = window.setTimeout(() => {
@@ -929,6 +932,26 @@ export class ChatView extends ItemView {
         this.onSelectionChange();
         this.placeQuoteButton();
       }, 150);
+    };
+    const selectionDocs = new Set<Document>();
+    const listen = (doc: Document) => {
+      if (selectionDocs.has(doc)) return;
+      selectionDocs.add(doc);
+      doc.addEventListener('selectionchange', onSelection);
+    };
+    listen(document);
+    listen(this.contentEl.ownerDocument);
+    this.registerEvent(this.app.workspace.on('window-open', (_, win) => listen(win.document)));
+    this.registerEvent(
+      this.app.workspace.on('window-close', (_, win) => {
+        win.document.removeEventListener('selectionchange', onSelection);
+        selectionDocs.delete(win.document);
+      }),
+    );
+    const stopMigrating = this.contentEl.onWindowMigrated?.((win) => listen(win.document));
+    this.register(() => {
+      stopMigrating?.();
+      for (const doc of selectionDocs) doc.removeEventListener('selectionchange', onSelection);
     });
     this.updateContextChip();
 
@@ -1403,14 +1426,20 @@ export class ChatView extends ItemView {
   /** Keeps a permission request of a background chat open until the chat is shown again. */
   private adoptApproval(entry: BackgroundChat, approval: Approval): void {
     entry.approvals.push(approval);
-    approval.request.signal.addEventListener(
-      'abort',
-      () => {
-        entry.approvals = entry.approvals.filter((open) => open !== approval);
-        approval.resolve({ behavior: 'deny', message: 'Cancelled.' });
-      },
-      { once: true },
-    );
+    this.onWithdrawn(approval, () => {
+      entry.approvals = entry.approvals.filter((open) => open !== approval);
+      approval.resolve({ behavior: 'deny', message: 'Cancelled.' });
+    });
+  }
+
+  /**
+   * What withdrawing `approval` does now (null: nothing more), in place of what it did where it was
+   * before: a card drawn again, or its chat sent to the background, leaves no listener behind.
+   */
+  private onWithdrawn(approval: Approval, handler: (() => void) | null): void {
+    if (approval.onAbort) approval.request.signal.removeEventListener('abort', approval.onAbort);
+    approval.onAbort = handler ?? undefined;
+    if (handler) approval.request.signal.addEventListener('abort', handler, { once: true });
   }
 
   private backgroundHandlers(entry: BackgroundChat): SessionHandlers {
@@ -4343,6 +4372,7 @@ export class ChatView extends ItemView {
       chatKey,
       resolve: (result) => {
         request.signal.removeEventListener('abort', withdraw);
+        this.onWithdrawn(approval, null);
         resolve(result);
       },
     };
@@ -4370,7 +4400,6 @@ export class ChatView extends ItemView {
     // `label`: what the card says once decided, before the tool and what it was for; a question's
     // card says its answers instead.
     const finish = (result: PermissionResult, label: string, said?: string) => {
-      request.signal.removeEventListener('abort', onAbort);
       log('approval answered', { tool: toolName, behavior: result.behavior, as: label });
       // A card whose chat has since moved to the background only answers the request.
       const onScreen = this.openApprovals.includes(approval);
@@ -4396,7 +4425,7 @@ export class ChatView extends ItemView {
       const said = toolName === 'ExitPlanMode' ? `Plan withdrawn${why}` : toolName === 'AskUserQuestion' ? `Questions withdrawn${why}` : undefined;
       finish({ behavior: 'deny', message: 'Cancelled.' }, 'Cancelled', said);
     };
-    request.signal.addEventListener('abort', onAbort, { once: true });
+    this.onWithdrawn(approval, onAbort);
 
     // Claude's multiple-choice questions: answered here, the answers going back as the tool's input.
     // Ones the card cannot read are refused at once, and Claude asks in plain text instead.
@@ -4573,7 +4602,8 @@ export class ChatView extends ItemView {
       plan = text.trim();
       approval.plan = plan;
       // A note carried over is now told edited or not against this plan.
-      if (chatKey && approval.notePath) this.plugin.setPlanNote(chatKey, approval.notePath, plan);
+      const recorded = chatKey ? this.plugin.planNotes[chatKey] : undefined;
+      if (chatKey && approval.notePath && (recorded?.path !== approval.notePath || recorded.plan !== plan)) this.plugin.setPlanNote(chatKey, approval.notePath, plan);
       body.empty();
       this.renderMarkdown(plan, body);
       approveButton.disabled = false;
@@ -4843,7 +4873,7 @@ export class ChatView extends ItemView {
   private async discardNote(file: TFile): Promise<void> {
     this.closeNoteTabs(file);
     this.plugin.forgetPlanNote(file.path);
-    await this.app.fileManager.trashFile(file).catch((error: unknown) => log('removing a note failed', error));
+    await this.plugin.trashNote(file.path);
   }
 
   /**
@@ -5067,8 +5097,9 @@ export class ChatView extends ItemView {
   private chatSelection(): Selection | null {
     const selection = this.messagesEl.ownerDocument.getSelection();
     // Where the selection is, before what it says: a long selection in a note costs its length to read.
-    if (!selection?.anchorNode || !this.messagesEl.contains(selection.anchorNode)) return null;
-    return selection.toString().trim() ? selection : null;
+    if (!selection?.anchorNode || !this.messagesEl.contains(selection.anchorNode) || selection.isCollapsed) return null;
+    // An equation alone holds no text of its own (see markSelectedMath), but quotes as its LaTeX.
+    return selection.toString().trim() || (selection.rangeCount > 0 && selectionWithMath(selection.getRangeAt(0))) ? selection : null;
   }
 
   /** The text selected inside the messages, with equations as their LaTeX; null when there is none. */
@@ -5150,6 +5181,8 @@ export class ChatView extends ItemView {
    * starts.
    */
   private renderMarkdown(markdown: string, el: HTMLElement, component = this.chatComponent): Promise<void> {
+    // Whatever holds rendered Markdown (a reply, a plan, a side chat's question) is styled alike.
+    el.addClass('vc-markdown');
     if (renderPlainText(markdown, el)) return Promise.resolve();
     // The chat's own text (not a side chat's) records its mentions once its links are in.
     const chat = component === this.chatComponent ? this.mentionsChat() : null;

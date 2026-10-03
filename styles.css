@@ -948,19 +948,20 @@
   overflow-wrap: anywhere;
 }
 
-.vc-text pre,
-.vc-text table {
+.vc-markdown pre,
+.vc-markdown table {
   max-width: 100%;
   overflow-x: auto;
 }
 
 /*
- * Tables as Obsidian draws them in notes, which it does only under `.markdown-rendered`: cell
+ * Tables as Obsidian draws them in notes, which it does only under `.markdown-rendered`, wherever
+ * the panel renders Markdown (a reply, a plan, a side chat's question; see renderMarkdown): cell
  * borders, headers aligned with their columns, and the theme's table variables, except its sizes,
- * which are a note's text size: a table here is the size of the reply around it. Words are kept
+ * which are a note's text size: a table here is the size of the text around it. Words are kept
  * whole, as there; a table wider than the panel scrolls.
  */
-.vc-text table {
+.vc-markdown table {
   display: block;
   border-collapse: collapse;
   line-height: var(--table-line-height);
@@ -968,8 +969,8 @@
   overflow-wrap: normal;
 }
 
-.vc-text th,
-.vc-text td {
+.vc-markdown th,
+.vc-markdown td {
   padding: var(--size-2-2) var(--size-4-2);
   border: var(--table-border-width) solid var(--table-border-color);
   min-width: var(--table-column-min-width);
@@ -978,11 +979,11 @@
   text-align: start;
 }
 
-.vc-text td {
+.vc-markdown td {
   color: var(--table-text-color);
 }
 
-.vc-text th {
+.vc-markdown th {
   font-weight: var(--table-header-weight);
   font-family: var(--table-header-font);
   color: var(--table-header-color);
@@ -991,35 +992,35 @@
   border-color: var(--table-header-border-color);
 }
 
-.vc-text :is(th, td)[align="center"] {
+.vc-markdown :is(th, td)[align="center"] {
   text-align: center;
 }
 
-.vc-text :is(th, td)[align="right"] {
+.vc-markdown :is(th, td)[align="right"] {
   text-align: end;
 }
 
-.vc-text thead tr {
+.vc-markdown thead tr {
   background-color: var(--table-header-background);
 }
 
-.vc-text tbody tr:nth-child(odd) {
+.vc-markdown tbody tr:nth-child(odd) {
   background-color: var(--table-row-alt-background);
 }
 
-.vc-text tr > :nth-child(2n + 2) {
+.vc-markdown tr > :nth-child(2n + 2) {
   background-color: var(--table-column-alt-background);
 }
 
-.vc-text tr > :first-child {
+.vc-markdown tr > :first-child {
   border-left-width: var(--table-column-first-border-width);
 }
 
-.vc-text tr > :last-child {
+.vc-markdown tr > :last-child {
   border-right-width: var(--table-column-last-border-width);
 }
 
-.vc-text tbody tr:last-child > td {
+.vc-markdown tbody tr:last-child > td {
   border-bottom-width: var(--table-row-last-border-width);
 }
 

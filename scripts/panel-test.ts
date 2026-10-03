@@ -150,6 +150,12 @@ async function main(): Promise<void> {
     forgetPlanNote(path: string) {
       for (const id of Object.keys(this.planNotes)) if (this.planNotes[id].path === path) delete this.planNotes[id];
     },
+    // As the plugin's: the note to the trash, through the app.
+    async trashNote(path: string) {
+      const file = app.vault.getAbstractFileByPath(path);
+      if (file) await app.fileManager.trashFile(file as never);
+      return true;
+    },
     unseen: {} as Record<string, 'done' | 'error'>,
     // The panel another one hands its running chats to when it closes; none by default.
     heir: null as { adoptBackground(entry: unknown): void } | null,
@@ -996,6 +1002,46 @@ async function main(): Promise<void> {
       );
       if (!questionsOk) process.exitCode = 1;
     }
+    // An approval drawn, sent to the background with its chat, drawn again and answered leaves no
+    // listener on its request's signal.
+    {
+      const listening = new Set<unknown>();
+      const signal = new AbortController().signal;
+      const add = signal.addEventListener.bind(signal);
+      const remove = signal.removeEventListener.bind(signal);
+      signal.addEventListener = ((type: string, listener: () => void, options?: AddEventListenerOptions) => {
+        listening.add(listener);
+        add(type, listener, options);
+      }) as typeof signal.addEventListener;
+      signal.removeEventListener = ((type: string, listener: () => void) => {
+        listening.delete(listener);
+        remove(type, listener);
+      }) as typeof signal.removeEventListener;
+      const tripView = view as unknown as {
+        askPermission(request: unknown): Promise<{ behavior: string }>;
+        adoptApproval(entry: { approvals: unknown[] }, approval: unknown): void;
+        renderApprovalCard(approval: unknown): void;
+        openApprovals: unknown[];
+        draw: { turn: HTMLElement | null };
+      };
+      internals.messagesEl.empty();
+      tripView.draw.turn = null;
+      const asked = tripView.askPermission({ toolName: 'Bash', input: { command: 'ls' }, signal });
+      const approval = tripView.openApprovals[tripView.openApprovals.length - 1];
+      tripView.openApprovals = tripView.openApprovals.filter((open) => open !== approval);
+      tripView.adoptApproval({ approvals: [] }, approval);
+      internals.messagesEl.empty();
+      tripView.draw.turn = null;
+      tripView.renderApprovalCard(approval);
+      const whileOpen = listening.size;
+      ([...internals.messagesEl.querySelectorAll('button')].find((el) => el.textContent === 'Allow') as HTMLElement).click();
+      const answer = await asked;
+      internals.messagesEl.empty();
+      tripView.draw.turn = null;
+      const tripOk = whileOpen === 2 && listening.size === 0 && answer.behavior === 'allow';
+      console.log(`approval listeners after a background round trip: ${whileOpen} while open, ${listening.size} once answered -> ${tripOk}`);
+      if (!tripOk) process.exitCode = 1;
+    }
     // Claude's plan: approved as it is, approved as edited in a note (which then goes), sent back with
     // feedback, or rejected.
     {
@@ -1030,6 +1076,8 @@ async function main(): Promise<void> {
       // As it is.
       const plain = propose();
       const planTitle = plain.card.querySelector('.vc-permission-title')?.textContent;
+      // Styled as any rendered Markdown (its tables, say).
+      const planMarkdown = plain.card.querySelector('.vc-plan')?.classList.contains('vc-markdown') === true;
       plain.button('Approve').click();
       const plainResult = await plain.answered;
       const plainSaid = decided();
@@ -1174,6 +1222,7 @@ async function main(): Promise<void> {
       planView.draw.turn = null;
       const planOk =
         planTitle === "Claude's plan" &&
+        planMarkdown &&
         plainResult.behavior === 'allow' &&
         plainResult.updatedInput?.plan === plan &&
         plainSaid === 'Plan approved' &&
@@ -2910,8 +2959,10 @@ async function main(): Promise<void> {
       const shown = internals.messagesEl.createDiv();
       shown.innerHTML =
         '<p>the factor is <span class="math math-inline" data-tex="a"><mjx-container>a</mjx-container></span>, so</p>' +
-        '<div class="math math-block" data-tex="b"><mjx-container>b</mjx-container></div><p>after it</p>';
-      const [inline, block] = Array.from(shown.querySelectorAll<HTMLElement>('.math'));
+        '<div class="math math-block" data-tex="b"><mjx-container>b</mjx-container></div><p>after it</p>' +
+        '<div class="math math-block" data-tex="c"><mjx-container><mjx-math></mjx-math></mjx-container></div>';
+      const [inline, block, drawnOnly] = Array.from(shown.querySelectorAll<HTMLElement>('.math'));
+      const afterText = shown.querySelectorAll('p')[1].firstChild as Text;
       const select = (range: Range) => {
         dom.window.getSelection()?.removeAllRanges();
         dom.window.getSelection()?.addRange(range);
@@ -2920,21 +2971,36 @@ async function main(): Promise<void> {
       const marks = () => [inline, block].map((el) => el.classList.contains('vc-math-selected'));
       const across = document.createRange();
       across.setStart(shown.firstChild?.firstChild as Text, 4);
-      across.setEnd(shown.lastChild?.firstChild as Text, 3);
+      across.setEnd(afterText, 3);
       select(across);
       const acrossMarks = marks();
       const textOnly = document.createRange();
-      textOnly.setStart(shown.lastChild?.firstChild as Text, 0);
-      textOnly.setEnd(shown.lastChild?.firstChild as Text, 5);
+      textOnly.setStart(afterText, 0);
+      textOnly.setEnd(afterText, 5);
       select(textOnly);
       const textMarks = marks();
       dom.window.getSelection()?.removeAllRanges();
       document.dispatchEvent(new dom.window.Event('selectionchange'));
       const clearedMarks = marks();
+      // An equation selected alone, whose drawing holds no text, is still a selection to quote; a click in one is not.
+      const quoting = view as unknown as { selectedInChat(): string | null };
+      const alone = document.createRange();
+      alone.setStartBefore(drawnOnly);
+      alone.setEndAfter(drawnOnly);
+      dom.window.getSelection()?.removeAllRanges();
+      dom.window.getSelection()?.addRange(alone);
+      const aloneQuote = quoting.selectedInChat();
+      dom.window.getSelection()?.collapse(drawnOnly.firstChild as Node, 0);
+      const clickQuote = quoting.selectedInChat();
+      dom.window.getSelection()?.removeAllRanges();
       shown.remove();
       const markOk =
-        JSON.stringify(acrossMarks) === '[true,true]' && JSON.stringify(textMarks) === '[false,false]' && JSON.stringify(clearedMarks) === '[false,false]';
-      console.log(`equations marked as selected: across ${acrossMarks}, text only ${textMarks}, cleared ${clearedMarks} -> ${markOk}`);
+        JSON.stringify(acrossMarks) === '[true,true]' &&
+        JSON.stringify(textMarks) === '[false,false]' &&
+        JSON.stringify(clearedMarks) === '[false,false]' &&
+        aloneQuote === '$$\nc\n$$' &&
+        clickQuote === null;
+      console.log(`equations marked as selected: across ${acrossMarks}, text only ${textMarks}, cleared ${clearedMarks}; alone quotes ${JSON.stringify(aloneQuote)}, a click ${clickQuote} -> ${markOk}`);
       if (!markOk) process.exitCode = 1;
     }
     // Pinned at the bottom while a reply streams, the bar is still brought up to date — spaced out,

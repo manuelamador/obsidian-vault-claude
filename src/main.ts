@@ -365,6 +365,13 @@ export default class VaultClaudePlugin extends Plugin {
     const dir = this.vaultRoot();
     const ids = dir ? await sessionIds(dir) : null;
     let changed = false;
+    // A plan note kept for a chat whose session is gone has no next plan to go to.
+    for (const [id, note] of Object.entries(this.planNotes)) {
+      if (!ids || ids.has(id)) continue;
+      delete this.planNotes[id];
+      void this.trashNote(note.path);
+      changed = true;
+    }
     for (const index of [this.noteChats, this.noteRefs, this.noteMentions, this.noteRemoved]) {
       for (const id of ids ? new Set(Object.values(index).flat()) : []) {
         if (!ids?.has(id)) changed = forgetChat(index, id) || changed;
@@ -411,8 +418,10 @@ export default class VaultClaudePlugin extends Plugin {
         const found = new Set(listed.map((item) => item.id));
         for (const id of this.unlisted) if (!found.has(id)) this.unlisted.delete(id);
         const items = listed.filter((item) => !this.unlisted.has(item.id));
-        // Search texts only of chats the history can still show.
+        // Search texts only of chats the history can still show: these, and the scratch chat, which
+        // the history lists whether or not this listing has it.
         const searchable = new Set(items.flatMap((item) => [item.id, ...(item.copies ?? []).map((copy) => copy.id)]));
+        if (this.scratch) searchable.add(this.scratch.id);
         for (const id of this.searchTexts.keys()) if (!searchable.has(id)) this.searchTexts.delete(id);
         log(`history listed: ${items.length} chats in ${Math.round(performance.now() - started)} ms`);
         this.lastListing = items;
@@ -907,18 +916,31 @@ export default class VaultClaudePlugin extends Plugin {
    * No plan is waiting when Obsidian starts: a plan note left as Claude wrote it (by a quit while its
    * plan was open) goes, and one holding edits stays for its chat's next plan.
    */
-  private async tidyPlanNotes(): Promise<void> {
+  async tidyPlanNotes(): Promise<void> {
     for (const [id, note] of Object.entries(this.planNotes)) {
       const file = this.app.vault.getAbstractFileByPath(note.path);
-      try {
-        if (file instanceof TFile && (await this.app.vault.read(file)).trim() !== note.plan.trim()) continue;
-        if (file instanceof TFile) await this.app.fileManager.trashFile(file);
-      } catch (error) {
-        log('tidying a plan note failed', error);
-        continue;
+      if (file instanceof TFile) {
+        const text = await this.app.vault.read(file).catch((error: unknown) => {
+          log('reading a plan note failed', error);
+          return null;
+        });
+        if (text === null || text.trim() !== note.plan.trim() || !(await this.trashNote(note.path))) continue;
       }
       delete this.planNotes[id];
       this.saveSoon();
+    }
+  }
+
+  /** Moves note `path` to the trash, if it is there. Whether it went, or was not there; a failure is logged. */
+  async trashNote(path: string): Promise<boolean> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return true;
+    try {
+      await this.app.fileManager.trashFile(file);
+      return true;
+    } catch (error) {
+      log('removing a note failed', error);
+      return false;
     }
   }
 
@@ -929,8 +951,7 @@ export default class VaultClaudePlugin extends Plugin {
     delete this.drafts[id];
     const planNote = this.planNotes[id];
     delete this.planNotes[id];
-    const planFile = planNote ? this.app.vault.getAbstractFileByPath(planNote.path) : null;
-    if (planFile instanceof TFile) void this.app.fileManager.trashFile(planFile).catch((error: unknown) => log('removing a plan note failed', error));
+    if (planNote) void this.trashNote(planNote.path);
     delete this.unseen[id];
     for (const index of [this.noteChats, this.noteRefs, this.noteMentions, this.noteRemoved]) forgetChat(index, id);
   }
@@ -1270,7 +1291,11 @@ export default class VaultClaudePlugin extends Plugin {
     this.noteMentions = raw.noteMentions && typeof raw.noteMentions === 'object' ? raw.noteMentions : {};
     this.noteRemoved = raw.noteRemoved && typeof raw.noteRemoved === 'object' ? raw.noteRemoved : {};
     this.drafts = raw.drafts && typeof raw.drafts === 'object' ? raw.drafts : {};
-    this.planNotes = raw.planNotes && typeof raw.planNotes === 'object' ? raw.planNotes : {};
+    this.planNotes = Object.fromEntries(
+      Object.entries(raw.planNotes && typeof raw.planNotes === 'object' ? raw.planNotes : {}).filter(
+        ([, note]) => typeof note?.path === 'string' && typeof note.plan === 'string',
+      ),
+    );
     // A draft of a chat in the panel's list goes with the chat (deleted with it, or dropped with
     // the oldest records); one of a session opened from elsewhere has no such end, so it ages out.
     const listed = new Set(this.chats.map((chat) => chat.id));
