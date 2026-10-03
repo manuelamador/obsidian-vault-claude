@@ -956,7 +956,8 @@
 
 /*
  * Tables as Obsidian draws them in notes, which it does only under `.markdown-rendered`: cell
- * borders, headers aligned with their columns, and the theme's table variables. Words are kept
+ * borders, headers aligned with their columns, and the theme's table variables, except its sizes,
+ * which are a note's text size: a table here is the size of the reply around it. Words are kept
  * whole, as there; a table wider than the panel scrolls.
  */
 .vc-text table {
@@ -978,12 +979,10 @@
 }
 
 .vc-text td {
-  font-size: var(--table-text-size);
   color: var(--table-text-color);
 }
 
 .vc-text th {
-  font-size: var(--table-header-size);
   font-weight: var(--table-header-weight);
   font-family: var(--table-header-font);
   color: var(--table-header-color);
