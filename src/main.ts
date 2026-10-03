@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, PROTOCOL_ACTION, memoBaseYaml, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, PROTOCOL_ACTION, memoBaseYaml, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -1295,6 +1295,16 @@ export default class VaultClaudePlugin extends Plugin {
   /** A user-chosen title: the panel's record, Claude Code's record of the session, and any panel showing it. */
   async renameChatTitle(id: string, title: string): Promise<void> {
     this.renameChat(id, title);
+    // The memos saved from it, whose table links show its title.
+    for (const memo of this.memoNotes(id)) {
+      await this.app.fileManager
+        .processFrontMatter(memo, (frontmatter: Record<string, unknown>) => {
+          const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : typeof value === 'string' ? [value] : []);
+          const paired = pairChat(list(frontmatter.claude_chats), list(frontmatter.chats), id, title);
+          frontmatter.chats = paired.titles;
+        })
+        .catch((error: unknown) => log('renaming a chat in a memo failed', error));
+    }
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       if (leaf.view instanceof ChatView) leaf.view.onChatRenamed(id, title);
     }

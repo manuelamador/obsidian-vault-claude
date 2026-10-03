@@ -9,6 +9,7 @@ import {
   memoNoteMarkdown,
   memoNoteName,
   memoSuggestionPrompt,
+  pairChat,
   passageNeedle,
   readMemoSuggestion,
   type MemoSources,
@@ -85,7 +86,9 @@ test('the suggestion request names who wrote each passage, and the reply is read
 test("the Memos base opens on the chat's memos, then all, those about the note in front, and each kind", () => {
   const base = memoBaseYaml('chat-1', 'Debt model [v2] #draft', 'My vault');
   const views = [...base.matchAll(/^    name: "(.*)"$/gm)].map((match) => match[1]);
-  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas']);
+  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas', 'By chat', 'By note']);
+  assert.ok(base.includes('    groupBy:\n      property: chats\n      direction: ASC'));
+  assert.ok(base.includes('    groupBy:\n      property: notes\n      direction: ASC'));
   assert.ok(base.includes('        - "claude_chats.contains(\\"chat-1\\")"'));
   assert.ok(base.includes('        - "file.hasLink(this.file)"'));
   // Memos wherever they are, by their type; their chats as links that open them.
@@ -194,4 +197,37 @@ test("a memo's Send box cleared in the base takes its mention out of every panel
   assert.deepEqual(taken, ['first: Claude chats/Memos/A memo.md', 'second: Claude chats/Memos/A memo.md']);
   // While another panel still mentions it, a panel that lets it go leaves the box ticked.
   assert.equal(p.mentionedElsewhere('Claude chats/Memos/A memo.md', leaves[0].view), true);
+});
+
+test("a memo's chats stay paired: a new chat comes with its title, a known one has its title updated", () => {
+  // Two chats of the same title, and a list of titles shorter than the ids (a memo from before titles).
+  assert.deepEqual(pairChat(['a'], ['Debt model'], 'b', 'Debt model'), { ids: ['a', 'b'], titles: ['Debt model', 'Debt model'] });
+  assert.deepEqual(pairChat(['a', 'b'], ['First'], 'b', 'Renamed'), { ids: ['a', 'b'], titles: ['First', 'Renamed'] });
+  assert.deepEqual(pairChat([], [], 'a', 'New'), { ids: ['a'], titles: ['New'] });
+});
+
+test("the table upgrades to chat links once, keeps its own formula on this vault, and leaves a formula of the user's", () => {
+  const upgraded = retargetMemoBase({ views: [{ name: 'Mine', order: ['chats'] }] }, 'c', 'T', 'Old vault') as { formulas: { chat: string }; views: { order: string[] }[] };
+  assert.deepEqual(upgraded.views[1].order, ['formula.chat']);
+  // Later: a chats column put back by the user stays; the formula follows the vault's name.
+  const later = retargetMemoBase({ formulas: upgraded.formulas, views: [{ name: 'Mine', order: ['chats'] }] }, 'c', 'T', 'New vault') as { formulas: { chat: string }; views: { order: string[] }[] };
+  assert.deepEqual(later.views[1].order, ['chats']);
+  assert.ok(later.formulas.chat.includes('vault=New%20vault'));
+  const theirs = retargetMemoBase({ formulas: { chat: 'chats' }, views: [] }, 'c', 'T', 'V') as { formulas: { chat: string } };
+  assert.equal(theirs.formulas.chat, 'chats');
+});
+
+test("renaming a chat renames it in the memos saved from it", async () => {
+  const { default: VaultClaudePlugin } = await import('../src/main');
+  const p = new (VaultClaudePlugin as unknown as new () => InstanceType<typeof VaultClaudePlugin>)();
+  const frontmatter: Record<string, unknown> = { claude_chats: ['a', 'b'], chats: ['First', 'Old title'] };
+  (p as unknown as { app: unknown }).app = {
+    workspace: { getLeavesOfType: () => [] },
+    fileManager: { processFrontMatter: async (_file: unknown, change: (fm: Record<string, unknown>) => void) => change(frontmatter) },
+  };
+  p.renameChat = () => undefined;
+  p.vaultRoot = () => null;
+  p.memoNotes = (chat?: string) => (chat === 'b' ? [{ path: 'Claude chats/Memos/M.md' } as never] : []);
+  await p.renameChatTitle('b', 'New title');
+  assert.deepEqual(frontmatter.chats, ['First', 'New title']);
 });

@@ -14,7 +14,7 @@ export interface MemoChoice {
 }
 
 /** Asks for a title and description for the passages; null when there is none. */
-export type MemoSuggester = (signal: AbortSignal) => Promise<{ title: string; description: string } | null>;
+type MemoSuggester = (signal: AbortSignal) => Promise<{ title: string; description: string } | null>;
 
 /** Longest stretch of a passage shown in the form; the note gets the whole of it. */
 const PREVIEW_CHARS = 400;

@@ -44,7 +44,7 @@ import {
 import { chipFor, renderChip } from './chip';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
-import { addMemoSources, cleanTags, memoNoteMarkdown, memoNoteName, passageNeedle, type MemoPassage, type MemoSources } from './memos';
+import { addMemoSources, cleanTags, memoNoteMarkdown, memoNoteName, pairChat, passageNeedle, type MemoPassage, type MemoSources } from './memos';
 import { FindBar } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -2796,8 +2796,12 @@ export class ChatView extends ItemView {
    * header's buttons, the very ones it is about.
    */
   private flashHint(text: string): void {
-    this.hintEl ??= (this.messagesEl.parentElement ?? this.contentEl).createDiv({ cls: 'vc-hint' });
+    const wrap = this.messagesEl.parentElement ?? this.contentEl;
+    this.hintEl ??= wrap.createDiv({ cls: 'vc-hint' });
     this.hintEl.setText(text);
+    // Below the bar naming the prompt, when it shows, clear of its buttons too.
+    const bar = wrap.querySelector<HTMLElement>('.vc-question-bar');
+    this.hintEl.style.top = `${(bar?.isShown() ? bar.offsetHeight : 0) + 8}px`;
     this.hintEl.show();
     if (this.hintTimer !== null) window.clearTimeout(this.hintTimer);
     this.hintTimer = window.setTimeout(() => {
@@ -5347,10 +5351,10 @@ export class ChatView extends ItemView {
         const notes = this.memoNotesFor(sources.passages);
         await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
           const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : typeof value === 'string' ? [value] : []);
-          const chats = list(frontmatter.claude_chats);
-          if (!chats.includes(sources.chatId)) frontmatter.claude_chats = [...chats, sources.chatId];
-          const titles = list(frontmatter.chats);
-          if (!titles.includes(sources.chatTitle)) frontmatter.chats = [...titles, sources.chatTitle];
+          // Ids and titles stay paired, which the table's chat links rely on.
+          const paired = pairChat(list(frontmatter.claude_chats), list(frontmatter.chats), sources.chatId, sources.chatTitle);
+          frontmatter.claude_chats = paired.ids;
+          frontmatter.chats = paired.titles;
           const known = list(frontmatter.notes);
           if (notes.some((note) => !known.includes(note))) frontmatter.notes = [...known, ...notes.filter((note) => !known.includes(note))];
           const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags.map(String) : typeof frontmatter.tags === 'string' ? [frontmatter.tags] : [];

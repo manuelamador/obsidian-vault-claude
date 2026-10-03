@@ -3213,7 +3213,7 @@ async function main(): Promise<void> {
       vault.createFolder = async () => undefined;
       vault.process = async (file: { path: string }, change: (text: string) => string) => void notesOnDisk.set(file.path, change(notesOnDisk.get(file.path) ?? ''));
       fileManager.processFrontMatter = async (_file: unknown, change: (frontmatter: Record<string, unknown>) => void) => {
-        const frontmatter: Record<string, unknown> = { claude_chats: ['memo-chat'], tags: ['memo', 'idea'] };
+        const frontmatter: Record<string, unknown> = { claude_chats: ['memo-chat'], chats: ['Debt model'], tags: ['memo', 'idea'] };
         change(frontmatter);
         frontmatters.push(frontmatter);
       };
@@ -3266,7 +3266,7 @@ async function main(): Promise<void> {
         JSON.stringify(linked) === JSON.stringify([`${memoPath}@memo-chat`]) &&
         addedText.includes('### Later · 2026-10-03') &&
         JSON.stringify([frontmatters[0]?.claude_chats, frontmatters[0]?.chats, frontmatters[0]?.tags, frontmatters[0]?.updated]) ===
-          JSON.stringify([['memo-chat', 'later-chat'], ['Later'], ['memo', 'idea', 'read'], '2026-10-03']) &&
+          JSON.stringify([['memo-chat', 'later-chat'], ['Debt model', 'Later'], ['memo', 'idea', 'read'], '2026-10-03']) &&
         found > 0 &&
         quoted.includes('> A mechanism: $q(b)$ falls');
       console.log(`memos: passages ${JSON.stringify(excerpts.map((excerpt) => `${excerpt.role}: ${excerpt.text} [${excerpt.needle}]`))}; note ${memoPath}, linked ${JSON.stringify(linked)}; added ${addedText.includes('### Later')}, frontmatter ${JSON.stringify(frontmatters[0])}; found ${found}; quoted ${JSON.stringify(quoted.slice(0, 40))} -> ${memoOk}`);
@@ -3349,8 +3349,21 @@ async function main(): Promise<void> {
       const memosButton = [...root.querySelectorAll('button')].find((el) => el.getAttribute('aria-label')?.startsWith('All memos')) as HTMLElement;
       memosButton.click();
       const hint = root.querySelector('.vc-hint') as HTMLElement | null;
-      const hintOk = hint?.isShown() === true && hint.textContent === 'All memos.';
-      console.log(`memo button hint: "${hint?.textContent}" shown ${hint?.isShown()} -> ${hintOk}`);
+      const plain = hint?.textContent;
+      // Cmd-click on a chat that has started: this chat's memos, said so.
+      const chatView = view as unknown as { chatId: string | null };
+      const chatWas = chatView.chatId;
+      chatView.chatId = 'memo-chat';
+      const modWas = stub.Keymap.isModEvent;
+      (stub.Keymap as { isModEvent: () => unknown }).isModEvent = () => 'tab';
+      memosButton.click();
+      const forChat = hint?.textContent;
+      (stub.Keymap as { isModEvent: () => unknown }).isModEvent = modWas;
+      chatView.chatId = chatWas;
+      const hintOk = hint?.isShown() === true && forChat === "This chat's memos. Click the memo button for all of them." && hint?.style.top === '8px';
+      const plainOk = plain === 'All memos.';
+      console.log(`memo button hint: "${plain}", then with the modifier "${forChat}", shown ${hint?.isShown()} at ${hint?.style.top} -> ${hintOk && plainOk}`);
+      if (!plainOk) process.exitCode = 1;
       if (!hintOk) process.exitCode = 1;
     }
     // Pinned at the bottom while a reply streams, the bar is still brought up to date — spaced out,

@@ -1983,7 +1983,6 @@ button.vc-continue-button:hover span:last-child {
 /* A short message under the header (see ChatView.flashHint), clear of its buttons. */
 .vc-hint {
   position: absolute;
-  top: var(--size-4-2);
   right: var(--vc-side-margin);
   z-index: 5;
   max-width: calc(100% - 2 * var(--vc-side-margin));

@@ -198,8 +198,25 @@ const BASE_COLUMNS = ['send', 'file.name', 'tags', 'formula.chat', 'notes', 'upd
  * the chat in the panel (see chatLink): Bases makes a link with display text of a URL, `obsidian://`
  * ones included.
  */
-export function chatLinksFormula(vault: string): string {
-  return `claude_chats.map(link("obsidian://${PROTOCOL_ACTION}?vault=${encodeURIComponent(vault)}&chat=" + value, chats[index]))`;
+function chatLinksFormula(vault: string): string {
+  return `${CHAT_LINKS_START}${encodeURIComponent(vault)}&chat=" + value, chats[index]))`;
+}
+
+/** How the plugin's chat-link formula starts, by which a formula of its own is told from one of the user's. */
+const CHAT_LINKS_START = `claude_chats.map(link("obsidian://${PROTOCOL_ACTION}?vault=`;
+
+/**
+ * A memo's chats, paired: `ids[i]` is the chat whose title is `titles[i]`, which the table's links rely
+ * on. Chat `chatId` is added with its title when it is not there, and its title updated when it is.
+ */
+export function pairChat(ids: string[], titles: string[], chatId: string, chatTitle: string): { ids: string[]; titles: string[] } {
+  const paired = { ids: [...ids], titles: ids.map((_, i) => titles[i] ?? '') };
+  const at = paired.ids.indexOf(chatId);
+  if (at === -1) {
+    paired.ids.push(chatId);
+    paired.titles.push(chatTitle);
+  } else paired.titles[at] = chatTitle;
+  return paired;
 }
 
 /** The filter that picks chat `chatId`'s memos, by which the base's view of one chat is known. */
@@ -224,15 +241,17 @@ function chatView(chatId: string, chatTitle: string): Record<string, unknown> {
  * sidebar), all memos, and those of each kind. Memos are found by `type: memo` wherever they are.
  */
 export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): string {
-  const view = (name: string, filters: string[], sort: { property: string; direction: 'ASC' | 'DESC' }) =>
+  // `group`: rows in sections by that property, whose column is then left out.
+  const view = (name: string, filters: string[], sort: { property: string; direction: 'ASC' | 'DESC' }, group?: 'chats' | 'notes') =>
     [
       '  - type: table',
       `    name: ${JSON.stringify(name)}`,
       '    filters:',
       '      and:',
       ...['type == "memo"', ...filters].map((filter) => `        - ${JSON.stringify(filter)}`),
+      ...(group ? ['    groupBy:', `      property: ${group}`, '      direction: ASC'] : []),
       '    order:',
-      ...BASE_COLUMNS.map((column) => `      - ${column}`),
+      ...BASE_COLUMNS.filter((column) => !(group === 'chats' && column === 'formula.chat') && column !== group).map((column) => `      - ${column}`),
       '    sort:',
       `      - property: ${sort.property}`,
       `        direction: ${sort.direction}`,
@@ -263,6 +282,8 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
     view('To read', ['file.hasTag("read")'], oldest),
     view('To explore', ['file.hasTag("explore")'], oldest),
     view('Ideas', ['file.hasTag("idea")'], newest),
+    view('By chat', [], newest, 'chats'),
+    view('By note', [], newest, 'notes'),
     '',
   ].join('\n');
 }
@@ -286,11 +307,14 @@ export function retargetMemoBase(base: unknown, chatId: string, chatTitle: strin
   // view the column of chat titles swapped for it.
   const record = base as Record<string, unknown>;
   const formulas = { ...(typeof record.formulas === 'object' && record.formulas !== null ? (record.formulas as Record<string, unknown>) : {}) };
-  formulas.chat ??= chatLinksFormula(vault);
+  const upgrading = formulas.chat === undefined;
+  // The plugin's own formula is kept pointing at this vault (renamed, or a copy); one of the user's is left alone.
+  if (upgrading || (typeof formulas.chat === 'string' && formulas.chat.startsWith(CHAT_LINKS_START))) formulas.chat = chatLinksFormula(vault);
   const properties = { ...(typeof record.properties === 'object' && record.properties !== null ? (record.properties as Record<string, unknown>) : {}) };
   properties['formula.chat'] ??= { displayName: 'Chats' };
+  // Once, as the formula comes in: a column of chats put in by the user later stays as they put it.
   const views = (record.views as unknown[]).map((view) => {
-    if (typeof view !== 'object' || view === null || !Array.isArray((view as { order?: unknown }).order)) return view;
+    if (!upgrading || typeof view !== 'object' || view === null || !Array.isArray((view as { order?: unknown }).order)) return view;
     const order = (view as { order: unknown[] }).order.map((column) => (column === 'chats' ? 'formula.chat' : column));
     return { ...(view as Record<string, unknown>), order };
   });

@@ -122,6 +122,12 @@ Open the chat from the robot icon in the left ribbon.
 
 - Ask Claude about selection, Edit selection with Claude and Send this note to Claude as a prompt are also commands.
 
+**Memos**
+- **Memo** over a selection in the chat, or the sticky-note icon under a reply, saves those passages as a memo: a note per memo in `Claude chats/Memos/`. A selection across several messages becomes one passage each, marked You or Claude, with equations as LaTeX; a reply's memo holds your prompt and the reply.
+- The form takes a title and a description, which Claude (the model for small jobs) suggests from the passages and you edit, and tags: idea, todo, explore, read, or your own. Or it adds the passages to a memo saved before.
+- A memo's properties name the chats it came from and, as links, the notes it is about (the chat's attached note, and notes its passages link to), so it shows in those notes' backlinks. Each passage has **Go to the passage**, which opens the chat and finds it, and **Continue in the chat**, which opens it with the passage quoted.
+- **The sticky-note icon at the top of the panel** opens the Memos table on all memos; ⌘-click opens this chat's. The table has views by chat, by note and by tag; a table left open follows the chat on the panel. Its **Send to chat** box puts a memo in the chat's input, and clearing it takes the memo out; its Chats column opens each chat.
+
 **Controls**
 - **Under the input:** the chat's model, effort and permission mode, and the ⚡ fast-mode toggle. Approvals appear in the chat. In Plan mode, however it was entered, the input is outlined in the accent colour with a **Leave plan mode** link above it, and a line in the chat marks where plan mode starts and ends.
 
@@ -216,6 +222,7 @@ Open the chat from the robot icon in the left ribbon.
 | Attach the open note to new chats | Off: a new chat starts with no note, and the chip offers the open one |
 | History includes all vault sessions | Also list sessions started outside the panel |
 | Folder for saved chats | Where Save chat as note and Save summary as note write (default `Claude chats`) |
+| Folder for memos | Where memos and the Memos table go (default `Claude chats/Memos`); memos elsewhere are still listed |
 | Notify when Claude finishes, Notify after | Notifications for long replies and approvals while Obsidian is in the background (default on, 30 s) |
 | Phone access | Put every new chat on the phone, name in the Claude app, start with Obsidian |
 | Extra PATH entries | Directories added to PATH for commands Claude runs |
