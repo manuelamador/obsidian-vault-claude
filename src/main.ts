@@ -1235,6 +1235,8 @@ export default class VaultClaudePlugin extends Plugin {
     const existing = this.app.vault.getAbstractFileByPath(path);
     const vault = this.app.vault.getName();
     if (!(existing instanceof TFile)) return this.app.vault.create(path, memoBaseYaml(chatId, chatTitle, vault));
+    // A chat not started has no id to pick its memos by: the chat view keeps the last chat's.
+    if (!chatId) return existing;
     const before = await this.app.vault.read(existing);
     let parsed: unknown = null;
     try {

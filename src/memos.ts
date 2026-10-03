@@ -355,7 +355,8 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
     '  updated:',
     '    displayName: Updated',
     'views:',
-    view(chatMemosView(chatTitle), [chatFilter(chatId)], newest),
+    // A chat not started has no id to pick its memos by: no view of its own until it has one.
+    ...(chatId ? [view(chatMemosView(chatTitle), [chatFilter(chatId)], newest)] : []),
     view(ALL_MEMOS_VIEW, [], newest),
     view('About this note', ['file.hasLink(this.file)'], newest),
     view('To do', ['file.hasTag("todo")'], oldest),

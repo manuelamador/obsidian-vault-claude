@@ -173,6 +173,13 @@ test('a Memos base open in a tab follows the chat on the panel; one closed is le
   assert.ok(text.includes('claude_chats.contains(\\"chat-2\\")'));
   // The open tab follows its view to the new name, instead of finding it gone.
   assert.equal(tabState.state.viewName, 'Chat: Second chat');
+  // A new chat, with no id yet: the view keeps the last chat's memos, rather than looking for an empty id.
+  const kept = text;
+  await p.followChatMemos('', 'New chat');
+  assert.equal(text, kept);
+  assert.equal(tabState.state.viewName, 'Chat: Second chat');
+  assert.ok(!memoBaseYaml('', 'New chat', 'V').includes('contains(\\"\\")'));
+  assert.ok(!memoBaseYaml('', 'New chat', 'V').includes('Chat: New chat'));
 });
 
 test('a link from a memo opens its chat, then finds the passage or quotes it; a chat gone says so', async () => {
