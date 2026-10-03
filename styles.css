@@ -1390,7 +1390,8 @@ button.vc-continue-button:hover span:last-child {
 }
 
 /* Where the chat was compacted: a dashed rule on either side of the line. */
-.vc-compaction {
+.vc-compaction,
+.vc-mode-line {
   display: flex;
   align-items: center;
   gap: var(--size-4-2);
@@ -1399,7 +1400,9 @@ button.vc-continue-button:hover span:last-child {
 }
 
 .vc-compaction::before,
-.vc-compaction::after {
+.vc-compaction::after,
+.vc-mode-line::before,
+.vc-mode-line::after {
   content: '';
   flex: 1 0 1.5em;
   border-top: 1px dashed var(--background-modifier-border-hover);
@@ -1459,6 +1462,22 @@ button.vc-continue-button:hover span:last-child {
 
 
 /* Chats about the active note, offered above the input. */
+/* Plan mode, above the input: what it means, and a way back. Where plan mode starts and ends in the
+   chat, a line like the compaction divider (see ChatView.renderModeLine). */
+.vc-plan-line {
+  color: var(--text-accent);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-mode-line {
+  color: var(--text-accent);
+}
+
+.vc-input.is-plan-mode {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
 .vc-note-chats {
   color: var(--text-accent);
   font-size: var(--font-ui-smaller);

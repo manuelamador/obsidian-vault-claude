@@ -62,7 +62,7 @@ Open the chat from the robot icon in the left ribbon.
 - Ask Claude about selection, Edit selection with Claude and Send this note to Claude as a prompt are also commands.
 
 **Controls**
-- **Under the input:** the chat's model, effort and permission mode, and the ⚡ fast-mode toggle. Approvals appear in the chat.
+- **Under the input:** the chat's model, effort and permission mode, and the ⚡ fast-mode toggle. Approvals appear in the chat. In Plan mode, however it was entered, the input is outlined in the accent colour with a **Leave plan mode** link above it, and a line in the chat marks where plan mode starts and ends.
 - **The meter under the title** shows context and plan usage, with the time to each reset; point at it for details. A dashed line in the chat marks where Claude Code compacted it.
 
   <img src="docs/usage-card.png" width="400" alt="The card shown on pointing at the meter: the model's context use in tokens, and the five-hour session's use with its reset time">

@@ -3355,6 +3355,53 @@ async function main(): Promise<void> {
       if (!offerOk) process.exitCode = 1;
     }
 
+    // Plan mode shows: Claude Code's report of it (Claude entering it itself) switches the menu, a line
+    // in the chat marks where it starts and ends, and the input carries a cue with a way back.
+    {
+      const modeChat = view as unknown as { onMessage(message: unknown): void; mode: string; busy: boolean; session: unknown; modeMenu: { value: string } };
+      const modeWas = modeChat.mode;
+      view.newChat();
+      modeChat.mode = 'auto';
+      const changes: string[] = [];
+      modeChat.session = { setPermissionMode: async (mode: string) => void changes.push(mode), setHandlers() {}, close() {} };
+      const planLine = root.querySelector('.vc-plan-line') as HTMLElement;
+      const inputBox = root.querySelector('.vc-input') as HTMLTextAreaElement;
+      const lines = () => [...root.querySelectorAll('.vc-mode-line')].map((el) => el.textContent);
+      modeChat.onMessage({ type: 'system', subtype: 'status', status: null, permissionMode: 'plan', uuid: 'st1', session_id: 's' });
+      const entered = { mode: modeChat.mode, menu: modeChat.modeMenu.value, cue: planLine.isShown(), tinted: inputBox.hasClass('is-plan-mode'), placeholder: inputBox.placeholder };
+      (planLine.querySelector('.vc-welcome-link') as HTMLElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const left = { mode: modeChat.mode, cue: planLine.isShown(), tinted: inputBox.hasClass('is-plan-mode'), changes: [...changes] };
+      // The same report twice draws one line.
+      modeChat.onMessage({ type: 'system', subtype: 'status', status: null, permissionMode: 'plan', uuid: 'st2', session_id: 's' });
+      modeChat.onMessage({ type: 'system', subtype: 'status', status: null, permissionMode: 'plan', uuid: 'st3', session_id: 's' });
+      modeChat.onMessage({ type: 'system', subtype: 'status', status: null, permissionMode: 'auto', uuid: 'st4', session_id: 's' });
+      const drawn = lines();
+      modeChat.session = null;
+      view.newChat();
+      modeChat.mode = modeWas;
+      (view as unknown as { populateModeSelect(): void }).populateModeSelect();
+      const modeOk =
+        entered.mode === 'plan' &&
+        entered.menu === 'plan' &&
+        entered.cue &&
+        entered.tinted &&
+        entered.placeholder === 'Describe what to plan…' &&
+        left.mode === 'auto' &&
+        !left.cue &&
+        !left.tinted &&
+        JSON.stringify(left.changes) === JSON.stringify(['auto']) &&
+        JSON.stringify(drawn) ===
+          JSON.stringify([
+            'Plan mode: Claude plans, and changes nothing until you approve',
+            'Left plan mode · back to Auto',
+            'Plan mode: Claude plans, and changes nothing until you approve',
+            'Left plan mode · back to Auto',
+          ]);
+      console.log(`plan mode cues: entered ${JSON.stringify(entered)}; left ${JSON.stringify(left)}; lines ${JSON.stringify(drawn)} -> ${modeOk}`);
+      if (!modeOk) process.exitCode = 1;
+    }
+
     // `/plan`, which Claude Code takes only in a terminal: the panel switches the chat to Plan mode and
     // sends what follows; `/plan` alone only switches. It is offered among the slash commands.
     {

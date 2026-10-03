@@ -267,6 +267,8 @@ interface BackgroundChat {
 }
 
 /** Short labels for the header's menu buttons; the menus show the full ones. */
+/** The modes as the line where plan mode ends names them (see renderModeLine). */
+const MODE_RETURN: Record<string, string> = { default: 'Ask first', acceptEdits: 'Accept edits', auto: 'Auto', bypassPermissions: 'Bypass' };
 const MODE_SHORT: Record<string, string> = { default: 'Ask', acceptEdits: 'Edits', auto: 'Auto', plan: 'Plan', bypassPermissions: 'Bypass' };
 const EFFORT_SHORT: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-high', max: 'Max' };
 /** `Opus 5 · 1M` → `Opus 5`: the context size is in the menu and the meter. */
@@ -340,6 +342,8 @@ export class ChatView extends ItemView {
   private mode: PermissionMode;
   /** The mode before Plan mode, which an approved plan returns to (see changeMode). */
   private modeBeforePlan: PermissionMode = 'default';
+  /** The line above the input while in Plan mode, with a way out (see updatePlanCue). */
+  private planEl!: HTMLElement;
   private modelOverride: string | undefined;
   /** Whether this panel is showing the scratch chat, which starts over when it has been idle. */
   private scratch = false;
@@ -804,6 +808,8 @@ export class ChatView extends ItemView {
     this.registerDomEvent(this.contextRow, 'click', (evt) => this.onContextClick(evt));
     this.draftEl = footer.createDiv({ cls: 'vc-note-chats vc-draft-line' });
     this.draftEl.hide();
+    this.planEl = footer.createDiv({ cls: 'vc-plan-line' });
+    this.planEl.hide();
     this.registerDomEvent(this.draftEl, 'click', (evt) => {
       if ((evt.target as HTMLElement).closest('.vc-draft-close')) void this.discardDraft();
       else void this.sendDraft();
@@ -1684,7 +1690,8 @@ export class ChatView extends ItemView {
 
   /** What the empty input says: the scratch chat's text warns that it does not keep. */
   private placeholderText(): string {
-    return this.scratch ? 'Ask something quick — this chat clears itself…' : 'Ask Claude about this vault…';
+    if (this.scratch) return 'Ask something quick — this chat clears itself…';
+    return this.mode === 'plan' ? 'Describe what to plan…' : 'Ask Claude about this vault…';
   }
 
   /** Renames the chat on screen; only chats with their own panel session (not an unforked outside one). */
@@ -3315,6 +3322,7 @@ export class ChatView extends ItemView {
     for (const [value, label] of Object.entries(modes)) this.modeMenu.add(value, label, MODE_SHORT[value] ?? label);
     this.modeMenu.value = this.mode;
     this.modeMenu.el.toggleClass('is-bypass', this.mode === 'bypassPermissions');
+    this.updatePlanCue();
   }
 
   private async changeMode(mode: PermissionMode): Promise<void> {
@@ -3323,9 +3331,14 @@ export class ChatView extends ItemView {
     if (mode === 'plan' && previous !== 'plan') this.modeBeforePlan = previous;
     this.mode = mode;
     this.modeMenu.el.toggleClass('is-bypass', mode === 'bypassPermissions');
-    if (!this.session) return;
+    this.updatePlanCue();
+    if (!this.session) {
+      this.renderModeLine(previous, mode);
+      return;
+    }
     try {
       await this.session.setPermissionMode(mode);
+      this.renderModeLine(previous, mode);
     } catch (error) {
       log('setPermissionMode failed', error);
       new Notice(
@@ -3336,7 +3349,49 @@ export class ChatView extends ItemView {
       this.mode = previous;
       this.modeMenu.value = previous;
       this.modeMenu.el.toggleClass('is-bypass', previous === 'bypassPermissions');
+      this.updatePlanCue();
     }
+  }
+
+  /**
+   * The mode Claude Code reports for the chat (a status message), which changes without the panel
+   * when Claude enters plan mode itself (its EnterPlanMode tool) or a plan is approved.
+   */
+  private followMode(mode: PermissionMode): void {
+    const previous = this.mode;
+    if (mode === previous) return;
+    if (mode === 'plan') this.modeBeforePlan = previous;
+    this.mode = mode;
+    this.modeMenu.value = mode;
+    this.modeMenu.el.toggleClass('is-bypass', mode === 'bypassPermissions');
+    this.updatePlanCue();
+    this.renderModeLine(previous, mode);
+  }
+
+  /** In Plan mode: a line above the input saying so, with a way back that approves nothing, a tinted input and its own placeholder. */
+  private updatePlanCue(): void {
+    if (!this.planEl) return;
+    const planning = this.mode === 'plan';
+    this.inputEl.toggleClass('is-plan-mode', planning);
+    if (!this.busy) this.inputEl.placeholder = this.placeholderText();
+    this.planEl.toggle(planning);
+    if (!planning || this.planEl.childElementCount > 0) return;
+    this.planEl.createSpan({ text: 'Plan mode: Claude plans, and changes nothing until you approve · ' });
+    const leave = this.planEl.createSpan({ cls: 'vc-welcome-link', text: 'Leave plan mode' });
+    leave.addEventListener('click', () => {
+      const back = this.modeBeforePlan === 'plan' ? 'default' : this.modeBeforePlan;
+      this.modeMenu.value = back;
+      void this.changeMode(back);
+    });
+  }
+
+  /** A line in the chat where plan mode starts or ends. */
+  private renderModeLine(from: PermissionMode, to: PermissionMode): void {
+    if (from === to || (from !== 'plan' && to !== 'plan')) return;
+    const text =
+      to === 'plan' ? 'Plan mode: Claude plans, and changes nothing until you approve' : `Left plan mode · back to ${MODE_RETURN[to] ?? permissionModes(true)[to] ?? to}`;
+    (this.busy ? this.container() : this.messagesEl).createDiv({ cls: 'vc-notice vc-muted vc-mode-line', text });
+    this.scrollToBottom();
   }
 
   /**
@@ -3706,7 +3761,9 @@ export class ChatView extends ItemView {
     }
     switch (message.type) {
       case 'system':
-        if (message.subtype === 'init') {
+        if (message.subtype === 'status' && message.permissionMode) {
+          this.followMode(message.permissionMode);
+        } else if (message.subtype === 'init') {
           const draftWas = this.draftKey();
           // A chat from outside the panel, copied as it resumes: the copy names it.
           const copyOf = this.forkOnResume ? (this.resumeId ?? undefined) : undefined;
@@ -4280,10 +4337,8 @@ export class ChatView extends ItemView {
         card.addClass('is-decided');
         card.setText(said ?? `${label}: ${toolLabel(toolName)}${summary.text ? ` ${summary.text}` : ''}`);
         if (result.behavior === 'allow' && toolName === 'ExitPlanMode' && this.mode === 'plan') {
-          // Claude Code was told the same mode in the approval (see renderPlanCard).
-          this.mode = this.modeBeforePlan;
-          this.modeMenu.value = this.modeBeforePlan;
-          this.modeMenu.el.toggleClass('is-bypass', this.mode === 'bypassPermissions');
+          // Claude Code was told the same mode in the approval (see renderPlanCard), and reports it.
+          this.followMode(this.modeBeforePlan);
         }
       }
       resolve(result);
