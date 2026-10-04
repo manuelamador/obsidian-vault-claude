@@ -56,146 +56,208 @@ The plugin finds Claude Code in `~/.local/bin` (`%USERPROFILE%\.local\bin\claude
 
 Open the chat from the robot icon in the left ribbon.
 
-**Chatting**
-- Replies render as Obsidian Markdown: wikilinks, callouts, math and images from the vault. A note name Claude writes in bold or as code opens the note; hold ⌘ over it to preview. Thinking and tool calls fold into one "Steps" line.
+### Chatting
 
-> [!NOTE]
-> Equations can look slightly small beside the text, in notes too: Obsidian draws them at a fixed 113.1% of the text size without measuring the font. A CSS snippet (**Settings → Appearance → CSS snippets**) making them 5% larger matches them to most text fonts, in notes and the panel alike:
->
-> ```css
-> mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
-> ```
+- **Replies that fit your vault.** Obsidian Markdown renders wikilinks, callouts, equations and local images. Thinking and tool calls fold into a single Steps line.
+- **See what changed.** Each reply lists the files it changed, with diffs you can open at the affected line.
+- **Explore a reply.** Quote selected text, ask a side question, or use the reply buttons to copy, insert, save or branch. Side chats can use the conversation so far and are deleted when closed unless you keep them.
 
-- **At the end of each reply**, a card lists the files it changed, with lines added and removed. Click a file for its diff, its name to open it, or a diff line to open the note at that line.
+<details>
+<summary>Reply tools and navigation</summary>
+
+- Click a changed file's card to see its diff, its name to open it, or a diff line to open the note there.
 
   <img src="docs/files-changed.png" width="480" alt="The card under a reply: 1 file changed, +20, opened on the note’s diff, with the added lines shaded and a Show all (29 lines) link">
 
-- **The chip above the input** holds the chat's attached note: + attaches the open note, × detaches it. The attached note goes by its path, and lines you select in it go with your message. Type `@` to mention other notes, files or folders: each gets a chip above the input. A mentioned note's text goes with the message, its chip showing about how many tokens; its × sends only the path, and a click on the chip takes the text again. A folder or another file goes by its path. The paperclip, paste or drag and drop attach files; hover over any chip to see what goes with the message for it.
-
-  <img src="docs/mention.png" width="480" alt="The @ picker’s input: “Mention a note, file or folder”">
-
-- A message sent while Claude works is queued; **send now** on its bubble delivers it at once.
-- **The pencil button beside Send** writes your message in a draft note, sent from the line above the input or thrown away with its ×.
-
-  <img src="docs/draft-button.png" width="280" alt="The pencil button beside Send, with its tooltip “Write this message in a note”">
-
-- **The bar at the top of the chat** shows which of your messages is being answered. Its arrows (⌥↑/⌥↓) step between your messages, and its list button shows them all. ⌘F finds in the chat.
-
-  <img src="docs/message-list.png" width="560" alt="The bar over the chat naming the message being answered, with its list of all three messages open over the reply and the current one highlighted">
-
-- **Long chats** open on their last ten exchanges and draw the rest as you scroll up.
-
-- **Select text in the chat** for the **Quote**, **Side chat** and **Memo** buttons; equations are quoted as LaTeX.
+- File names in bold or code, written with their extension (`Notes.md`), open the file; wikilinks open their note, bold or not. Hold ⌘ over one to preview it.
+- Select text for **Quote**, **Side chat** and **Memo**. Equations are quoted as LaTeX.
 
   <img src="docs/quote-button.png" width="480" alt="Text and an equation selected in a reply, the equation shown as selected too, with the Quote, Side chat and Memo buttons just above them">
 
-- **Side chat:** ask about the chat without changing it, from the button beside Quote or beside the chat title. Paste or drop images on it to ask about them. It knows the conversation so far, runs in Plan mode so it changes nothing, and is deleted when closed unless you choose **Keep as a chat**.
+- Open a side chat beside Quote or the chat title. It runs in Plan mode without changing your notes; paste or drop images to ask about them. Choose **Keep as a chat** to retain it.
 
   <img src="docs/side-chat.png" width="520" alt="A side chat open over the right of a chat about a Solow-model note, before its first question: “Ask about this chat. The answer does not change it.”, its delete, keep-as-a-chat and close buttons, and its input at the bottom">
 
-- **Buttons under a reply** reply to it, copy it, insert it into a note, save it as a memo, or branch the chat from there. Checkboxes in replies can be ticked, and the ticks are kept: they are there when the chat is opened again, after a restart too.
-  - They are your own marks. Claude is not told which boxes you ticked; to tell it, say so in a message.
-  - They live in the plugin's data, not in a note. A note gets them only when you copy the reply, insert it into a note, or save the chat as a note, and ticking a box later does not change that note.
+- Buttons under a reply let you reply to it, copy it, insert it into a note, save it as a memo, or branch from there.
 
   <img src="docs/reply-buttons.png" width="420" alt="The buttons under a reply — reply, copy, insert into a note, branch — shown three times with the tooltips “Reply to this”, “Insert into note” and “Branch from here”">
 
-- **When Claude finishes a plan** (Plan mode, from the mode menu or `/plan` followed by what to plan), the steps that led to it fold into one line and its card offers **Approve**, **Edit in a note** (approving then sends your edited version, and the note is deleted; if Esc withdraws the plan, edits in the note carry over to Claude's next plan in the chat), feedback to send it back, or **Reject**.
+- Ticked checkboxes persist when you reopen the chat, including after a restart. These are your own marks: Claude learns about them only if you send a message. Copying, inserting or saving a reply includes its current ticks; later ticks do not update that note.
 
-  <img src="docs/plan-card.png" width="560" alt="A chat in Plan mode: the line “Plan mode: Claude plans, and changes nothing until you approve” above the request, the tool line Write, ExitPlanMode, then Claude’s plan in a framed card with a light shadow, its headings, steps and inline code, and inside it Approve, Edit in a note, Reject and a box to tell Claude what to change; “Waiting for your approval” below the card, and the input outlined in the accent colour with Leave plan mode above it">
+  <img src="docs/checkboxes.png" width="480" alt="A reply listing groceries as checkboxes, Milk, Eggs, Bread, Apples and Coffee, with Eggs and Apples ticked and struck through, under the request “give me a simple check box of groceries to test the plugin”">
 
-- **When Claude asks a multiple-choice question**, a card shows it in the chat: click an option, pick several where the question allows, or type your own answer. Skip declines.
+- The bar above the chat identifies the message being answered. Use its arrows (⌥↑/⌥↓) to move between your messages, its list to see them all, or ⌘F to search.
 
-  <img src="docs/question-card.png" width="500" alt="Claude’s questions in a framed card with a light shadow, headed “Claude has 2 questions”: Pick a color, with Red and Blue as option buttons, and Pick any fruits (any that apply), with Apple, Pear and Plum, each with a box to type an answer of your own; Send and Skip inside the card, and “Waiting for your answer” below it">
+  <img src="docs/message-list.png" width="560" alt="The bar over the chat naming the message being answered, with its list of all three messages open over the reply and the current one highlighted">
 
-- A system notification arrives when a long reply finishes or Claude needs approval or an answer while Obsidian is in the background.
+- Long chats open on their last ten exchanges; scroll up to draw earlier ones.
+- Messages sent while Claude works are queued. **send now** on a bubble delivers it at once.
+- The pencil beside Send writes your message in a draft note. Send it from the line above the input or discard it with ×.
 
-**Working from notes**
-- **Right-clicking selected text in a note:** Ask Claude about selection, and Edit with Claude (a word diff to accept).
+  <img src="docs/draft-button.png" width="280" alt="The pencil button beside Send, with its tooltip “Write this message in a note”">
 
-  <img src="docs/editor-menu.png" width="360" alt="A note’s right-click menu on a selection, with Edit with Claude and Ask Claude about selection">
+</details>
+
+<details>
+<summary>Adjusting equation size</summary>
+
+Obsidian draws equations at a fixed 113.1% of the text size without measuring the font. If they look small, this CSS snippet makes them 5% larger in notes and the panel. Add it under **Settings → Appearance → CSS snippets**:
+
+```css
+mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
+```
+
+</details>
+
+### Working with notes
+
+- **Bring notes into the conversation.** Attach the open note, include selected text, or mention notes, files and folders with `@`. Add files and images through the paperclip, paste or drag and drop; hover over a chip to see what accompanies your message.
+- **Edit a selection.** Right-click text in a note to ask Claude about it or request an edit, then review the word diff before accepting.
 
   <img src="docs/edit-selection.png" width="560" alt="The Edit selection with Claude dialog after “check the grammar”: the proposed change as a word diff, with Run again, Accept and Cancel">
 
-- **A file's menu** (right-click in the file explorer, or a note's ⋯ menu): Attach to Claude, for notes, files and folders; for a note, also Send to Claude as a prompt.
+- **Send a note as a prompt.** A note's file menu can attach it or send its contents as your next message.
+
+<details>
+<summary>Attachments and note menus</summary>
+
+- The attached-note chip above the input uses **+** to attach the open note and **×** to detach it. The note goes by its path; selected lines go as text.
+- Type `@` to mention another note, file or folder. A mentioned note sends its text and shows an approximate token count. Its **×** switches to sending only the path; click the chip to include its text again. Other files and folders go by their paths.
+
+  <img src="docs/mention.png" width="480" alt="The @ picker’s input: “Mention a note, file or folder”">
+
+- Right-click selected text for **Ask Claude about selection** or **Edit with Claude**.
+
+  <img src="docs/editor-menu.png" width="360" alt="A note’s right-click menu on a selection, with Edit with Claude and Ask Claude about selection">
+
+- Right-click a file in the explorer, or open a note's ⋯ menu, for **Attach to Claude**. Notes also offer **Send to Claude as a prompt**.
 
   <img src="docs/note-menu.png" width="240" alt="A note’s file menu, ending with Attach to Claude and Send to Claude as a prompt">
 
-- Ask Claude about selection, Edit selection with Claude and Send this note to Claude as a prompt are also commands.
+- Asking about a selection, editing it and sending a note as a prompt are also available as commands.
 
-**Memos**
+</details>
 
-A memo keeps passages of a chat as a note: an idea to follow up, something to do, read or explore, or a bookmark to come back to. It links back to the chat, which opens at the passage.
+### Memos
 
-- **Memo** over a selection in the chat, or the sticky-note icon under a reply, saves those passages as a memo: a note per memo in `Claude chats/Memos/`. A selection across several messages becomes one passage each, marked You or Claude, with equations as LaTeX; a reply's memo holds your prompt and the reply.
-- The form takes a title and a description, which Claude (the model for small jobs) suggests from the passages and you edit, and tags: idea, todo, explore, read, bookmark, or your own. Or it adds the passages to a memo saved before.
+**Save ideas as notes linked to their source.** Turn selected passages or a reply into a memo, with a title, description and tags, or save a quick bookmark. Memos are ordinary notes in `Claude chats/Memos/` in your vault (**Folder for memos** in the settings), beside the Memos table, `Memos.base`. Browse memos by chat, note or tag in the Memos table, and return to the conversation where each passage came from.
+
+<img src="docs/memos-table.webp" width="800" alt="The Memos table open on the left on its view “Chat: Demo — Solow model”, one memo listed with its send and done boxes, its title, its chat as a link and its note, beside the chat it came from in the panel on the right">
+
+<details>
+<summary>Saving and using memos</summary>
+
+- Choose **Memo** over a chat selection or the sticky-note icon under a reply. A selection spanning messages keeps a passage for each, labelled You or Claude; a reply's memo includes your prompt and the reply. Equations stay as LaTeX.
+- Claude's model for small jobs suggests a title and description for you to edit. Add tags such as idea, todo, explore, read or bookmark, or your own. You can also add passages to an existing memo.
 
   <img src="docs/memo-form.png" width="420" alt="The Save a memo form: Add to (A new memo), the title and description Claude suggested for a passage on the Solow model's steady state, “Suggested by Claude: edit as you like.”, the tag toggles idea, todo, explore and read, a field for other tags, the passage with its equations as LaTeX, and Suggest again, Save and Cancel">
 
-- **A bookmark** needs no typing and no waiting: Save with the title left empty, or ⌥-click (Alt-click) Memo over a selection or the sticky-note icon under a reply to skip the form. The memo is titled by the passage's first words (with the date and time added if a note has that name), tagged `bookmark`, and listed in the table's Bookmarks view.
-- A memo's properties name the chats it came from and, as links, the notes it is about (the chat's attached note, and notes its passages link to), so it shows in those notes' backlinks. Each passage has **Go to the passage**, which opens the chat at the message it came from, drawing back earlier parts of the chat if needed (or searches for its words when that message is no longer in the chat), and **Continue in the chat**, which opens it with the passage quoted.
-- **The sticky-note icon at the top of the panel** opens the Memos table on all memos; ⌘-click opens this chat's. The notes menu beside the paperclip lists the chat's memos too.
+- For a quick bookmark, save with the title empty or ⌥-click (Alt-click) Memo or the reply's sticky-note icon to skip the form. The first words become its title, with a timestamp if needed; it gets the `bookmark` tag and appears in Bookmarks.
+- Memo properties identify the source chats and link to the attached note and notes mentioned in the passages, creating backlinks.
+- **Go to the passage** opens the source message, drawing earlier turns if needed or searching its words if the message is missing. **Continue in the chat** opens the chat with the passage quoted.
+- The sticky-note icon at the top opens all memos; ⌘-click opens this chat's. The notes menu beside the paperclip also lists its memos.
 
   <img src="docs/memos-button.png" width="300" alt="The sticky-note button at the top right of the panel, between the phone and history buttons, with its tooltip “All memos, in a table (⌘-click: this chat's)”">
- The table has views by chat, by note and by tag; a table left open follows the chat on the panel. Its **Send to chat** box puts a memo in the chat's input, and clearing it takes the memo out; its **Done** box moves a memo out of every view into Done; its Chats column opens each chat at the memo's first passage from it. A memo is a note: delete it from the table (select rows, right-click, Delete) or as any note.
 
-  <img src="docs/memos-table.webp" width="800" alt="The Memos table open on the left on its view “Chat: Demo — Solow model”, one memo listed with its send and done boxes, its title, its chat as a link and its note, beside the chat it came from in the panel on the right">
+- The table has views by chat, note and tag. Left open, it follows the panel's chat. **Send to chat** puts a memo in the input; clearing it removes the mention. **Done** moves a memo into the Done view. The Chats column opens each source chat at its first passage.
+- Delete a memo like any note, or select its table row and choose **Delete** from the right-click menu.
 
-**Controls**
-- **Under the input:** the chat's model, effort and permission mode, and the ⚡ fast-mode toggle. Approvals appear in the chat. In Plan mode, however it was entered, the input is outlined in the accent colour with a **Leave plan mode** link above it, and a line in the chat marks where plan mode starts and ends.
+</details>
+
+### Controls and approvals
+
+- **Choose how Claude works.** Set the model, effort, permission mode and fast mode under the input. Settings provide defaults and deny rules that apply in every mode.
+
+- **Review a plan before execution.** Enter Plan mode from the mode menu or `/plan`, then approve, edit, reject or send feedback on Claude's plan.
+
+  <img src="docs/plan-card.png" width="560" alt="A chat in Plan mode: the line “Plan mode: Claude plans, and changes nothing until you approve” above the request, the tool line Write, ExitPlanMode, then Claude’s plan in a framed card with a light shadow, its headings, steps and inline code, and inside it Approve, Edit in a note, Reject and a box to tell Claude what to change; “Waiting for your approval” below the card, and the input outlined in the accent colour with Leave plan mode above it">
+
+- **Answer questions in place.** Question cards support single or multiple choices and your own answers.
+- **Get notified.** A system notification arrives when a long reply finishes, or Claude needs an approval or an answer, while Obsidian is in the background.
+- **Track usage.** The meter under the title shows context and plan usage, with reset times; hover for details.
+
+<details>
+<summary>Controls, plans, questions and usage</summary>
+
+- The controls under the input: model, effort, permission mode and fast mode.
 
   <img src="docs/controls.png" width="360" alt="The controls under the input: the paperclip, the notes button, the model (Opus 5.5), the effort (X-high), the permission mode (Auto) and the fast-mode bolt">
 
-- **The meter under the title** shows context and plan usage, with the time to each reset; point at it for details. A dashed line in the chat marks where Claude Code compacted it.
+- **Leave plan mode**, above the input, switches back without approving anything.
+- **Edit in a note** lets you revise a plan before approving it; approval sends your version and deletes the temporary note. If Esc withdraws the plan, your edits carry over to Claude's next plan in that chat.
+- Question cards let you pick an option or type an answer. **Skip** declines the question.
+
+  <img src="docs/question-yes-no.png" width="500" alt="Claude’s question in a framed card, headed “Claude has a question”: Status, “Is the plugin working as expected?”, with the options Yes (Everything looks right.) and No (Something is off.), a box to type an answer of your own, and Send and Skip; “Waiting for your answer” below it">
+
+- Hover over the meter for context and plan usage, with reset times.
 
   <img src="docs/usage-card.png" width="400" alt="The card shown on pointing at the meter: the model's context use in tokens, and the five-hour session's use with its reset time">
 
-- **Settings** hold the defaults for new chats and deny rules that apply in every mode (by default `git checkout/reset/restore/clean` and `rm -rf`).
+- A dashed line marks where Claude Code compacted the conversation.
+- Default deny rules (in Settings) cover `git checkout/reset/restore/clean` and `rm -rf`.
 
-**Chats**
-- **The clock icon, top right, opens the history.**
+</details>
 
-  <img src="docs/history-button.png" width="265" alt="The clock button at the top right of the panel, with its tooltip “Chat history”">
+### Managing chats
 
-  - Search chats by title, prompt or reply. Each row has pin, rename and delete buttons; ⌘↵ or ⌘-click opens a chat in a new tab.
-  - **Tab** lists chats by note: type part of a note's name or folder to see the chats that changed it, were sent it, or mentioned it. More words filter by chat title (`with:solow diagram`); ⌘↵ opens the note.
-  - Beside each date is the chat's status: grey ○ for open or in the background; accent ● for working, waiting for approval, background tasks, or a new reply. No mark means closed.
-  - With **History includes all vault sessions** on, chats started outside the panel (in the desktop app or a terminal) are listed too, in italics. One opens as a copy, so that two programs never write to one session: its row says how often it was copied, each copy says it is one, and opening it again offers your latest copy.
+- **Find earlier work.** Search history by title, prompt, reply or note; pin, rename and delete chats.
 
   <img src="docs/history.png" width="480" alt="The history: its search field, the Scratch chat, and a chat marked “● 2 tasks in the background” in the accent colour">
 
-- **The new-chat button, top right,** starts a chat; ⌘-click opens it in a new tab. A chat you leave keeps working in the background, and each chat keeps its unsent text and attached note. Point at a tab's icon for its chat's name.
+- **Keep several conversations going.** Chats continue working when you switch away, keeping their drafts and attached notes. Open chats in separate tabs or branch from a reply or one of your messages.
+- **Use a scratch chat.** A standing chat for quick questions starts over after 24 hours unused by default. Keep a useful exchange as a separate chat.
+- **Save a conversation.** Buttons beside the title save the chat or a summary as a note, or delete it.
+
+<details>
+<summary>History, branches and background tasks</summary>
+
+- The clock icon opens history. Each row has pin, rename and delete controls; ⌘↵ or ⌘-click opens a chat in a new tab.
+
+  <img src="docs/history-button.png" width="265" alt="The clock button at the top right of the panel, with its tooltip “Chat history”">
+
+- Press **Tab** in history to list chats by note. Search a note's name or folder, then add words to filter chat titles (`with:solow diagram`). ⌘↵ opens the note.
+- Status marks are grey ○ for open or in the background, and accent ● for working, waiting for input, background tasks or a new reply. No mark means closed.
+- Enable **History includes all vault sessions** to list chats started in a terminal or desktop app. They appear in italics and open as copies to avoid two programs writing to one session. History identifies the copies and offers your latest one when you return.
+- The new-chat button starts a chat; ⌘-click opens it in a new tab. Hover over a tab's icon for the chat's name.
 
   <img src="docs/tab-icons.png" width="350" alt="Two Claude panels open as tabs in the right sidebar, each with its robot icon; pointing at one shows “Claude: Demo — Solow model”">
 
-- **Background agents** keep running after a reply ends. **Stop N tasks** beside Send, or ■ in the history, stops them; a dot on the tab icon shows while they run.
+- Background agents can keep running after a reply ends. **Stop N tasks** beside Send, or ■ in history, stops them. A dot on the tab icon indicates running tasks.
 
   <img src="docs/background-tasks.png" width="480" alt="The input after a reply that left two background agents running: “Stop 2 tasks” beside Send">
 
-- **Notes ↔ chats**
-  - With a note open, **a line above the input** lists the chats that changed it or were sent it; ⌥-click one to take it off the note. `with:` in the history finds any note's chats.
+- With a note open, the line above the input lists chats that changed it or received it. ⌥-click a chat to remove its association; `with:` in history finds other notes' chats.
 
-    <img src="docs/note-line.png" width="480" alt="Above the input of a new chat: the line “1 chat about this note”, and the chip offering to attach the open note, “+ Demo — Solow model”">
+  <img src="docs/note-line.png" width="480" alt="Above the input of a new chat: the line “1 chat about this note”, and the chip offering to attach the open note, “+ Demo — Solow model”">
 
-  - **The document icon beside the paperclip** lists the chat's memos and the notes it changed or mentioned. Click one to open it, ⌥-click to attach it; **This chat's memos in a table** opens the Memos table on them.
+- The document icon beside the paperclip lists the chat's memos and notes it changed or mentioned. Click a note to open it or ⌥-click to attach it; **This chat's memos in a table** opens its memos.
 
-    <img src="docs/notes-menu.png" width="510" alt="The notes menu open from the button beside the paperclip, headed “Notes in this chat · ⌥-click to attach”: under Memos, This chat's memos in a table and the chat's one memo; under Changed, the note the chat changed; under Mentioned, a note it mentioned">
+  <img src="docs/notes-menu.png" width="510" alt="The notes menu open from the button beside the paperclip, headed “Notes in this chat · ⌥-click to attach”: under Memos, This chat's memos in a table and the chat's one memo; under Changed, the note the chat changed; under Mentioned, a note it mentioned">
 
-- **Scratch chat:** a standing chat for odds and ends, first in the history. It starts over after 24 hours unused (adjustable) or from its trash button. **Continue as a chat**, under a scratch reply, copies it up to there into a chat of its own.
-- **Beside the chat title:** save the chat, or a summary of it, as a note, and delete it.
-- **Copy from here on:** the arrow to the left of one of your messages copies the chat from that message on into a new chat.
+- Scratch is first in history. Adjust its idle timeout in settings or clear it with its trash button. Under a reply in the scratch chat, **Continue as a chat** copies the conversation up to that reply into an ordinary chat, which stays in the history when the scratch chat starts over.
+- **Copy from here on**, the arrow beside one of your messages, starts a new chat from that message onward.
 
   <img src="docs/copy-from-here.png" width="178" alt="The arrow button to the left of a message of yours, “Add a diagram”, shown when you point at the message">
 
-**Phone**
-- **The phone icon, top right,** puts a chat on the Claude app or claude.ai/code via Remote Control, and takes it off again.
+</details>
 
-  <img src="docs/phone-menu.png" width="480" alt="The phone menu open below the phone button at the top right of the panel: Continue this chat on your phone, and Let the phone start new sessions in this vault">
+### Phone access
 
-**Safety**
-- Remote images in replies are shown as links, not loaded.
-- Bypass mode is off unless enabled in settings, and never runs from the phone.
-- Closing a panel hands its running chats to another Claude panel, or stops them if there is none. Every Claude process ends when Obsidian quits.
-- Chats are saved as they go, so one reopened from the history carries on where it stopped.
+**Continue a chat on your phone.** The phone icon connects it to the Claude app or claude.ai/code through Remote Control, and disconnects it again. Its menu can also let the phone start new sessions in this vault.
+
+<details>
+<summary>Phone menu</summary>
+
+<img src="docs/phone-menu.png" width="480" alt="The phone menu open below the phone button at the top right of the panel: Continue this chat on your phone, and Let the phone start new sessions in this vault">
+
+</details>
+
+### Safety
+
+- Remote images in replies appear as links rather than loading automatically.
+- Bypass mode requires enabling it in settings and never runs from the phone.
+- Closing a panel transfers running chats to another Claude panel, or stops them if none remains; a plan, question or approval still waiting is then answered as not approved. Claude processes end when Obsidian quits.
+- Chats are saved as they go and can be resumed from history.
 
 ## Keyboard
 
@@ -230,7 +292,7 @@ A memo keeps passages of a chat as a note: an idea to follow up, something to do
 | Scratch chat | Offer the scratch chat in the history, an empty chat and the new-chat menu (default on) |
 | Scratch chat starts over after | 1 hour to 1 week unused (default 24 hours) |
 | Side chat knows | The whole chat it was opened from (default), or only what you ask it |
-| Model for small jobs | Model for Edit selection with Claude, Save summary as note and the scratch chat (default Sonnet) |
+| Model for small jobs | Model for Edit selection with Claude, Save summary as note, memo title and description suggestions, and the scratch chat (default Sonnet) |
 | Offer bypass permissions | Adds Bypass to the mode menus |
 | Deny rules | Actions refused in every mode, one rule per line |
 | Tool calls | Summary, one line each, or hidden |
