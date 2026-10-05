@@ -1,5 +1,6 @@
 // Chat text: prompts and replies as the panel shows them and as a saved note, branch titles,
 // and background-task notifications. Kept free of `obsidian` imports.
+import { closesFence, fenceMarker } from './fences';
 import type { EffortLevel, PermissionMode, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import { stripContext } from './history';
 
@@ -89,10 +90,7 @@ export function messagePrompt(message: SessionMessage): { text: string; images: 
   if (typeof content === 'string') return content.trim() ? { text: content, images: [] } : null;
   if (!Array.isArray(content)) return null;
   const blocks = content as ContentBlock[];
-  const text = blocks
-    .filter((block) => block.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text)
-    .join('\n');
+  const text = textBlocks(blocks).join('\n');
   const images: Chip[] = blocks
     .filter((block) => block.type === 'image' && block.source?.type === 'base64' && block.source.data)
     .map((block) => ({ label: 'Image', image: `data:${block.source?.media_type};base64,${block.source?.data}` }));
@@ -108,10 +106,28 @@ export function messageSearchText(message: SessionMessage): string {
   if (message.type !== 'assistant' || message.parent_tool_use_id !== null) return '';
   const content = (message.message as { content?: unknown } | null)?.content;
   if (!Array.isArray(content)) return '';
-  return (content as ContentBlock[])
-    .filter((block) => block.type === 'text' && block.text)
-    .map((block) => block.text)
-    .join('\n');
+  return textBlocks(content as ContentBlock[]).join('\n');
+}
+
+/** The texts of a message's text blocks, in order, empty ones left out. */
+export function textBlocks(content: readonly { type?: string; text?: unknown }[]): string[] {
+  return content.flatMap((block) => (block.type === 'text' && typeof block.text === 'string' && block.text ? [block.text] : []));
+}
+
+/**
+ * A reply's Markdown as it reads once drawn, near enough for counting find's matches in turns not
+ * drawn yet: equations dropped (drawn, they are no text), links and embeds as their text, and
+ * emphasis, code and heading marks taken off.
+ */
+export function shownText(markdown: string): string {
+  return markdown
+    .replace(/\$\$[\s\S]*?\$\$/g, ' ')
+    .replace(/\$[^$\n]+\$/g, ' ')
+    .replace(/!?\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*+|~~|`+/g, '')
+    .replace(/(^|\W)_+|_+(?=\W|$)/g, '$1')
+    .replace(/^ {0,3}(?:#{1,6}\s+|>\s?)/gm, '');
 }
 
 /**
@@ -179,11 +195,11 @@ export function applyTicks(markdown: string, toggled: ReadonlySet<number>): stri
   return markdown
     .split('\n')
     .map((line) => {
-      const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)?.[1];
       if (fence) {
-        if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = null;
+        if (closesFence(line, fence)) fence = null;
         return line;
       }
+      const marker = fenceMarker(line);
       if (marker) {
         fence = marker;
         return line;

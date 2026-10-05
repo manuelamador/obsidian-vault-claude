@@ -321,27 +321,40 @@ export function projectFolder(dir: string): string {
   return `${name.slice(0, MAX_FOLDER_NAME)}-${Math.abs(hash).toString(36)}`;
 }
 
+/** Claude Code's config folder: `CLAUDE_CONFIG_DIR`, else `~/.claude`. */
+function configDir(): string {
+  return (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).normalize('NFC');
+}
+
 /** Where Claude Code keeps `dir`'s sessions: `<config>/projects/<projectFolder>`. */
 function sessionFolder(dir: string): string {
-  const configDir = (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).normalize('NFC');
-  return path.join(configDir, 'projects', projectFolder(dir));
+  return path.join(configDir(), 'projects', projectFolder(dir));
+}
+
+/** The plans folder Claude Code's settings name (`plansDirectory`), absolute; null for its default. */
+let customPlans: string | null = null;
+
+/** Sets the plans folder from Claude Code's `plansDirectory` setting, relative to the vault `cwd`; none, the default. */
+export function setPlansDirectory(setting: string | undefined, cwd: string): void {
+  const next = setting ? path.resolve(cwd, setting).normalize('NFC') : null;
+  if (next === customPlans) return;
+  customPlans = next;
+  plansFolder = null;
+}
+
+/** Where Claude Code writes the plans it shows for approval: its `plansDirectory` setting, else `<config>/plans`. */
+function plansDir(): string {
+  return customPlans ?? path.join(configDir(), 'plans');
 }
 
 /**
  * The text of a plan Claude wrote in plan mode, from `file` as its ExitPlanMode request names it;
- * null when it is not a Markdown file in Claude Code's plans folder (`<config>/plans`), or cannot be
+ * null when it is not a Markdown file in Claude Code's plans folder (see isPlanFile), or cannot be
  * read. The request carries the plan's text only when Claude passed it, or wrote the file first.
  */
 export async function readPlanFile(file: unknown): Promise<string | null> {
-  if (typeof file !== 'string' || !file.endsWith('.md')) return null;
-  const configDir = (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).normalize('NFC');
-  const resolved = path.resolve(file.normalize('NFC'));
-  // Compared as real paths, so a config folder reached through a symlink still matches; without case on Windows.
-  const real = (where: string) => fs.realpath(where).then((found) => found.normalize('NFC'), () => where);
-  const [inFolder, plans] = await Promise.all([real(path.dirname(resolved)), real(path.join(configDir, 'plans'))]);
-  const same = process.platform === 'win32' ? inFolder.toLowerCase() === plans.toLowerCase() : inFolder === plans;
-  if (!same) return null;
-  return fs.readFile(resolved, 'utf8').catch(() => null);
+  if (typeof file !== 'string' || !file.endsWith('.md') || !isPlanFile(file)) return null;
+  return fs.readFile(path.resolve(file.normalize('NFC')), 'utf8').catch(() => null);
 }
 
 /**
@@ -349,7 +362,7 @@ export async function readPlanFile(file: unknown): Promise<string | null> {
  * shows for approval: compared as real paths, as readPlanFile does, without case on Windows.
  */
 export function isPlanFile(file: string): boolean {
-  const configDir = (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).normalize('NFC');
+  const plans = plansDir();
   const real = (where: string) => {
     try {
       return realpathSync(where).normalize('NFC');
@@ -360,16 +373,15 @@ export function isPlanFile(file: string): boolean {
   // Every file a chat changes is asked about, a chat opened from the history replaying them all:
   // the folder's real path is looked up once for each config folder, and the file's only when its
   // folder is called `plans`.
-  if (plansFolder?.config !== configDir) plansFolder = { config: configDir, real: real(path.join(configDir, 'plans')) };
+  if (plansFolder?.path !== plans) plansFolder = { path: plans, real: real(plans) };
   const folder = path.dirname(path.resolve(file.normalize('NFC')));
-  if (path.basename(folder).toLowerCase() !== 'plans') return false;
+  if (path.basename(folder).toLowerCase() !== path.basename(plans).toLowerCase()) return false;
   const inFolder = real(folder);
-  const plans = plansFolder.real;
-  return process.platform === 'win32' ? inFolder.toLowerCase() === plans.toLowerCase() : inFolder === plans;
+  return process.platform === 'win32' ? inFolder.toLowerCase() === plansFolder.real.toLowerCase() : inFolder === plansFolder.real;
 }
 
-/** The real path of Claude Code's plans folder, for the config folder it was found for (see isPlanFile). */
-let plansFolder: { config: string; real: string } | null = null;
+/** The real path of Claude Code's plans folder, for the path it was found for (see isPlanFile). */
+let plansFolder: { path: string; real: string } | null = null;
 
 /** Where Claude Code keeps a session: `<config>/projects/<projectFolder>/<id>.jsonl`. */
 function sessionFile(id: string, dir: string): string {
@@ -380,6 +392,22 @@ function sessionFile(id: string, dir: string): string {
 export async function sessionStamp(id: string, dir: string): Promise<string | null> {
   const stat = await fs.stat(sessionFile(id, dir)).catch(() => null);
   return stat ? `${stat.mtimeMs}:${stat.size}` : null;
+}
+
+/**
+ * When messages `uuids` of session `id` were written, each as a local `YYYY-MM-DD`, read from the end
+ * of its file until all are found; one not found (its file gone, say) is left out.
+ */
+export async function messageDates(id: string, dir: string, uuids: string[]): Promise<Map<string, string>> {
+  const wanted = new Set(uuids);
+  const dates = new Map<string, string>();
+  if (wanted.size === 0) return dates;
+  await eachRowFromEnd(id, dir, (row) => {
+    const time = row.uuid && wanted.has(row.uuid) && row.timestamp ? Date.parse(row.timestamp) : NaN;
+    if (row.uuid && !Number.isNaN(time)) dates.set(row.uuid, formatDate(time).slice(0, 10));
+    return dates.size === wanted.size;
+  }).catch((error: unknown) => log(`reading the dates of messages in session ${id} failed`, error));
+  return dates;
 }
 
 /** The ids of the sessions Claude Code keeps for `dir`, by their files; null when their folder cannot be read. */

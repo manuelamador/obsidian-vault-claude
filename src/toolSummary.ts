@@ -23,7 +23,8 @@ export function toolLabel(name: string): string {
   return name;
 }
 
-function oneLine(value: string, max = 120): string {
+/** `value` on one line, cut to at most `max` characters with an ellipsis. */
+export function oneLine(value: string, max = 120): string {
   const flat = value.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }

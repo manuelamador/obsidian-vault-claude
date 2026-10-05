@@ -54,3 +54,20 @@ test("a file is a plan when it is in Claude Code's plans folder, named by either
     rmSync(config, { recursive: true, force: true });
   }
 });
+
+test("a plans folder named in Claude Code's settings (plansDirectory) is the one read, relative to the vault", async () => {
+  const { setPlansDirectory, isPlanFile } = await import('../src/history');
+  const vault = mkdtempSync(`${tmpdir()}/vault-claude-vault-`);
+  mkdirSync(`${vault}/my plans`);
+  writeFileSync(`${vault}/my plans/p.md`, 'Custom.');
+  try {
+    setPlansDirectory('my plans', vault);
+    assert.equal(await readPlanFile(`${vault}/my plans/p.md`), 'Custom.');
+    assert.equal(isPlanFile(`${vault}/my plans/p.md`), true);
+    setPlansDirectory(undefined, vault);
+    assert.equal(await readPlanFile(`${vault}/my plans/p.md`), null);
+  } finally {
+    setPlansDirectory(undefined, vault);
+    rmSync(vault, { recursive: true, force: true });
+  }
+});

@@ -3,7 +3,8 @@
 // them, Show all, find stepping back into them, or the list of your messages going to one. Until
 // then they are searched and listed from here. Kept free of `obsidian` imports.
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
-import { bubbleOf, messageSearchText, startsTurn, type ContentBlock } from './chatText';
+import { bubbleOf, messageSearchText, shownText, startsTurn, type ContentBlock } from './chatText';
+import { oneLine } from './toolSummary';
 
 /**
  * Where a transcript can be cut: the indices of your prompts (see startsTurn) at which no tool call
@@ -48,8 +49,8 @@ export function historyParts(transcript: SessionMessage[], tailTurns: number): {
 
 /** A message on one line, at most `max` characters: its text, or the names of its attachments when it has none. */
 export function promptSummary(text: string, chips: { label: string }[], max: number): string {
-  const line = text.replace(/\s+/g, ' ').trim();
-  if (line) return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  const line = oneLine(text, max);
+  if (line) return line;
   return chips.length > 0 ? chips.map((chip) => chip.label).join(', ') : 'Attachment';
 }
 
@@ -224,7 +225,9 @@ export class EarlierDrawing implements FindEarlier {
   }
 
   private searchTexts(): string[] {
-    this.texts ??= this.turns.map((turn) => turn.map(messageSearchText).filter(Boolean).join('\n').toLowerCase());
+    // A reply as it reads drawn (see shownText): find searches what is drawn, and counts no match it cannot show.
+    const text = (message: (typeof this.turns)[number][number]) => (message.type === 'assistant' ? shownText(messageSearchText(message)) : messageSearchText(message));
+    this.texts ??= this.turns.map((turn) => turn.map(text).filter(Boolean).join('\n').toLowerCase());
     return this.texts;
   }
 

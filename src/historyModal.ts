@@ -1,6 +1,7 @@
 import { Keymap, Modal, Platform, SuggestModal, setIcon, type App } from 'obsidian';
 import { eachInParallel, formatDate, type HistoryItem } from './history';
 import { NOTE_CHAT_ICONS, chatsByNote, type NoteChats, type NoteGroup } from './noteChats';
+import { escapeRegExp } from './pathFilter';
 
 export interface HistoryActions {
   /** Opens a chat: here, or, with `newTab`, in a new Claude tab. */
@@ -42,6 +43,16 @@ const ROW_LIMIT = 2000;
 /** Shorter queries match titles only; reading every transcript for one or two letters is wasted work. */
 const MIN_CONTENT_QUERY = 3;
 const SNIPPET_RADIUS = 60;
+
+/**
+ * Where `needle` (lower case) first is in a chat's text, as an offset into its text as it is: its
+ * lowercase form serves while it is as long, and where a character lowercases to two (İ) the text is
+ * searched itself, case aside.
+ */
+function matchAt(read: { text: string; lower: string }, needle: string): number {
+  if (read.lower.length === read.text.length) return read.lower.indexOf(needle);
+  return read.text.search(new RegExp(escapeRegExp(needle), 'iu'));
+}
 
 function snippetAround(text: string, at: number, length: number): string {
   const start = Math.max(0, at - SNIPPET_RADIUS);
@@ -140,7 +151,7 @@ export class HistoryModal extends SuggestModal<Match> {
     for (const item of ordered) {
       if (inTitle.has(item)) continue;
       const read = texts.get(item.id);
-      const at = read ? read.lower.indexOf(needle) : -1;
+      const at = read ? matchAt(read, needle) : -1;
       if (read && at !== -1) byContent.push({ kind: 'chat', item, snippet: snippetAround(read.text, at, needle.length) });
     }
     return [...byTitle, ...byContent];

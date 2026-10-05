@@ -1,5 +1,8 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
+/** Sets kept from Claude Code's whole-set messages (see trackTask), whose start and end messages are passed over. */
+const levelled = new WeakSet<Set<string>>();
+
 /**
  * Records the background tasks a session has running — subagents and shell commands Claude sent
  * to the background — from Claude Code's task messages. They live inside the Claude Code process,
@@ -9,6 +12,17 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
  */
 export function trackTask(tasks: Set<string>, message: SDKMessage): boolean {
   if (message.type !== 'system') return false;
+  if (message.subtype === 'background_tasks_changed') {
+    // The whole set, whenever it changes: taken as it is, and from then on the only word on it.
+    // Older versions of Claude Code send only the starts and ends below.
+    levelled.add(tasks);
+    const now = message.tasks.filter((task) => !task.ambient).map((task) => task.task_id);
+    const changed = now.length !== tasks.size || now.some((id) => !tasks.has(id));
+    tasks.clear();
+    for (const id of now) tasks.add(id);
+    return changed;
+  }
+  if (levelled.has(tasks)) return false;
   switch (message.subtype) {
     case 'task_started':
       if (!message.is_backgrounded || message.ambient || tasks.has(message.task_id)) return false;

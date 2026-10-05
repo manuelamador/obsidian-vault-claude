@@ -733,8 +733,12 @@ async function main(): Promise<void> {
       const registry = new Map<string, object>();
       scope.CSS = { highlights: registry };
       scope.Highlight = class {
+        ranges: Range[];
         constructor(...ranges: Range[]) {
-          Object.assign(this, { ranges });
+          this.ranges = ranges;
+        }
+        add(range: Range): void {
+          this.ranges.push(range);
         }
       };
       bar.open();
@@ -3213,7 +3217,8 @@ async function main(): Promise<void> {
     {
       const memoView = view as unknown as {
         selectedPassages(): { role: string; text: string; needle: string; links?: string[]; message?: string }[];
-        saveMemo(choice: { memo: unknown; title: string; description: string; tags: string[] }, sources: unknown): Promise<{ path: string } | null>;
+        saveMemo(choice: { memo: unknown; title: string; description: string; why: string; tags: string[]; notes: string[]; passages: unknown[] }, sources: unknown): Promise<{ path: string } | null>;
+        memoNotesFor(passages: unknown[]): string[];
         findPassage(needle: string, message?: string): Promise<void>;
         saveBookmark(passages: unknown[]): Promise<{ path: string; basename: string } | null>;
         hintEl: HTMLElement | null;
@@ -3257,11 +3262,12 @@ async function main(): Promise<void> {
       notesOnDisk.set('Linked.md', 'linked');
       const sources = { vault: 'Obsidian', chatId: 'memo-chat', chatTitle: 'Debt model', date: '2026-10-03', passages: excerpts };
       const linksBefore = plugin.noteLinks.length;
-      const created = await memoView.saveMemo({ memo: null, title: 'Repayment timing: selection', description: 'Test it.', tags: ['idea'] }, sources);
+      // The related notes the form offers: those it is given back with, as nothing was left out.
+      const created = await memoView.saveMemo({ memo: null, title: 'Repayment timing: selection', description: 'Test it.', why: '', tags: ['idea'], notes: memoView.memoNotesFor(excerpts), passages: excerpts }, sources);
       const memoPath = created?.path ?? '';
       const memoText = notesOnDisk.get(memoPath) ?? '';
       const linked = plugin.noteLinks.slice(linksBefore);
-      await memoView.saveMemo({ memo: created, title: '', description: '', tags: ['read'] }, { ...sources, chatId: 'later-chat', chatTitle: 'Later', passages: [excerpts[0]] });
+      await memoView.saveMemo({ memo: created, title: '', description: '', why: '', tags: ['read'], notes: [], passages: [excerpts[0]] }, { ...sources, chatId: 'later-chat', chatTitle: 'Later', passages: [excerpts[0]] });
       const addedText = notesOnDisk.get(memoPath) ?? '';
       // A bookmark: saved at once, titled by the passage's first words; a second of the same, with the
       // date and time added to a name already taken.
@@ -3316,7 +3322,7 @@ async function main(): Promise<void> {
         memoText.includes('chats: ["Debt model"]') &&
         memoText.includes('> A mechanism: $q(b)$ falls with debt, as in New.') &&
         JSON.stringify(linked) === JSON.stringify([`${memoPath}@memo-chat`]) &&
-        addedText.includes('### Later · 2026-10-03') &&
+        addedText.includes('### Later · saved 2026-10-03') &&
         JSON.stringify([frontmatters[0]?.claude_chats, frontmatters[0]?.chats, frontmatters[0]?.tags, frontmatters[0]?.updated]) ===
           JSON.stringify([['memo-chat', 'later-chat'], ['Debt model', 'Later'], ['memo', 'idea', 'read'], '2026-10-03']) &&
         found > 0 &&
@@ -3333,7 +3339,17 @@ async function main(): Promise<void> {
     // the tags picked and typed go with the memo.
     {
       const { MemoModal } = await import('../src/memoModal');
-      let chosen: { memo: unknown; title: string; description: string; tags: string[] } | null = null;
+      let chosen: { memo: unknown; title: string; description: string; why: string; tags: string[]; notes: string[]; passages: unknown[] } | null = null;
+      const host = (memos: unknown[], suggest: unknown, alreadyIn = async () => 0, opened: unknown[] = []) =>
+        ({
+          memos,
+          notes: ['[[Model setup]]', '[[Proof]]'],
+          noteLink: (file: { basename: string }) => `[[${file.basename}]]`,
+          titleProblem: () => null,
+          alreadyIn,
+          open: (memo: unknown) => void opened.push(memo),
+          suggest,
+        }) as never;
       const replies = [
         { title: 'Repayment timing and selection', description: 'Asked whether timing changes selection.' },
         { title: 'Another title', description: 'Another description.' },
@@ -3341,11 +3357,9 @@ async function main(): Promise<void> {
       let asked = 0;
       const form = new MemoModal(
         app as never,
-        [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.' }],
-        [],
-        () => null,
-        (choice) => void (chosen = choice),
-        async () => replies[Math.min(asked++, replies.length - 1)],
+        [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.', written: '2026-10-02' }],
+        host([], async () => replies[Math.min(asked++, replies.length - 1)]),
+        (choice) => void (chosen = choice as never),
       );
       const formEl = (form as unknown as { contentEl: HTMLElement }).contentEl;
       document.body.appendChild(formEl);
@@ -3360,29 +3374,50 @@ async function main(): Promise<void> {
       const again = [titleBox.value, descriptionBox.value];
       ([...formEl.querySelectorAll('.vc-memo-kind')].find((el) => el.textContent === 'todo') as HTMLElement).click();
       (formEl.querySelectorAll<HTMLInputElement>('.vc-memo-field input[type="text"]')[1]).value = 'econ, #to read';
+      (formEl.querySelectorAll('textarea')[1] as HTMLTextAreaElement).value = ' May fix the proof. ';
+      // A related note left out; a passage labelled and commented.
+      (formEl.querySelectorAll<HTMLElement>('.vc-memo-note button')[1]).click();
+      const roleShown = formEl.querySelector('.vc-memo-role span')?.textContent;
+      (formEl.querySelector('.vc-memo-label-link') as HTMLElement).click();
+      const labelSelect = formEl.querySelector('.vc-memo-labelling select') as HTMLSelectElement;
+      labelSelect.value = 'Evidence';
+      labelSelect.dispatchEvent(new dom.window.Event('change'));
+      const commentBox = formEl.querySelector('.vc-memo-labelling input') as HTMLInputElement;
+      commentBox.value = 'the key step';
+      commentBox.dispatchEvent(new dom.window.Event('input'));
       ([...formEl.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       formEl.remove();
       const formOk =
         JSON.stringify(suggested) === JSON.stringify(['Repayment timing and selection', 'Asked whether timing changes selection.']) &&
         JSON.stringify(again) === JSON.stringify(['My own title', 'Another description.']) &&
-        JSON.stringify(chosen) === JSON.stringify({ memo: null, title: 'My own title', description: 'Another description.', tags: ['todo', 'econ', 'to-read'] });
+        roleShown === 'Claude · 2026-10-02' &&
+        JSON.stringify(chosen) ===
+          JSON.stringify({
+            memo: null,
+            title: 'My own title',
+            description: 'Another description.',
+            why: 'May fix the proof.',
+            tags: ['todo', 'econ', 'to-read'],
+            notes: ['[[Model setup]]'],
+            passages: [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.', written: '2026-10-02', label: 'Evidence', comment: 'the key step' }],
+          });
       // Saved at once, the suggestion still on its way: no title, a bookmark (titled by ChatView.saveMemo).
-      let quick: { title: string; tags: string[] } | null = null;
+      let quick: { title: string; why: string; tags: string[] } | null = null;
       let abandoned = false;
       const quickForm = new MemoModal(
         app as never,
         [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.' }],
-        [],
-        () => 'never asked',
-        (choice) => void (quick = choice),
-        (signal) => new Promise(() => signal.addEventListener('abort', () => (abandoned = true))),
+        host([], (signal: AbortSignal) => new Promise(() => signal.addEventListener('abort', () => (abandoned = true)))),
+        (choice) => void (quick = choice as never),
       );
       const quickEl = (quickForm as unknown as { contentEl: HTMLElement }).contentEl;
       document.body.appendChild(quickEl);
       quickForm.onOpen();
       ([...quickEl.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       quickEl.remove();
-      const quickOk = JSON.stringify(quick) === JSON.stringify({ memo: null, title: '', description: '', tags: [] }) && abandoned;
+      const quickOk = quick !== null && (quick as { title: string }).title === '' && (quick as { why: string }).why === '' && (quick as { tags: string[] }).tags.length === 0 && abandoned;
       // A suggestion let go (another memo chosen, then a new one again) does not give the button back
       // while the newer one is on its way, nor fill the form.
       const pending: { resolve: (value: { title: string; description: string }) => void }[] = [];
@@ -3390,20 +3425,19 @@ async function main(): Promise<void> {
       const raceForm = new MemoModal(
         app as never,
         [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.' }],
-        [earlier as never],
-        () => null,
+        host([earlier], () => new Promise((resolve) => pending.push({ resolve }))),
         () => undefined,
-        () => new Promise((resolve) => pending.push({ resolve })),
       );
       const raceEl = (raceForm as unknown as { contentEl: HTMLElement }).contentEl;
       document.body.appendChild(raceEl);
       raceForm.onOpen();
-      const raceSelect = raceEl.querySelector('select') as HTMLSelectElement;
       const raceAgain = [...raceEl.querySelectorAll('button')].find((el) => el.textContent === 'Suggest again') as HTMLButtonElement;
-      raceSelect.value = earlier.path;
-      raceSelect.dispatchEvent(new dom.window.Event('change'));
-      raceSelect.value = '';
-      raceSelect.dispatchEvent(new dom.window.Event('change'));
+      const choose = (memo: unknown) => {
+        (raceEl.querySelector('.vc-memo-target') as HTMLElement).click();
+        (stub.SuggestModal.last as unknown as { onChooseSuggestion(memo: unknown): void }).onChooseSuggestion(memo);
+      };
+      choose(earlier);
+      choose(null);
       pending[0]?.resolve({ title: 'Older', description: 'Older.' });
       await new Promise((resolve) => setTimeout(resolve, 0));
       const heldWhileNewer = raceAgain.disabled;
@@ -3414,6 +3448,56 @@ async function main(): Promise<void> {
       const raceOk = pending.length === 2 && heldWhileNewer && notFilledByOlder && raceTitle.value === 'Newer' && !raceAgain.disabled;
       raceForm.close();
       raceEl.remove();
+      // Adding passages a memo holds already: said once, with a way to open it; saved again, added anyway.
+      const opened: unknown[] = [];
+      let added: { memo: unknown } | null = null;
+      const dupForm = new MemoModal(
+        app as never,
+        [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.' }],
+        host([earlier], undefined, async () => 1, opened),
+        (choice) => void (added = choice),
+      );
+      const dupEl = (dupForm as unknown as { contentEl: HTMLElement }).contentEl;
+      document.body.appendChild(dupEl);
+      dupForm.onOpen();
+      (dupEl.querySelector('.vc-memo-target') as HTMLElement).click();
+      (stub.SuggestModal.last as unknown as { onChooseSuggestion(memo: unknown): void }).onChooseSuggestion(earlier);
+      const dupSave = [...dupEl.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLElement;
+      dupSave.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const told = (dupEl.querySelector('.vc-memo-problem') as HTMLElement).textContent;
+      const heldBack = added === null;
+      dupSave.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      dupEl.remove();
+      const dupOk = told === 'This is already in that memo. Open it · or save again to add anyway.' && heldBack && (added as { memo: unknown } | null)?.memo === earlier;
+      // A save waiting on the check: one at a time, and none once the form is closed.
+      let checks = 0;
+      let saves = 0;
+      let release: (count: number) => void = () => undefined;
+      const slowForm = new MemoModal(
+        app as never,
+        [{ role: 'claude', text: 'A mechanism.', needle: 'A mechanism.' }],
+        host([earlier], undefined, () => ((checks += 1), new Promise<number>((resolve) => (release = resolve))) as never),
+        () => void (saves += 1),
+      );
+      const slowEl = (slowForm as unknown as { contentEl: HTMLElement }).contentEl;
+      document.body.appendChild(slowEl);
+      slowForm.onOpen();
+      (slowEl.querySelector('.vc-memo-target') as HTMLElement).click();
+      (stub.SuggestModal.last as unknown as { onChooseSuggestion(memo: unknown): void }).onChooseSuggestion(earlier);
+      const slowSave = [...slowEl.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLElement;
+      slowSave.click();
+      slowSave.click();
+      slowForm.close();
+      release(0);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      slowEl.remove();
+      const slowOk = checks === 1 && saves === 0;
+      console.log(`memo form, saved twice then closed while checking: checks ${checks}, saves ${saves} -> ${slowOk}`);
+      if (!slowOk) process.exitCode = 1;
+      console.log(`memo form duplicates: told ${JSON.stringify(told)}, held back ${heldBack}, then added ${added !== null} -> ${dupOk}`);
+      if (!dupOk) process.exitCode = 1;
       console.log(`memo form: suggested ${JSON.stringify(suggested)}; again, with a title typed ${JSON.stringify(again)}; saved ${JSON.stringify(chosen)}; saved at once ${JSON.stringify(quick)}, suggestion let go ${abandoned}; an older suggestion held back ${heldWhileNewer && notFilledByOlder}, the newer fills ${raceTitle.value} -> ${formOk && quickOk && raceOk}`);
       if (!formOk || !quickOk || !raceOk) process.exitCode = 1;
       // An inline edit is put only in the note it was asked for: an editor since turned to another note does not take it.
@@ -3458,6 +3542,8 @@ async function main(): Promise<void> {
       const memoButton = turn.querySelector('.vc-turn-actions [aria-label^="Save as a memo"]') as HTMLElement | null;
       stub.Modal.last = null;
       memoButton?.click();
+      // The form opens once the passages' dates are read from the session.
+      for (let i = 0; i < 50 && stub.Modal.last === null; i++) await new Promise((resolve) => setTimeout(resolve, 10));
       const opened = stub.Modal.last as unknown as { passages?: { role: string; text: string; needle: string }[] } | null;
       // Option-click: saved at once as a bookmark, no form.
       const bookmarked: unknown[] = [];
@@ -3483,6 +3569,60 @@ async function main(): Promise<void> {
         ]);
       console.log(`a reply saved as a memo: button ${memoButton !== null}; passages ${JSON.stringify(opened?.passages)}; Option-click bookmarked ${bookmarked.length}, form ${formOnAlt} -> ${replyMemoOk}`);
       if (!replyMemoOk) process.exitCode = 1;
+    }
+    // A reply's inline style that would load something is gone before the reply goes into the panel.
+    {
+      const rendering = view as unknown as { renderMarkdown(markdown: string, el: HTMLElement): Promise<void> };
+      const target = document.createElement('div');
+      document.body.appendChild(target);
+      const styled: string[] = [];
+      const append = target.append.bind(target);
+      target.append = (...nodes: (Node | string)[]) => {
+        for (const node of nodes) {
+          if (!(node instanceof dom.window.Element)) continue;
+          const el = node as Element;
+          styled.push(...[el, ...el.querySelectorAll('*')].map((one) => one.getAttribute('style') ?? '').filter(Boolean));
+        }
+        append(...nodes);
+      };
+      // Drawn by the renderer itself, past the text pass: the sweep takes it off before it goes in.
+      await rendering.renderMarkdown('STYLED_BY_RENDERER', target);
+      target.remove();
+      const sweepOk = styled.length === 0 && target.querySelector('a') !== null && !target.innerHTML.includes('url(');
+      console.log(`reply styles as they went in: ${JSON.stringify(styled)} -> ${sweepOk}`);
+      if (!sweepOk) process.exitCode = 1;
+    }
+    // Find in text a character of which lowercases to two (İ): the ranges stay on the text as it is.
+    {
+      const { findRanges } = await import('../src/findBar');
+      const box = document.createElement('div');
+      box.textContent = 'İa and A';
+      document.body.appendChild(box);
+      let found: string[] = [];
+      try {
+        found = findRanges(box, 'a').map((range) => range.toString());
+      } catch (error) {
+        found = [String(error)];
+      }
+      const dotted = findRanges(box, '(.').length;
+      box.remove();
+      const unicodeOk = JSON.stringify(found) === '["a","a","A"]' && dotted === 0;
+      console.log(`find with İ: ${JSON.stringify(found)}, a query of regex characters ${dotted} -> ${unicodeOk}`);
+      if (!unicodeOk) process.exitCode = 1;
+    }
+    // A chat started from a memo has only what was chosen: not a note it attached of itself.
+    {
+      const drafting = view as unknown as { attachedNote: string | null; startDraft(text: string): void; inputEl: HTMLTextAreaElement; saveDraft(): void };
+      const attachedWas = drafting.attachedNote;
+      const inputWas = drafting.inputEl.value;
+      drafting.attachedNote = 'Inherited.md';
+      drafting.startDraft('Continuing from the memo [[M]].\n\n');
+      const draftOk = drafting.attachedNote === null && drafting.inputEl.value.startsWith('Continuing from the memo');
+      drafting.inputEl.value = inputWas;
+      drafting.attachedNote = attachedWas;
+      drafting.saveDraft();
+      console.log(`a draft from a memo: attached note ${drafting.attachedNote === attachedWas ? 'restored' : '?'}, detached ${draftOk} -> ${draftOk}`);
+      if (!draftOk) process.exitCode = 1;
     }
     // The memo button's message shows in the panel, under the header, not as a notice over its buttons.
     {
@@ -3732,6 +3872,9 @@ async function main(): Promise<void> {
     globals.Highlight = class {
       constructor(...ranges: unknown[]) {
         if (ranges.some((range) => !range)) throw new TypeError('not a range');
+      }
+      add(range: unknown): void {
+        if (!range) throw new TypeError('not a range');
       }
     };
     try {

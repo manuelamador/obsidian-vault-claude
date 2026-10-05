@@ -5,7 +5,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'crypto';
 import { Component, setIcon } from 'obsidian';
 import { imageFromBlob, toImageBlock, type ImageAttachment } from './attachments';
-import { withQuote } from './chatText';
+import { textBlocks, withQuote } from './chatText';
 import { chipFor, renderChip } from './chip';
 import type { ClaudeSession, PermissionRequest, SessionHandlers, UserContent } from './session';
 
@@ -284,11 +284,7 @@ export class SideChat {
         this.scrollToEnd();
       }
     } else if (message.type === 'assistant' && message.parent_tool_use_id === null) {
-      const text = message.message.content
-        .filter((block) => block.type === 'text')
-        .map((block) => block.text)
-        .join('\n\n')
-        .trim();
+      const text = textBlocks(message.message.content).join('\n\n').trim();
       const tool = message.message.content.find((block) => block.type === 'tool_use');
       if (text) {
         const el = this.live ?? this.messages.createDiv({ cls: 'vc-side-chat-reply vc-text' });

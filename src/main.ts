@@ -4,12 +4,13 @@ import { join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
-import { deleteSessionIfAny, deleteSessions, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, type ChatRecord, type HistoryItem } from './history';
+import { deleteSessionIfAny, deleteSessions, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem } from './history';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type MemoPassage } from './memos';
+import { ContinueMemoModal } from './memoModal';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -177,6 +178,16 @@ export default class VaultClaudePlugin extends Plugin {
       callback: async () => (await this.activateView())?.openHistory(),
     });
     this.addCommand({
+      id: 'continue-from-memo',
+      name: 'Continue from this memo',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || !this.isMemo(file)) return false;
+        if (!checking) void this.continueFromMemo(file);
+        return true;
+      },
+    });
+    this.addCommand({
       id: 'branch-chat',
       name: 'Branch this chat into a new tab',
       callback: async () => (this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView()))?.branchIntoNewTab(),
@@ -325,11 +336,20 @@ export default class VaultClaudePlugin extends Plugin {
       this.app.workspace.on('file-menu', (menu, file) => {
         attachItem(menu, [file]);
         this.promptFromNoteItem(menu, file);
+        if (file instanceof TFile && this.isMemo(file)) {
+          menu.addItem((item) =>
+            item
+              .setTitle('Continue from this memo')
+              .setIcon('message-square-plus')
+              .onClick(() => void this.continueFromMemo(file)),
+          );
+        }
       }),
     );
     this.registerNoteEvents();
     this.registerEvent(this.app.workspace.on('files-menu', (menu, files) => attachItem(menu, files)));
     // A memo's Send box ticked or cleared, in the Memos base: the memo goes into the chat's input, or out of it (see followMemoBox).
+    this.app.workspace.onLayoutReady(() => this.seedMemoBoxes());
     this.registerEvent(
       this.app.metadataCache.on('changed', (file, _data, cache) => {
         if (cache.frontmatter?.type === 'memo') void this.followMemoBox(file, cache.frontmatter.send === true);
@@ -1007,7 +1027,8 @@ export default class VaultClaudePlugin extends Plugin {
   async followMemoBox(file: TFile, on: boolean): Promise<void> {
     const before = this.memoBoxes.get(file.path);
     this.memoBoxes.set(file.path, on);
-    if (before === on) return;
+    // A box not seen before (see seedMemoBoxes) is taken as it is: only a change of it is acted on.
+    if (before === on || before === undefined) return;
     const views = this.chatViews();
     if (!on) {
       for (const view of views) view.unmention(file.path);
@@ -1015,6 +1036,11 @@ export default class VaultClaudePlugin extends Plugin {
     }
     if (views.some((view) => view.mentions(file.path))) return;
     await this.attachToClaude([file]);
+  }
+
+  /** Each memo's Send box as it is when Obsidian has loaded, so that a later edit of a memo left ticked does not count as ticking it. */
+  private seedMemoBoxes(): void {
+    for (const file of this.memoNotes()) this.memoBoxes.set(file.path, this.app.metadataCache.getFileCache(file)?.frontmatter?.send === true);
   }
 
   async attachToClaude(items: TAbstractFile[]): Promise<void> {
@@ -1158,6 +1184,11 @@ export default class VaultClaudePlugin extends Plugin {
   private async openChatLink(params: Record<string, string>): Promise<void> {
     const id = params.chat;
     if (!id) return;
+    const dir = this.vaultRoot();
+    if (dir && (await sessionStamp(id, dir)) === null) {
+      new Notice('Source chat unavailable: it has been deleted. The passage stays readable in the memo.');
+      return;
+    }
     const title = this.chats.find((chat) => chat.id === id)?.title ?? this.lastListing?.find((item) => item.id === id)?.title ?? 'Chat';
     const view = await this.openChatById(id, title);
     if (!view) {
@@ -1172,6 +1203,35 @@ export default class VaultClaudePlugin extends Plugin {
       const target = memo instanceof TFile ? firstPassageTarget(await this.app.vault.cachedRead(memo), id) : null;
       if (target) await view.findPassage(target.find ?? '', target.msg);
     }
+  }
+
+  /** Whether `file` is a memo note (`type: memo`). */
+  isMemo(file: TFile): boolean {
+    return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === 'memo';
+  }
+
+  /**
+   * Continue from a memo: you choose what of it goes along (see ContinueMemoModal), and a new chat
+   * opens in a tab with that as a draft in its input, the related notes as `@` mentions.
+   */
+  async continueFromMemo(file: TFile): Promise<void> {
+    const note = await this.app.vault.cachedRead(file);
+    const notes = this.app.metadataCache.getFileCache(file)?.frontmatter?.notes;
+    const parts = {
+      why: memoSection(note, 'Why'),
+      next: memoSection(note, 'Next'),
+      passages: savedPassages(note),
+      notes: Array.isArray(notes) ? notes.map(String) : [],
+    };
+    new ContinueMemoModal(this.app, file.basename, parts, async (chosen) => {
+      const panel = await this.activateView();
+      const view = panel && (await this.openChatTab(panel.leaf));
+      if (!view) {
+        new Notice('Could not open a new chat.');
+        return;
+      }
+      view.startDraft(continueDraft({ name: file.basename, ...chosen }));
+    }).open();
   }
 
   /** The memo notes (`type: memo`, see MemoModal), the most recently changed first; `chat`: only those saved from that chat. */
@@ -1287,8 +1347,7 @@ export default class VaultClaudePlugin extends Plugin {
   async suggestMemo(chatTitle: string, passages: MemoPassage[], signal: AbortSignal): Promise<{ title: string; description: string } | null> {
     const launch = this.claudeLaunch();
     if (typeof launch === 'string') return null;
-    if (!this.configured.model) await this.loadConfigured();
-    const model = this.settings.smallJobModel || chatModel(this.settings.model);
+    const model = this.smallJobModel();
     const reply = await runOneShot(launch, { system: MEMO_SUGGESTION_SYSTEM, prompt: memoSuggestionPrompt(chatTitle, passages), model, effort: 'low' }, () => undefined, signal);
     return readMemoSuggestion(reply);
   }
@@ -1363,8 +1422,7 @@ export default class VaultClaudePlugin extends Plugin {
       after: text.slice(end, end + INLINE_CONTEXT_CHARS),
     };
     const conventions = await this.vaultConventions();
-    if (!this.configured.model) await this.loadConfigured();
-    const model = this.settings.smallJobModel || chatModel(this.settings.model);
+    const model = this.smallJobModel();
     new InlineEditModal(this.app, target, inlineEditSystem(target.original === '', conventions), (system, prompt, onText, signal) =>
       runOneShot(launch, { system, prompt, model }, onText, signal),
     ).open();
@@ -1378,14 +1436,20 @@ export default class VaultClaudePlugin extends Plugin {
     const launch = this.claudeLaunch();
     if (typeof launch === 'string') throw new Error(launch);
     const conventions = await this.vaultConventions();
+    // The summary names the model it ran on, which with none chosen is the one Claude Code's settings name.
     if (!this.configured.model) await this.loadConfigured();
-    const model = this.settings.smallJobModel || chatModel(this.settings.model);
+    const model = this.smallJobModel();
     return runOneShot(
       launch,
       { system: summarySystem(conventions), prompt: summaryPrompt({ ...input, model: this.modelName(model) }), model, effort: 'medium' },
       () => undefined,
       signal,
     );
+  }
+
+  /** The model for small jobs (memo suggestions, inline edits, summaries): its own setting, else the chat's. */
+  private smallJobModel(): string | undefined {
+    return this.settings.smallJobModel || chatModel(this.settings.model);
   }
 
   /** The vault's CLAUDE.md, for one-off requests, which run without Claude Code's settings files. */
@@ -1433,7 +1497,9 @@ export default class VaultClaudePlugin extends Plugin {
 
   async loadConfigured(): Promise<void> {
     const cwd = this.vaultRoot();
-    if (cwd) this.configured = await configuredDefaults(cwd);
+    if (!cwd) return;
+    this.configured = await configuredDefaults(cwd);
+    setPlansDirectory(this.configured.plansDirectory, cwd);
   }
 
   setPlanUsage(plan: SDKControlGetUsageResponse): void {
@@ -1526,7 +1592,12 @@ export default class VaultClaudePlugin extends Plugin {
     this.saveWaiting = true;
     const write = async () => {
       this.saveWaiting = false;
-      await this.saveData(this.dataToSave());
+      // Logged here, as well as passed on: most callers do not wait for it, and a failed write has
+      // no stack of the plugin's for the log's handler of unhandled errors to know it by.
+      await this.saveData(this.dataToSave()).catch((error: unknown) => {
+        log('saving the plugin data failed', error);
+        throw error;
+      });
     };
     this.saving = this.saving.then(write, write);
     return this.saving;

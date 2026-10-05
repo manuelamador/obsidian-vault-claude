@@ -31,3 +31,10 @@ test('anything Obsidian would render goes to the renderer', () => {
     assert.equal(plain(text), false, text);
   }
 });
+
+test('text the renderer draws otherwise goes to it: single line breaks, a rule, a link in parentheses', () => {
+  assert.ok(!plain('Files:\na.md\nb.md'));
+  assert.ok(!plain('Done.\n\n---\n\nAfter.'));
+  assert.ok(!plain('See the paper (https://example.org/p).'));
+  assert.ok(plain('Done.\n'.trim()));
+});

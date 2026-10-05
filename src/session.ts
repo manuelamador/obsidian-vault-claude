@@ -98,9 +98,11 @@ export interface ConfiguredDefaults {
   effort?: EffortLevel;
   /** Per-model effort from `modelSettings`, keyed by model ID (e.g. `claude-fable-5-1`). */
   modelEfforts?: Record<string, EffortLevel>;
+  /** Where Claude Code writes plans (`plansDirectory`), relative to the project; none for its default. */
+  plansDirectory?: string;
 }
 
-/** Model and effort set in the user, project and local Claude Code settings for `cwd`. */
+/** Model, effort and plans folder set in the user, project and local Claude Code settings for `cwd`. */
 export async function configuredDefaults(cwd: string): Promise<ConfiguredDefaults> {
   try {
     const { effective } = await resolveSettings({ cwd, settingSources: ['user', 'project', 'local'] });
@@ -113,6 +115,7 @@ export async function configuredDefaults(cwd: string): Promise<ConfiguredDefault
       model: typeof effective.model === 'string' && effective.model ? effective.model : undefined,
       effort: effective.effortLevel ?? undefined,
       modelEfforts,
+      plansDirectory: typeof (effective as { plansDirectory?: unknown }).plansDirectory === 'string' ? (effective as { plansDirectory: string }).plansDirectory : undefined,
     };
   } catch (error) {
     log('resolveSettings failed', error);
@@ -304,7 +307,9 @@ export class ClaudeSession {
     return this.stream ? this.stream.supportedCommands() : null;
   }
 
+  // Before the process starts (it starts with the first message), a change is what it starts with.
   async setModel(model: string | undefined): Promise<void> {
+    if (!this.stream) this.config.model = model;
     await this.stream?.setModel(model);
   }
 
@@ -322,6 +327,7 @@ export class ClaudeSession {
 
   /** Effort for the rest of the session; `null` returns to the model's default. */
   async setEffort(level: EffortLevel | null): Promise<void> {
+    if (!this.stream) this.config.effort = level ?? undefined;
     await this.stream?.applyFlagSettings({ effortLevel: level });
   }
 
@@ -330,11 +336,18 @@ export class ClaudeSession {
    * flag setting; whether it then runs is reported in `fast_mode_state` on the next result.
    */
   async setFastMode(on: boolean): Promise<void> {
+    const before = this.fastMode;
     this.fastMode = on;
-    await this.stream?.applyFlagSettings({ fastMode: on });
+    try {
+      await this.stream?.applyFlagSettings({ fastMode: on });
+    } catch (error) {
+      this.fastMode = before;
+      throw error;
+    }
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
+    if (!this.stream) this.config.permissionMode = mode;
     await this.stream?.setPermissionMode(mode);
   }
 

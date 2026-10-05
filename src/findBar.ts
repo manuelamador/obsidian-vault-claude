@@ -1,29 +1,31 @@
 import { setIcon } from 'obsidian';
 import type { FindEarlier } from './earlierTurns';
+import { escapeRegExp } from './pathFilter';
 
 /** Ranges of every case-insensitive occurrence of `query` in the shown text under `root`. */
 export function findRanges(root: HTMLElement, query: string): Range[] {
-  const needle = query.toLowerCase();
   const ranges: Range[] = [];
-  if (!needle) return ranges;
+  if (!query) return ranges;
+  // Matched in the text as it is, case aside: lowercasing first would move the offsets where a
+  // character lowercases to more than one (İ), and a range would fall outside its text.
+  const needle = new RegExp(escapeRegExp(query), 'giu');
   const doc = root.ownerDocument;
   const walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     // Collapsed tool groups and notices are hidden with display: none, and cannot be scrolled to;
     // lines about the chat rather than in it are marked data-no-find.
     if (!node.parentElement || node.parentElement.closest('[style*="display: none"], [data-no-find]')) continue;
-    const text = (node.textContent ?? '').toLowerCase();
-    for (let at = text.indexOf(needle); at !== -1; at = text.indexOf(needle, at + needle.length)) {
+    for (const match of (node.textContent ?? '').matchAll(needle)) {
       const range = doc.createRange();
-      range.setStart(node, at);
-      range.setEnd(node, at + needle.length);
+      range.setStart(node, match.index);
+      range.setEnd(node, match.index + match[0].length);
       ranges.push(range);
     }
   }
   return ranges;
 }
 
-type HighlightConstructor = new (...ranges: Range[]) => object;
+type HighlightConstructor = new (...ranges: Range[]) => { add(range: Range): unknown };
 
 /**
  * Find in chat: a bar above the messages. Matches are marked with the CSS Custom Highlight API,
@@ -210,7 +212,10 @@ export class FindBar {
       }
       return;
     }
-    this.painted = new Highlight(...this.ranges);
+    // Added one by one: a chat with very many matches would pass more arguments than a call can take.
+    const all = new Highlight();
+    for (const range of this.ranges) all.add(range);
+    this.painted = all;
     registry.set('vc-find', this.painted);
     registry.set('vc-find-current', new Highlight(current));
   }

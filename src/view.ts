@@ -29,7 +29,7 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, loadTranscript, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
   filePathOf,
@@ -44,7 +44,7 @@ import {
 import { chipFor, renderChip } from './chip';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
-import { BOOKMARK_TAG, addMemoSources, cleanTags, freeMemoTitle, memoNoteMarkdown, memoNoteName, pairChat, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
+import { BOOKMARK_TAG, addMemoSources, cleanTags, freeMemoTitle, memoNoteMarkdown, memoNoteName, pairChat, passageNeedle, passagesAlreadyIn, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -126,11 +126,26 @@ const LONG_MESSAGE_CHARS = 700;
 const MAX_PREVIEW_LINES = 60;
 const PLAN_USAGE_INTERVAL_MS = 60_000;
 
+/** `n` and `word`, made plural unless `n` is 1: "1 chat", "3 chats". */
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+/** Chats and their background tasks, for a notice: "2 chats and 1 background task". */
+function chatsAndTasks(chats: number, tasks: number): string {
+  return tasks > 0 ? `${plural(chats, 'chat')} and ${plural(tasks, 'background task')}` : plural(chats, 'chat');
+}
+
+/** Text over a passage's budget cut at MAX_NOTE_CHARS, saying so with `note`. */
+function capped(text: string, note: string): string {
+  return text.length > MAX_NOTE_CHARS ? `${text.slice(0, MAX_NOTE_CHARS)}\n[Truncated at ${MAX_NOTE_CHARS} characters${note}]` : text;
+}
+
 /** A chat's status in the history, most pressing first. */
 function chatStatus(approvals: number, busy: boolean, tasks: number, remoteUrl: string | null, otherwise: string): string {
   // Background tasks outlive the reply that started them, so they are named beside whatever else
   // the chat is doing rather than only when it is doing nothing else.
-  const running = tasks > 0 ? `${tasks} task${tasks === 1 ? '' : 's'} in the background` : '';
+  const running = tasks > 0 ? `${plural(tasks, 'task')} in the background` : '';
   const state = approvals > 0 ? 'Waiting for your approval' : busy ? 'Working' : remoteUrl ? 'On your phone' : running ? '' : otherwise;
   return [state, running].filter(Boolean).join(' · ');
 }
@@ -294,6 +309,22 @@ interface BackgroundChat {
   toolCalls: Map<string, { name: string; input: Record<string, unknown> }>;
   /** The messages its turn in progress answers (see ChatView.turnPrompts), for when it is shown again. */
   turnPrompts: string[];
+  /** The messages sent from the panel (see ChatView.sentIds), so that one is not drawn again as sent from elsewhere. */
+  sentIds: Set<string>;
+}
+
+/** A background chat with nothing left to keep its process for: not working, no tasks, not on the phone, nothing waiting on you. */
+function isIdle(entry: BackgroundChat): boolean {
+  return !entry.busy && entry.tasks.size === 0 && !entry.remoteUrl && entry.approvals.length === 0;
+}
+
+/**
+ * Shown at a reply's end whatever its place among the steps (CSS order), and so neither a step nor
+ * in their way: the card of changed files, created where the first file changed, the reply's
+ * buttons, and its status line.
+ */
+function isTrailer(el: HTMLElement): boolean {
+  return el.hasClass('vc-changes') || el.hasClass('vc-turn-actions') || el.hasClass('vc-activity');
 }
 
 /** Short labels for the effort menu's button; the menu shows the full ones. */
@@ -443,6 +474,8 @@ export class ChatView extends ItemView {
   private tasks = new Set<string>();
   /** Ids of the messages sent from this panel in the chat on screen, to tell its replies from other turns. */
   private sentIds = new Set<string>();
+  /** The last turn drawn from a chat's saved messages while it is still running (see renderHistory). */
+  private unfinishedTurn: HTMLElement | null = null;
   /** The messages the turn in progress answers, as sent here or named by its first reply frame; empty between turns, or when not known. */
   private turnPrompts: string[] = [];
   private draftSaveTimer: number | null = null;
@@ -557,7 +590,7 @@ export class ChatView extends ItemView {
     // Tells apart several Claude tabs (tab tooltips show this), and says what the tab's icon means.
     const base = this.chatName ? `Claude: ${this.chatName}` : 'Claude';
     const tasks = this.runningTasks();
-    const labels = [TAB_LABELS[this.tabState()], tasks > 0 ? `${tasks} task${tasks === 1 ? '' : 's'} in the background` : ''].filter(Boolean);
+    const labels = [TAB_LABELS[this.tabState()], tasks > 0 ? `${plural(tasks, 'task')} in the background` : ''].filter(Boolean);
     return labels.length > 0 ? `${base} (${labels.join(', ')})` : base;
   }
 
@@ -734,6 +767,9 @@ export class ChatView extends ItemView {
     this.usageCard = this.meterEl.createDiv({ cls: 'vc-usage-card' });
     this.usageCard.hide();
     let hoverTimer: number | null = null;
+    this.register(() => {
+      if (hoverTimer !== null) window.clearTimeout(hoverTimer);
+    });
     this.registerDomEvent(this.meterEl, 'mouseenter', () => {
       hoverTimer = window.setTimeout(() => {
         hoverTimer = null;
@@ -1094,9 +1130,7 @@ export class ChatView extends ItemView {
     this.updateBackgroundIndicator();
     if (moving.length === 0) return;
     const tasks = moving.reduce((sum, entry) => sum + entry.tasks.size, 0);
-    const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-    const what = tasks > 0 ? `${count(moving.length, 'chat')} and ${count(tasks, 'background task')}` : count(moving.length, 'chat');
-    new Notice(`${what} moved to another Claude panel, still running.`);
+    new Notice(`${chatsAndTasks(moving.length, tasks)} moved to another Claude panel, still running.`);
   }
 
   /** Whether this panel is closing, so it can take over nothing. */
@@ -1117,7 +1151,7 @@ export class ChatView extends ItemView {
     }
     this.background.add(entry);
     entry.session.setHandlers(this.backgroundHandlers(entry));
-    if (!entry.busy && entry.tasks.size === 0 && !entry.remoteUrl && entry.approvals.length === 0) this.settleBackground(entry);
+    if (isIdle(entry)) this.settleBackground(entry);
     this.updateBackgroundIndicator();
   }
 
@@ -1131,9 +1165,7 @@ export class ChatView extends ItemView {
     const chats = background.length + (this.busy || this.tasks.size > 0 ? 1 : 0);
     if (chats === 0) return;
     const tasks = this.tasks.size + background.reduce((sum, entry) => sum + entry.tasks.size, 0);
-    const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-    const what = tasks > 0 ? `${count(chats, 'chat')} and ${count(tasks, 'background task')}` : count(chats, 'chat');
-    new Notice(`Closing the panel stopped ${what}. The conversations are saved: reopen one from the history to carry on.`);
+    new Notice(`Closing the panel stopped ${chatsAndTasks(chats, tasks)}. The conversations are saved: reopen one from the history to carry on.`);
   }
 
   newChat(): void {
@@ -1330,13 +1362,21 @@ export class ChatView extends ItemView {
    */
   private async setChatRemote(on: boolean): Promise<void> {
     if (!on) {
+      const session = this.session;
       try {
-        await this.session?.enableRemoteControl(false);
+        await session?.enableRemoteControl(false);
       } catch (error) {
         log('disabling remote control failed', error);
       }
-      this.remoteUrl = null;
-      this.updatePhoneButton();
+      if (session === this.session) {
+        this.remoteUrl = null;
+        this.updatePhoneButton();
+      } else {
+        // The chat went to the background meanwhile: its entry is off the phone, and closes once idle.
+        const entry = [...this.background].find((candidate) => candidate.session === session);
+        if (entry) entry.remoteUrl = null;
+        this.updateBackgroundIndicator();
+      }
       return;
     }
     const session = this.ensureSession();
@@ -1497,8 +1537,13 @@ export class ChatView extends ItemView {
       notice: null,
       tasks: this.tasks,
       settleTimer: null,
-      toolCalls: new Map([...this.tools].filter(([, tool]) => tool.status === 'running').map(([id, tool]) => [id, { name: tool.name, input: tool.input }])),
+      // A subagent's calls in flight too: its edits change notes as well.
+      toolCalls: new Map([
+        ...[...this.tools].filter(([, tool]) => tool.status === 'running').map(([id, tool]) => [id, { name: tool.name, input: tool.input }] as const),
+        ...this.agentCalls,
+      ]),
       turnPrompts: this.turnPrompts,
+      sentIds: this.sentIds,
     };
     this.tasks = new Set();
     for (const approval of this.openApprovals) this.adoptApproval(entry, approval);
@@ -1563,6 +1608,7 @@ export class ChatView extends ItemView {
           if (entry.pendingIds.size > 0 && !entry.waitedForQueue) {
             // A queued message not taken up by this turn runs as the next one.
             entry.waitedForQueue = true;
+            this.updateBackgroundIndicator();
             return;
           }
           // Queued messages still listed have had their own turn without being reported back.
@@ -1625,7 +1671,7 @@ export class ChatView extends ItemView {
     clearSettle(entry);
     entry.settleTimer = window.setTimeout(() => {
       entry.settleTimer = null;
-      if (this.background.has(entry) && !entry.busy && entry.tasks.size === 0 && !entry.remoteUrl && entry.approvals.length === 0) {
+      if (this.background.has(entry) && isIdle(entry)) {
         this.finishBackground(entry, true);
       }
     }, BACKGROUND_SETTLE_MS);
@@ -1772,7 +1818,11 @@ export class ChatView extends ItemView {
     this.fastState = null;
     this.populateModeSelect();
     this.populateModelSelect();
-    this.renderHistory(chat, entry.busy || entry.approvals.length > 0, read.readMs);
+    const working = entry.busy || entry.approvals.length > 0;
+    this.renderHistory(chat, working, read.readMs);
+    // The turn in progress, as drawn from the saved messages: the reply goes on in it.
+    const unfinished = working ? this.unfinishedTurn : null;
+    const drawnTools = new Map(this.tools);
     // Its turns in the background recorded none.
     this.recordMentions();
     const token = {};
@@ -1783,7 +1833,23 @@ export class ChatView extends ItemView {
     this.updatePhoneButton();
     // Ids still waiting after a turn already passed them over are running as their own turn.
     for (const id of entry.pendingIds) this.pending.set(id, { bubble: createDiv(), running: entry.waitedForQueue, id: id as MessageId });
-    if (entry.busy || entry.approvals.length > 0) this.beginTurn(entry.turnPrompts);
+    this.sentIds = entry.sentIds;
+    if (working) {
+      this.beginTurn(entry.turnPrompts, unfinished);
+      // Its calls still running go on: drawn ones are shown running again, and the rest (a
+      // subagent's) are followed, so that an edit finishing now is shown and links its notes.
+      for (const [id, call] of entry.toolCalls) {
+        const tool = drawnTools.get(id);
+        if (!tool) {
+          this.agentCalls.set(id, call);
+          continue;
+        }
+        tool.status = 'running';
+        tool.lineEl?.addClass('is-running');
+        this.tools.set(id, tool);
+        if (tool.group) this.updateToolGroup(tool.group);
+      }
+    }
     for (const approval of entry.approvals) this.renderApprovalCard(approval);
     this.currentModel = entry.currentModel;
     this.currentEffort = entry.currentEffort;
@@ -2302,7 +2368,8 @@ export class ChatView extends ItemView {
       if (entry.group) this.updateToolGroup(entry.group);
     }
     const turns = [...this.draw.parent.querySelectorAll<HTMLElement>('.vc-turn')];
-    if (running) turns.pop();
+    // The turn still running is finished when it ends (see showBackground).
+    this.unfinishedTurn = running ? (turns.pop() ?? null) : null;
     for (const turn of turns) this.finishTurnActions(turn);
     this.draw.turn = null;
     this.draw.group = null;
@@ -2370,19 +2437,16 @@ export class ChatView extends ItemView {
     // Text that was only white space between two steps does not end their run, which would split one
     // fold into two with nothing between: it is removed. Judged by its source, not by what is on
     // screen, since a reply's Markdown is still being rendered when a chat opened from the history folds.
-    const blank = (el: HTMLElement) => el.hasClass('vc-text') && !(this.markdownSource.get(el) ?? el.textContent ?? '').trim();
     const runs: HTMLElement[][] = [];
     let run: HTMLElement[] = [];
     let gap: HTMLElement[] = [];
     for (const el of Array.from(turn.children) as HTMLElement[]) {
-      // Shown at the reply's end whatever its place among the steps (CSS order): the card of changed
-      // files, created where the first file changed, and the reply's buttons.
-      if (el.hasClass('vc-changes') || el.hasClass('vc-turn-actions') || el.hasClass('vc-activity')) continue;
+      if (isTrailer(el)) continue;
       if (isStep(el)) {
         for (const empty of gap) empty.remove();
         run.push(el);
         gap = [];
-      } else if (run.length > 0 && blank(el)) {
+      } else if (run.length > 0 && this.isBlankText(el)) {
         gap.push(el);
       } else {
         if (run.length > 0) runs.push(run);
@@ -2404,14 +2468,21 @@ export class ChatView extends ItemView {
     if (!turn?.hasClass('vc-turn') || turn.hasClass('has-folded-steps')) return;
     const run: HTMLElement[] = [];
     for (let el = card.previousElementSibling as HTMLElement | null; el; el = el.previousElementSibling as HTMLElement | null) {
-      // Not steps, and not in their way: the changed files and buttons, and the reply's status line,
-      // which is kept last (see scrollToBottom) and so sits just before a card when it arrives.
-      if (el.hasClass('vc-changes') || el.hasClass('vc-turn-actions') || el.hasClass('vc-activity')) continue;
+      // The reply's status line is kept last (see scrollToBottom), and so sits just before a card when it arrives.
+      if (isTrailer(el)) continue;
       if (isStep(el)) run.unshift(el);
       // Text with nothing in it (white space between steps) is passed over, left where it is.
-      else if (!(el.hasClass('vc-text') && !(this.markdownSource.get(el) ?? el.textContent ?? '').trim())) break;
+      else if (!this.isBlankText(el)) break;
     }
     if (run.length >= 2) this.foldRun(turn, run);
+  }
+
+  /**
+   * Text that is only white space, judged by its source, not by what is on screen: a reply's
+   * Markdown is still being rendered when a chat opened from the history folds.
+   */
+  private isBlankText(el: HTMLElement): boolean {
+    return el.hasClass('vc-text') && !(this.markdownSource.get(el) ?? el.textContent ?? '').trim();
   }
 
   /** One run of consecutive steps, folded in place. */
@@ -2422,12 +2493,11 @@ export class ChatView extends ItemView {
     const header = fold.createDiv({ cls: 'vc-steps-header', attr: { 'data-expand': '' } });
     const body = fold.createDiv({ cls: 'vc-steps-body' });
     for (const el of steps) body.appendChild(el);
-    const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
     const tools = body.querySelectorAll('.vc-tools:not(.vc-thinking) .vc-tool').length;
     const thoughts = body.querySelectorAll(':scope > .vc-thinking').length;
-    const parts = [tools && count(tools, 'tool call'), thoughts && count(thoughts, 'thought')].filter(Boolean);
+    const parts = [tools && plural(tools, 'tool call'), thoughts && plural(thoughts, 'thought')].filter(Boolean);
     setIcon(header.createSpan({ cls: 'vc-tools-chevron' }), 'chevron-right');
-    header.createSpan({ cls: 'vc-tools-text', text: `Steps: ${parts.join(', ') || count(steps.length, 'step')}` });
+    header.createSpan({ cls: 'vc-tools-text', text: `Steps: ${parts.join(', ') || plural(steps.length, 'step')}` });
     const failed = body.querySelectorAll('.vc-tool.is-error').length;
     if (failed > 0) header.createSpan({ cls: 'vc-tools-failed', text: `${failed} failed` });
     header.addEventListener('click', () => fold.toggleClass('is-collapsed', !fold.hasClass('is-collapsed')));
@@ -2479,7 +2549,7 @@ export class ChatView extends ItemView {
       memo.addEventListener('click', (evt) => {
         const passages = this.replyPassages(turn, textEls);
         if (evt.altKey) void this.saveBookmark(passages);
-        else this.openMemoForm(passages);
+        else void this.openMemoForm(passages);
       });
     }
     if (uuid) {
@@ -2801,6 +2871,11 @@ export class ChatView extends ItemView {
   }
 
   /** What goes inside `@[[…]]`: a note's link text, another file's path, a folder's path with a trailing `/`. */
+  /** A link to note `file`, as the vault's links name it: `[[Name]]`, or its path where the name is not unique. */
+  private wikilink(file: TFile): string {
+    return `[[${this.app.metadataCache.fileToLinktext(file, '', true)}]]`;
+  }
+
   private mentionTarget(item: TAbstractFile): string {
     if (item instanceof TFolder) return `${item.path}/`;
     if (item instanceof TFile && item.extension === 'md') return this.app.metadataCache.fileToLinktext(item, '', true);
@@ -3015,7 +3090,7 @@ export class ChatView extends ItemView {
   private async attachVaultFile(file: TFile, generation = this.chatGeneration): Promise<void> {
     if (generation !== this.chatGeneration) return;
     if (file.extension === 'md') {
-      const mention = `@[[${this.app.metadataCache.fileToLinktext(file, '', true)}]] `;
+      const mention = `@[[${this.mentionTarget(file)}]] `;
       this.inputEl.setRangeText(mention, this.inputEl.selectionStart, this.inputEl.selectionEnd, 'end');
       this.inputEl.focus();
       this.inputEdited();
@@ -3156,6 +3231,8 @@ export class ChatView extends ItemView {
       this.draw.group = null;
       this.scrollToBottom(true);
     }
+    // The chat it was typed in, for its draft should another chat be opened while it is prepared.
+    const draftKey = this.draftKey();
     let built: { content: UserContent; notes: string[] };
     try {
       built = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly);
@@ -3175,8 +3252,16 @@ export class ChatView extends ItemView {
     }
     const { content, notes } = built;
     if (session !== this.session) {
-      // Another chat was opened while the mentioned notes were read.
-      new Notice('The chat changed before the message was sent, so it was not sent.');
+      // Another chat was opened while the mentioned notes were read: not sent, nor waited for in
+      // the chat it was typed in (moved to the background with it), and back in that chat's input.
+      bubble.remove();
+      this.pending.delete(uuid);
+      for (const entry of this.background) if (entry.session === session) entry.pendingIds.delete(uuid);
+      if (text) {
+        const draft = this.readDraft(draftKey) ?? {};
+        this.writeDraft(draftKey, { ...draft, text: draft.text?.trim() ? `${text}\n${draft.text}` : text });
+      }
+      new Notice(`The chat changed before the message was sent, so it was not sent. It is back in that chat's input${attachments.length > 0 ? ', without its attachments' : ''}.`);
       return;
     }
     if (!this.chatName) this.setChatTitle(chatTitle(text || attachments[0]?.name || ''));
@@ -3314,18 +3399,12 @@ export class ChatView extends ItemView {
         continue;
       }
       const content = await this.app.vault.cachedRead(file as TFile);
-      const body =
-        content.length > MAX_NOTE_CHARS
-          ? `${content.slice(0, MAX_NOTE_CHARS)}\n[Truncated at ${MAX_NOTE_CHARS} characters; read the file for the rest.]`
-          : content;
+      const body = capped(content, '; read the file for the rest.');
       blocks.push(`<note path="${file.path}">\n${body}\n</note>`);
     }
     for (const selection of selections) {
       notes.add(selection.path);
-      const body =
-        selection.text.length > MAX_NOTE_CHARS
-          ? `${selection.text.slice(0, MAX_NOTE_CHARS)}\n[Truncated at ${MAX_NOTE_CHARS} characters.]`
-          : selection.text;
+      const body = capped(selection.text, '.');
       blocks.push(`<selection note="${selection.path}" lines="${lineRange(selection.fromLine, selection.toLine)}">\n${body}\n</selection>`);
     }
     if (files.length > 0) blocks.push(files.map((file) => `Attached file: ${file.path}`).join('\n'));
@@ -3627,7 +3706,7 @@ export class ChatView extends ItemView {
             .setIcon(icon)
             .onClick((click) => {
               if (click.altKey) this.attachNoteFromMenu(entry);
-              else void this.app.workspace.openLinkText(entry.target, '', Keymap.isModEvent(evt));
+              else void this.app.workspace.openLinkText(entry.target, '', Keymap.isModEvent(click));
             }),
         );
       }
@@ -3744,15 +3823,19 @@ export class ChatView extends ItemView {
     if (mode === 'plan' && previous !== 'plan') this.modeBeforePlan = previous;
     this.mode = mode;
     this.showMode();
-    if (!this.session) {
+    const session = this.session;
+    if (!session) {
       this.renderModeLine(previous, mode);
       return;
     }
     try {
-      await this.session.setPermissionMode(mode);
+      await session.setPermissionMode(mode);
+      // Another chat opened meanwhile: the change was that chat's, and this one shows its own.
+      if (session !== this.session) return;
       this.renderModeLine(previous, mode);
     } catch (error) {
       log('setPermissionMode failed', error);
+      if (session !== this.session) return;
       new Notice(
         mode === 'bypassPermissions'
           ? 'This chat started before bypass was allowed. Start a new chat to use it.'
@@ -3822,7 +3905,7 @@ export class ChatView extends ItemView {
     if (!this.stopButton) return;
     const tasksOnly = !this.busy && this.tasks.size > 0;
     this.stopButton.toggle(this.busy || tasksOnly);
-    this.stopButton.setText(tasksOnly ? `Stop ${this.tasks.size} task${this.tasks.size === 1 ? '' : 's'}` : 'Stop');
+    this.stopButton.setText(tasksOnly ? `Stop ${plural(this.tasks.size, 'task')}` : 'Stop');
     this.stopButton.setAttr(
       'aria-label',
       tasksOnly ? 'Stop the tasks this chat is running in the background' : 'Stop the reply, and any tasks it started in the background',
@@ -3942,7 +4025,7 @@ export class ChatView extends ItemView {
   /** Effort a session on this chat's model starts at: its per-model setting, else the global one. */
   private defaultEffort(): EffortLevel | undefined {
     const { configured } = this.plugin;
-    const chosen = this.plugin.models.find((model) => model.value === this.chosenModel());
+    const chosen = this.chosenModelInfo();
     const id = this.currentModel ?? chosen?.resolvedModel ?? this.modelOverride ?? configured.model;
     const base = id?.replace(/\[[^\]]*\]$/, '');
     return (base ? configured.modelEfforts?.[base] : undefined) ?? configured.effort;
@@ -3981,14 +4064,20 @@ export class ChatView extends ItemView {
   }
 
   private async changeEffort(value: string): Promise<void> {
+    const previous = this.effortOverride;
     this.effortOverride = value ? (value as EffortLevel) : undefined;
-    if (this.session) {
+    const session = this.session;
+    if (session) {
       try {
-        await this.session.setEffort(this.effortOverride ?? null);
+        await session.setEffort(this.effortOverride ?? null);
+        if (session !== this.session) return;
         this.syncEffort();
       } catch (error) {
         log('setEffort failed', error);
+        if (session !== this.session) return;
         new Notice('Could not change the effort.');
+        // The menu goes back to the effort that runs.
+        this.effortOverride = previous;
       }
     }
     this.populateEffortSelect();
@@ -4004,7 +4093,7 @@ export class ChatView extends ItemView {
       try {
         await session.setModel(this.modelOverride);
         if (session !== this.session) return;
-        const chosen = this.plugin.models.find((model) => model.value === this.chosenModel());
+        const chosen = this.chosenModelInfo();
         this.currentModel = chosen?.resolvedModel ?? this.modelOverride ?? this.currentModel;
         // A model switch can change the effort too (per-model effort settings).
         this.syncEffort();
@@ -4023,14 +4112,19 @@ export class ChatView extends ItemView {
     this.populateModelSelect();
     if (switched) this.renderSettingLine(`Model: ${this.modelMenu.label}`);
     // A model without fast mode turns it off.
-    const chosen = this.plugin.models.find((model) => model.value === this.chosenModel());
+    const chosen = this.chosenModelInfo();
     if (this.fastMode && chosen && !chosen.supportsFastMode) void this.toggleFastMode();
+  }
+
+  /** The model chosen for the chat, as Claude Code lists it; undefined when it lists none of that name. */
+  private chosenModelInfo(): (typeof this.plugin.models)[number] | undefined {
+    return this.plugin.models.find((model) => model.value === this.chosenModel());
   }
 
   /** The fast-mode button: shown for a model that supports fast mode (or while it is on); lit while it runs. */
   private updateFastButton(): void {
     if (!this.fastButton) return;
-    const chosen = this.plugin.models.find((model) => model.value === this.chosenModel());
+    const chosen = this.chosenModelInfo();
     this.fastButton.toggle(chosen?.supportsFastMode === true || this.fastMode);
     const blocked = this.fastMode && this.fastState && this.fastState.state !== 'on' ? fastModeBlock(this.fastState) : null;
     this.fastButton.toggleClass('is-on', this.fastMode && blocked === null);
@@ -4047,14 +4141,20 @@ export class ChatView extends ItemView {
 
   /** Turns fast mode on or off for this chat; a new chat starts with it off. */
   async toggleFastMode(): Promise<void> {
-    this.fastMode = !this.fastMode;
+    const previous = this.fastMode;
+    this.fastMode = !previous;
     this.fastState = null;
     this.updateFastButton();
+    const session = this.session;
     try {
-      await this.session?.setFastMode(this.fastMode);
+      await session?.setFastMode(this.fastMode);
     } catch (error) {
       log('setFastMode failed', error);
+      if (session !== this.session) return;
       new Notice('Could not switch fast mode.');
+      // The button goes back to what runs.
+      this.fastMode = previous;
+      this.updateFastButton();
     }
   }
 
@@ -4343,6 +4443,12 @@ export class ChatView extends ItemView {
     this.sessionToken = null;
     this.remoteUrl = null;
     this.updatePhoneButton();
+    // Its background tasks ended with its process: no word of them will come.
+    if (this.tasks.size > 0) {
+      this.tasks = new Set();
+      this.updateStopButton();
+      this.updateTab();
+    }
     for (const { bubble } of this.pending.values()) {
       if (!bubble.hasClass('is-queued')) continue;
       bubble.addClass('is-unsent');
@@ -4356,13 +4462,14 @@ export class ChatView extends ItemView {
   }
 
   /** `prompts`: the messages the turn answers, when known (see turnPrompts). */
-  private beginTurn(prompts: string[] = []): void {
+  /** `prompts`: the messages the turn answers, when known (see turnPrompts); `turn`: a turn already drawn that it goes on in. */
+  private beginTurn(prompts: string[] = [], turn: HTMLElement | null = null): void {
     this.busy = true;
     this.turnPrompts = prompts;
     this.interrupted = false;
-    this.draw.turnHadText = false;
+    this.draw.turnHadText = turn?.querySelector('.vc-text') != null;
     this.pendingApprovals = 0;
-    this.draw.turn = this.messagesEl.createDiv({ cls: 'vc-turn' });
+    this.draw.turn = turn ?? this.messagesEl.createDiv({ cls: 'vc-turn' });
     this.dropLive();
     this.draw.liveText = null;
     this.draw.group = null;
@@ -5432,7 +5539,7 @@ export class ChatView extends ItemView {
     for (const target of targets) {
       const file = this.app.vault.getAbstractFileByPath(target) ?? this.app.metadataCache.getFirstLinkpathDest(target, '');
       if (!(file instanceof TFile) || file.extension !== 'md') continue;
-      const link = `[[${this.app.metadataCache.fileToLinktext(file, '', true)}]]`;
+      const link = this.wikilink(file);
       if (!notes.includes(link)) notes.push(link);
     }
     return notes;
@@ -5450,7 +5557,7 @@ export class ChatView extends ItemView {
       return;
     }
     if (now) void this.saveBookmark(passages);
-    else this.openMemoForm(passages);
+    else void this.openMemoForm(passages);
   }
 
   /** Where `passages` of the chat on screen come from, for a memo; null, with a notice, before the chat has started. */
@@ -5463,27 +5570,74 @@ export class ChatView extends ItemView {
     return { vault: this.app.vault.getName(), chatId, chatTitle: this.chatName ?? 'Chat', date: formatDate(Date.now()).slice(0, 10), passages };
   }
 
+  /** `passages` with the dates their messages were written (see MemoPassage.written), read from the chat's file. */
+  private async datedPassages(chatId: string, passages: MemoPassage[]): Promise<MemoPassage[]> {
+    const root = this.plugin.vaultRoot();
+    // A reply text's key is its message's id, then its place in the message (see replyKey).
+    const idOf = (passage: MemoPassage) => passage.message?.split('#')[0];
+    const ids = passages.flatMap((passage) => idOf(passage) ?? []);
+    const dates = root ? await messageDates(chatId, root, ids) : new Map<string, string>();
+    return passages.map((passage) => {
+      const written = dates.get(idOf(passage) ?? '');
+      return written ? { ...passage, written } : passage;
+    });
+  }
+
   /** Saves `passages` as a memo at once, with no form and no suggestion: a bookmark, titled by their first words. */
   async saveBookmark(passages: MemoPassage[]): Promise<TFile | null> {
     const sources = this.memoSources(passages);
     if (!sources) return null;
-    const saved = await this.saveMemo({ memo: null, title: '', description: '', tags: [] }, sources, true);
+    // Taken before the dates are read: by then another chat, with another note, may be on screen.
+    const notes = this.memoNotesFor(passages);
+    sources.passages = await this.datedPassages(sources.chatId, passages);
+    const saved = await this.saveMemo({ memo: null, title: '', description: '', why: '', tags: [], notes, passages: sources.passages }, sources, true);
     if (saved) this.flashHint(`Memo saved: ${saved.basename}`);
     return saved;
   }
 
   /** The memo form for `passages` of the chat on screen, with Claude's suggestion of a title and description. */
-  private openMemoForm(passages: MemoPassage[]): void {
+  private async openMemoForm(passages: MemoPassage[]): Promise<void> {
     const sources = this.memoSources(passages);
     if (!sources) return;
+    // Taken before the dates are read: by then another chat, with another note, may be on screen.
+    const notes = this.memoNotesFor(passages);
+    const memos = this.memosToOffer(sources.chatId);
+    sources.passages = await this.datedPassages(sources.chatId, passages);
+    // The panel closed meanwhile: no form opens over whatever is in front now.
+    if (this.closing) return;
     new MemoModal(
       this.app,
-      passages,
-      this.plugin.memoNotes(),
-      (title) => this.memoTitleProblem(title),
+      sources.passages,
+      {
+        memos,
+        notes,
+        noteLink: (file) => this.wikilink(file),
+        titleProblem: (title) => this.memoTitleProblem(title),
+        alreadyIn: async (memo, chosen) => passagesAlreadyIn(await this.app.vault.cachedRead(memo), sources.chatId, chosen).length,
+        open: (memo) => void this.app.workspace.getLeaf('tab').openFile(memo),
+        suggest: (signal) => this.plugin.suggestMemo(sources.chatTitle, passages, signal),
+      },
       (choice) => void this.saveMemo(choice, sources),
-      (signal) => this.plugin.suggestMemo(sources.chatTitle, passages, signal),
     ).open();
+  }
+
+  /**
+   * The memos offered to add passages to, in order: those about the note attached or in front, then
+   * those saved from chat `chatId`, then the rest, the most recently changed first within each.
+   */
+  private memosToOffer(chatId: string): TFile[] {
+    const path = this.attachedNote ?? this.activeNote()?.file.path;
+    const note = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    const link = note instanceof TFile ? this.wikilink(note) : null;
+    const rank = (memo: TFile) => {
+      const frontmatter = this.app.metadataCache.getFileCache(memo)?.frontmatter;
+      const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
+      if (link && list(frontmatter?.notes).includes(link)) return 0;
+      return list(frontmatter?.claude_chats).includes(chatId) ? 1 : 2;
+    };
+    // Each ranked once; a stable sort: within a rank, the most recently changed first, as memoNotes gives them.
+    const ranked = this.plugin.memoNotes().map((memo) => ({ memo, rank: rank(memo) }));
+    return ranked.sort((a, b) => a.rank - b.rank).map(({ memo }) => memo);
   }
 
   /** Why a new memo cannot be called `title`: note names are unique in the vault, and a link to the memo must find it. */
@@ -5511,6 +5665,8 @@ export class ChatView extends ItemView {
   }
 
   private async writeMemo(choice: MemoChoice, sources: MemoSources, quiet: boolean): Promise<TFile | null> {
+    // The passages as the form gave them back: with any labels and comments.
+    sources = { ...sources, passages: choice.passages };
     if (!choice.memo && !choice.title.trim()) {
       const stamp = formatDate(Date.now()).replace(':', '');
       const title = freeMemoTitle(quickMemoTitle(sources.passages), stamp, (name) => this.noteNameTaken(name));
@@ -5520,7 +5676,11 @@ export class ChatView extends ItemView {
       let file = choice.memo;
       if (file) {
         await this.app.vault.process(file, (text) => addMemoSources(text, sources));
-        const notes = this.memoNotesFor(sources.passages);
+        // Only the notes kept in the form: the memo's own are never taken away.
+        const notes = choice.notes;
+        const target = file;
+        // The passages are in once written: a failure here is said as such, and saving them again is
+        // caught by the form's check for passages a memo holds already.
         await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
           const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : typeof value === 'string' ? [value] : []);
           // Ids and titles stay paired, which the table's chat links rely on.
@@ -5532,10 +5692,13 @@ export class ChatView extends ItemView {
           const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags.map(String) : typeof frontmatter.tags === 'string' ? [frontmatter.tags] : [];
           if (choice.tags.some((tag) => !tags.includes(tag))) frontmatter.tags = cleanTags([...tags, ...choice.tags]);
           frontmatter.updated = sources.date;
+        }).catch((error: unknown) => {
+          log('updating the properties of a memo failed', error);
+          new Notice(`The passages were added to “${target.basename}”, but its properties (chats, notes, tags, updated) could not be updated: ${errorText(error)}`, 10000);
         });
       } else {
         const path = await this.plugin.memosPath(`${memoNoteName(choice.title)}.md`);
-        file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, tags: choice.tags, notes: this.memoNotesFor(sources.passages), sources }));
+        file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, why: choice.why, tags: choice.tags, notes: choice.notes, sources }));
       }
       this.plugin.linkNoteChat(file.path, sources.chatId);
       const saved = file;
@@ -5554,6 +5717,17 @@ export class ChatView extends ItemView {
       new Notice(`Could not save the memo: ${errorText(error)}`);
       return null;
     }
+  }
+
+  /** Puts `text` in the input of this chat, a new one, as a draft to add to, the cursor at its end (Continue from a memo). */
+  startDraft(text: string): void {
+    // Only what was chosen goes with it: not a note the new chat attached of itself (see restoreDraft).
+    this.attachNote(null);
+    this.inputEl.value = text;
+    this.inputEdited();
+    this.focusInput();
+    this.inputEl.setSelectionRange(text.length, text.length);
+    this.growInput();
   }
 
   /** Puts `text` in the input as a quote, to carry on from it (a link from a memo note). */
@@ -5799,8 +5973,18 @@ export class ChatView extends ItemView {
     if (renderPlainText(markdown, el)) return Promise.resolve();
     // The chat's own text (not a side chat's) records its mentions once its links are in.
     const chat = component === this.chatComponent ? this.mentionsChat() : null;
-    return MarkdownRenderer.render(this.app, neutralizeRemoteMedia(markdown), el, '', component)
+    // Rendered off the page and swept before it goes in, so an inline style that would load
+    // something is gone before it is ever applied; what is drawn later is moved in when it is done.
+    const holder = createDiv();
+    const rendering = MarkdownRenderer.render(this.app, neutralizeRemoteMedia(markdown), holder, '', component);
+    const moveIn = () => {
+      sweepRemoteMedia(holder);
+      el.append(...Array.from(holder.childNodes));
+    };
+    moveIn();
+    return rendering
       .then(() => {
+        moveIn();
         sweepRemoteMedia(el);
         linkFileNames(el, (name) => this.vaultFileOf(name));
         if (chat) this.recordMentions(el, chat);

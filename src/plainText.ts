@@ -2,7 +2,7 @@
 // imports so the tests can use it.
 
 /** None of Markdown's markers, and nothing Obsidian turns into a link: a paragraph is just text. */
-const MARKDOWN_MARKER = /[<>*_`~#$[\]|\\]|(?:^|\s)(?:https?:\/\/|www\.)|^\s*(?:[-+>]|\d+[.)])\s/m;
+const MARKDOWN_MARKER = /[<>*_`~#$[\]|\\]|(?:^|[\s(])(?:https?:\/\/|www\.)|^\s*(?:[-+>]|\d+[.)])\s|^\s*-{3,}\s*$|[^\n]\n(?!\n)/m;
 
 /** Past this length a block is worth the renderer's own paragraph handling. */
 const MAX_PLAIN = 4000;

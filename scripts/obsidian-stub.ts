@@ -193,7 +193,11 @@ export class SuggestModal<T> {
     this.close();
     (this as unknown as { onChooseSuggestion(value: T, evt: unknown): void }).onChooseSuggestion(value, evt);
   }
-  open(): void {}
+  /** The last one opened, for a test to choose from. */
+  static last: SuggestModal<unknown> | null = null;
+  open(): void {
+    SuggestModal.last = this as SuggestModal<unknown>;
+  }
   declare _t: T;
 }
 export class FuzzySuggestModal<T> extends SuggestModal<T> {}
@@ -257,6 +261,8 @@ export const MarkdownRenderer = {
   render: async (_app: unknown, markdown: string, el: HTMLElement, _source?: string, component?: Component) => {
     MarkdownRenderer.lastComponent = component ?? null;
     el.textContent = markdown;
+    // A renderer (or another plugin's post-processor) that draws a style loading something (a test's own marker).
+    if (markdown === 'STYLED_BY_RENDERER') el.innerHTML = '<a style="background:url(https://evil.test/x)">t</a>';
     // A reply that is one bold phrase, drawn as Obsidian draws it.
     const bold = markdown.match(/^\*\*([^*]+)\*\*$/);
     if (bold) {

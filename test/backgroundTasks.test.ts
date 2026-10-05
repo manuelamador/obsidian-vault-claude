@@ -26,3 +26,16 @@ test('other messages leave the set alone', () => {
   assert.equal(trackTask(tasks, sys({ subtype: 'task_progress', task_id: 'bg' })), false);
   assert.deepEqual([...tasks], ['bg']);
 });
+
+test("Claude Code's whole set of tasks replaces the one kept, watchers left out, and is then the only word on it", () => {
+  const tasks = new Set<string>(['stale']);
+  const level = (list: { task_id: string; ambient?: boolean }[]) => sys({ subtype: 'background_tasks_changed', tasks: list.map((task) => ({ task_type: 'local_agent', description: '', ...task })) });
+  assert.equal(trackTask(tasks, level([{ task_id: 'bg' }, { task_id: 'watch', ambient: true }])), true);
+  assert.deepEqual([...tasks], ['bg']);
+  // The same set again: no change.
+  assert.equal(trackTask(tasks, level([{ task_id: 'bg' }])), false);
+  // A start or end message after it is passed over: the next whole set says it.
+  assert.equal(trackTask(tasks, sys({ subtype: 'task_started', task_id: 'late', is_backgrounded: true, description: '' })), false);
+  assert.equal(trackTask(tasks, level([])), true);
+  assert.equal(tasks.size, 0);
+});

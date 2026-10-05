@@ -1,6 +1,7 @@
 // Memos saved from a chat: a note per memo, holding its title, a description, its tags (an idea, a
 // todo, something to explore or to read), and the passages of the conversation it came from, each
 // with who wrote it and links back to the chat. Kept free of `obsidian` imports so the tests can use it.
+import { closesFence, fenceMarker } from './fences';
 
 /** A passage of one message, as saved. */
 export interface MemoPassage {
@@ -17,14 +18,25 @@ export interface MemoPassage {
    * replyKey). A link goes straight to it; the needle then finds the passage within it.
    */
   message?: string;
+  /** When that message was written, `YYYY-MM-DD`, when known: not when the passage was saved. */
+  written?: string;
+  /** How you take it to have contributed to the idea (see CONTRIBUTIONS): yours, never assigned. */
+  label?: Contribution;
+  /** A remark of yours on it. */
+  comment?: string;
 }
+
+/** The labels a passage can be given for how it contributed to an idea. */
+export const CONTRIBUTIONS = ['Starting point', 'Development', 'Correction', 'Evidence', 'Open question'] as const;
+export type Contribution = (typeof CONTRIBUTIONS)[number];
+
 
 /** Passages saved together from one chat. */
 export interface MemoSources {
   vault: string;
   chatId: string;
   chatTitle: string;
-  /** `YYYY-MM-DD`. */
+  /** When the passages were saved, `YYYY-MM-DD`. */
   date: string;
   passages: MemoPassage[];
 }
@@ -91,14 +103,53 @@ export function cleanTags(tags: string[]): string[] {
   return [...new Set(clean)];
 }
 
-/** The section recording passages saved from one chat: the chat and date, then each passage with who wrote it and links back. */
+/** What starts the line of your comment on a passage: the comment follows it as written. */
+const COMMENT_MARK = '*Comment:* ';
+
+/**
+ * Where section `heading` (a `## ` heading) of a memo note is: from the start of its heading line
+ * (`start`) and the end of it (`body`) to the next heading of its level or above (`end`, the note's
+ * length when none). Headings are lines outside code fences, so an example in your Why is not one.
+ */
+function sectionBounds(note: string, heading: string): { start: number; body: number; end: number } | null {
+  let fence: string | null = null;
+  let found: { start: number; body: number } | null = null;
+  let at = 0;
+  for (const line of note.split('\n')) {
+    const lineStart = at;
+    at += line.length + 1;
+    if (fence) {
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    const marker = fenceMarker(line);
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    if (found) {
+      if (/^#{1,2} /.test(line)) return { ...found, end: lineStart };
+    } else if (line.replace(/[ \t]+$/, '') === `## ${heading}`) {
+      found = { start: lineStart, body: lineStart + line.length };
+    }
+  }
+  return found ? { ...found, end: note.length } : null;
+}
+
+/**
+ * The section recording passages saved from one chat: the chat and the day they were saved, then each
+ * passage: its label if you gave one, who wrote it and when (the message's date, when known), links
+ * back, the passage quoted, and your comment.
+ */
 function memoSourcesMarkdown(sources: MemoSources): string {
-  const lines = [`### ${headingText(sources.chatTitle)} · ${sources.date}`, ''];
+  const lines = [`### ${headingText(sources.chatTitle)} · saved ${sources.date}`, ''];
   for (const passage of sources.passages) {
     const find = chatLink({ vault: sources.vault, chat: sources.chatId, msg: passage.message, find: passage.needle });
     const quote = chatLink({ vault: sources.vault, chat: sources.chatId, quote: passage.text.slice(0, QUOTE_LINK_CHARS) });
-    lines.push(`**${passage.role === 'you' ? 'You' : 'Claude'}** · [Go to the passage](${find}) · [Continue in the chat](${quote})`, '');
+    const who = [passage.label, passage.role === 'you' ? 'You' : 'Claude', passage.written].filter(Boolean).join(' · ');
+    lines.push(`**${who}** · [Go to the passage](${find}) · [Continue in the chat](${quote})`, '');
     lines.push(blockquote(passage.text.trim()), '');
+    if (passage.comment?.trim()) lines.push(`${COMMENT_MARK}${passage.comment.trim().replace(/\s+/g, ' ')}`, '');
   }
   return lines.join('\n');
 }
@@ -113,7 +164,7 @@ function yamlList(values: string[]): string {
  * properties name the chat it came from and, as links, the notes it is about (`notes`, wikilinks),
  * so that a note's backlinks and the Memos base find it.
  */
-export function memoNoteMarkdown(memo: { title: string; description: string; tags: string[]; notes: string[]; sources: MemoSources }): string {
+export function memoNoteMarkdown(memo: { title: string; description: string; why?: string; tags: string[]; notes: string[]; sources: MemoSources }): string {
   const { date, chatId, chatTitle } = memo.sources;
   // No `memo` tag: `type: memo` says what it is, and a tag every memo had would say nothing in a table.
   const tags = cleanTags(memo.tags);
@@ -135,6 +186,8 @@ export function memoNoteMarkdown(memo: { title: string; description: string; tag
   ];
   const body = [`# ${memo.title.trim()}`, ''];
   if (memo.description.trim()) body.push(memo.description.trim(), '');
+  // Yours: why you keep it, and what comes next. A bookmark has neither, unless you gave it a Why.
+  if (!tags.includes(BOOKMARK_TAG) || memo.why?.trim()) body.push('## Why', '', ...(memo.why?.trim() ? [memo.why.trim(), ''] : []), '## Next', '');
   body.push('## Sources', '', memoSourcesMarkdown(memo.sources));
   return `${[...frontmatter, '', ...body].join('\n').trimEnd()}\n`;
 }
@@ -143,13 +196,83 @@ export function memoNoteMarkdown(memo: { title: string; description: string; tag
 export function addMemoSources(note: string, sources: MemoSources): string {
   const section = memoSourcesMarkdown(sources);
   const text = note.trimEnd();
-  const heading = /^## Sources[ \t]*$/m.exec(text);
-  if (!heading) return `${`${text}\n\n## Sources\n\n${section}`.trimEnd()}\n`;
-  // The end of the Sources section: the next heading of its level or above, else the end of the note.
-  const after = text.slice(heading.index + heading[0].length);
-  const next = /^#{1,2} /m.exec(after);
-  const at = next ? heading.index + heading[0].length + next.index : text.length;
+  const bounds = sectionBounds(text, 'Sources');
+  if (!bounds) return `${`${text}\n\n## Sources\n\n${section}`.trimEnd()}\n`;
+  // At the end of the Sources section: before the next heading of its level or above, else at the end of the note.
+  const at = bounds.end;
+  const next = at < text.length;
   return `${`${text.slice(0, at).trimEnd()}\n\n${section.trimEnd()}\n${next ? `\n${text.slice(at)}` : ''}`.trimEnd()}\n`;
+}
+
+/**
+ * The passages of `passages` already in memo `note` from chat `chatId`: a saved passage of the same
+ * text, from that chat and the same message (or, for one with no message, from that chat).
+ */
+export function passagesAlreadyIn(note: string, chatId: string, passages: MemoPassage[]): MemoPassage[] {
+  const saved = savedPassages(note).filter((one) => one.chat === chatId);
+  return passages.filter((passage) => {
+    const quoted = blockquote(passage.text.trim());
+    return saved.some((one) => blockquote(one.text) === quoted && (!passage.message || one.msg === passage.message));
+  });
+}
+
+/** The text of section `heading` (a `## ` heading) of a memo note, without its heading; empty when it has none. */
+export function memoSection(note: string, heading: string): string {
+  const bounds = sectionBounds(note, heading);
+  return bounds ? note.slice(bounds.body, bounds.end).trim() : '';
+}
+
+/**
+ * A passage as a memo note holds it: its line (label, who, when) and its text, with your comment; and
+ * the chat and message its link goes to.
+ */
+export interface SavedPassage {
+  header: string;
+  text: string;
+  comment: string;
+  chat?: string;
+  msg?: string;
+}
+
+/** The passages in a memo note's Sources section, in order (see memoSourcesMarkdown). */
+export function savedPassages(note: string): SavedPassage[] {
+  const lines = memoSection(note, 'Sources').split('\n');
+  const passages: SavedPassage[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const head = /^\*\*(.+?)\*\* · \[Go to the passage\]\(obsidian:\/\/vault-claude\?([^)\s]*)\)/.exec(lines[i]);
+    if (!head) continue;
+    const params = new URLSearchParams(head[2]);
+    let j = i + 1;
+    while (j < lines.length && !lines[j].startsWith('>')) j += 1;
+    const quoted: string[] = [];
+    for (; j < lines.length && lines[j].startsWith('>'); j += 1) quoted.push(lines[j].replace(/^> ?/, ''));
+    while (j < lines.length && !lines[j].trim()) j += 1;
+    const line = j < lines.length ? lines[j].trim() : '';
+    // Before the comment mark, a comment was the line in italics.
+    const comment = line.startsWith(COMMENT_MARK.trim()) ? line.slice(COMMENT_MARK.trim().length).trim() : /^\*[^*].*\*$/.test(line) ? line.slice(1, -1) : '';
+    passages.push({ header: head[1], text: quoted.join('\n').trim(), comment, chat: params.get('chat') ?? undefined, msg: params.get('msg') ?? undefined });
+  }
+  return passages;
+}
+
+/**
+ * The draft that starts a chat from a memo (see ContinueMemoModal): the memo by name, what you chose
+ * of it (your Why and Next, passages), and the related notes as `@` mentions, so they go with it.
+ */
+export function continueDraft(memo: { name: string; why: string; next: string; passages: SavedPassage[]; notes: string[] }): string {
+  // Only the related notes ticked go with it: a mention in what is quoted stays a plain link.
+  const quiet = (text: string) => text.replace(/@(?=\[\[)/g, '');
+  const parts = [`Continuing from the memo [[${memo.name}]].`];
+  if (memo.why) parts.push(`Why I kept it: ${quiet(memo.why)}`);
+  if (memo.next) parts.push(`Next: ${quiet(memo.next)}`);
+  if (memo.passages.length > 0) {
+    parts.push('Passages:');
+    for (const passage of memo.passages) {
+      parts.push(`${quiet(passage.header)}:\n${blockquote(quiet(passage.text))}${passage.comment ? `\n(${quiet(passage.comment)})` : ''}`);
+    }
+  }
+  if (memo.notes.length > 0) parts.push(`Related notes: ${memo.notes.map((note) => `@${note}`).join(' ')}`);
+  return `${parts.join('\n\n')}\n\n`;
 }
 
 /**
@@ -207,7 +330,8 @@ export function quickMemoTitle(passages: MemoPassage[]): string {
  */
 export function freeMemoTitle(title: string, stamp: string, taken: (name: string) => boolean): string {
   if (!taken(memoNoteName(title))) return title;
-  const stamped = `${title} ${stamp}`;
+  // Short enough that the date and number still fit in a note name (see memoNoteName), so each candidate differs.
+  const stamped = `${title.slice(0, 60).trim()} ${stamp}`;
   for (let n = 1; ; n += 1) {
     const candidate = n === 1 ? stamped : `${stamped} ${n}`;
     if (!taken(memoNoteName(candidate))) return candidate;
@@ -260,7 +384,7 @@ export function chatMemosView(chatTitle: string): string {
 export const ALL_MEMOS_VIEW = 'All memos';
 
 /** The columns of the Memos base's views: its chats as links that open them (see chatLinksFormula). */
-const BASE_COLUMNS = ['send', 'done', 'file.name', 'tags', 'formula.chat', 'notes', 'updated'];
+const BASE_COLUMNS = ['send', 'done', 'file.name', 'status', 'tags', 'formula.chat', 'notes', 'updated'];
 
 /** Every view of the Memos base but Done leaves out the memos finished with. */
 const NOT_DONE = 'done != true';
@@ -344,6 +468,8 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
     '    displayName: Send to chat',
     '  done:',
     '    displayName: Done',
+    '  status:',
+    '    displayName: Status',
     '  file.name:',
     '    displayName: Memo',
     '  tags:',
@@ -414,7 +540,25 @@ export function retargetMemoBase(base: unknown, chatId: string, chatTitle: strin
       typeof value === 'string' ? (picksChat(value) ? chatFilter(chatId) : value) : Array.isArray(value) ? value.map(retarget) : typeof value === 'object' && value !== null ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, retarget(inner)])) : value;
     views[at] = { ...view, name: chatMemosView(chatTitle), filters: retarget(view.filters) };
   }
-  return addDoneBoxes({ ...record, formulas, properties, views });
+  return addStatusColumn(addDoneBoxes({ ...record, formulas, properties, views }));
+}
+
+/**
+ * A Memos base from before the Status column, given it once, after the memo's name in each of the
+ * plugin's views (those that pick memos by type); views of your own are left as they are. One that
+ * has it is returned as it is.
+ */
+function addStatusColumn(base: Record<string, unknown>): Record<string, unknown> {
+  const properties = base.properties as Record<string, unknown>;
+  if (properties.status !== undefined) return base;
+  const views = (base.views as unknown[]).map((view) => {
+    if (typeof view !== 'object' || view === null || !Array.isArray((view as { order?: unknown }).order)) return view;
+    const and = ((view as { filters?: { and?: unknown } }).filters ?? {}).and;
+    const order = (view as { order: unknown[] }).order;
+    if (!Array.isArray(and) || !and.includes('type == "memo"') || order.includes('status')) return view;
+    return { ...(view as Record<string, unknown>), order: order.flatMap((column) => (column === 'file.name' ? ['file.name', 'status'] : [column])) };
+  });
+  return { ...base, properties: { ...properties, status: { displayName: 'Status' } }, views };
 }
 
 /**

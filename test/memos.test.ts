@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { TFile } from 'obsidian';
+import { mentionTargets } from '../src/contextSize';
 import {
   addMemoSources,
   chatLink,
@@ -16,6 +17,10 @@ import {
   pairChat,
   passageNeedle,
   readMemoSuggestion,
+  passagesAlreadyIn,
+  memoSection,
+  savedPassages,
+  continueDraft,
   type MemoSources,
 } from '../src/memos';
 
@@ -34,7 +39,7 @@ test('a new memo note: frontmatter with its tags, title, description, and each p
   const note = memoNoteMarkdown({ title: 'Repayment timing may change equilibrium selection', description: 'Test it under other continuation choices.', tags: ['idea', 'read'], notes: ['[[Model setup]]'], sources });
   assert.match(
     note,
-    /^---\ntype: memo\ntags: \[idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\ndone: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Sources\n\n### Debt model draft · 2026-10-03\n/,
+    /^---\ntype: memo\ntags: \[idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\ndone: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Why\n\n## Next\n\n## Sources\n\n### Debt model draft · saved 2026-10-03\n/,
   );
   assert.ok(note.includes('**You** · [Go to the passage](obsidian://vault-claude?vault=Obsidian&chat=chat-1&find=Does%20the%20result%20survive)'));
   assert.ok(note.includes('> Does the result survive\n> recursive repayment?'));
@@ -47,7 +52,7 @@ test('passages added later go at the end of the Sources section, before any sect
   const note = memoNoteMarkdown({ title: 'Memo', description: '', tags: [], notes: [], sources });
   const withNotes = `${note}\n## Notes\n\nMine.\n`;
   const added = addMemoSources(withNotes, { ...sources, chatId: 'chat-2', chatTitle: 'Follow-up', passages: [{ role: 'you', text: 'A refinement.', needle: 'A refinement.' }] });
-  const follow = added.indexOf('### Follow-up · 2026-10-03');
+  const follow = added.indexOf('### Follow-up · saved 2026-10-03');
   assert.ok(follow > added.indexOf('A possible mechanism'));
   assert.ok(follow < added.indexOf('## Notes'));
   assert.ok(added.endsWith('Mine.\n'));
@@ -121,7 +126,8 @@ test("turning the base to another chat changes its chat view only, and keeps wha
   assert.deepEqual(turned.properties.send, base.properties.send);
   // A base from before chats were links gets the formula, and its views the column.
   assert.ok(turned.formulas.chat.startsWith('claude_chats.map(link('));
-  assert.deepEqual(turned.views[0].order, ['file.name']);
+  // The Status column, once, after the memo's name.
+  assert.deepEqual(turned.views[0].order, ['file.name', 'status']);
   // A base whose chat view was removed gets one again, first; something else is not a base.
   const without = retargetMemoBase({ views: [{ name: 'Only mine', order: ['chats'] }] }, 'chat-3', 'Third', 'V') as { views: { name: string; order?: string[]; filters?: { and: string[] } }[] };
   assert.deepEqual(without.views.map((view) => view.name), ['Chat: Third', 'Only mine', 'Done']);
@@ -138,10 +144,14 @@ test("a memo's Send box puts it in the input when ticked, takes it out when clea
   (p as unknown as { app: unknown }).app = { workspace: { getLeavesOfType: () => [] } };
   p.attachToClaude = async (items) => void attached.push(...items.map((item) => item.path));
   const memo = { path: 'Claude chats/Memos/A memo.md' } as never;
+  // As found when Obsidian has loaded (see seedMemoBoxes): cleared.
+  await p.followMemoBox(memo, false);
   await p.followMemoBox(memo, true);
   // Another edit of the memo, its box still ticked: nothing more.
   await p.followMemoBox(memo, true);
   await p.followMemoBox(memo, false);
+  // A memo first seen with its box ticked (left so, or synced in): taken as it is, not as ticked now.
+  await p.followMemoBox({ path: 'Claude chats/Memos/Left ticked.md' } as never, true);
   assert.deepEqual(attached, ['Claude chats/Memos/A memo.md']);
 });
 
@@ -188,6 +198,8 @@ test('a link from a memo opens its chat, then finds the passage or quotes it; a 
   const done: string[] = [];
   const view = { quote: (text: string) => void done.push(`quote ${text}`), findPassage: async (text: string) => void done.push(`find ${text}`) };
   p.chats = [{ id: 'c1', title: 'Debt model' }];
+  // A vault whose sessions cannot be looked for: the chat is opened, and what it holds says the rest.
+  p.vaultRoot = () => null;
   p.openChatById = async (id: string, title: string) => {
     done.push(`open ${id} ${title}`);
     return id === 'gone' ? null : (view as never);
@@ -205,6 +217,9 @@ test('a link from a memo opens its chat, then finds the passage or quotes it; a 
     },
   };
   await open({ chat: 'c1', memo: 'Claude chats/Memos/M.md' });
+  // A chat whose session file is gone is not opened: the passage stays readable in the memo.
+  p.vaultRoot = () => '/no/such/vault';
+  await open({ chat: 'c1', find: 'A mechanism:' });
   assert.deepEqual(done, ['open c1 Debt model', 'find A mechanism:', 'open c1 Debt model', 'quote A mechanism: $q(b)$', 'open gone Chat', 'open c1 Debt model', 'find First words']);
 });
 
@@ -222,6 +237,7 @@ test("a memo's Send box cleared in the base takes its mention out of every panel
   (p as unknown as { app: unknown }).app = { workspace: { getLeavesOfType: () => leaves } };
   p.attachToClaude = async () => undefined;
   const memo = { path: 'Claude chats/Memos/A memo.md' } as never;
+  await p.followMemoBox(memo, false);
   await p.followMemoBox(memo, true);
   await p.followMemoBox(memo, false);
   assert.deepEqual(taken, ['first: Claude chats/Memos/A memo.md', 'second: Claude chats/Memos/A memo.md']);
@@ -273,13 +289,14 @@ test('a table from before the Done box gets it once: the column, the filter in i
   };
   const once = retargetMemoBase(old, 'a', 'A', 'V') as { properties: Record<string, unknown>; views: { name: string; order: string[]; filters: { and: string[] } }[] };
   assert.deepEqual(once.views.map((view) => view.name), ['Chat: A', 'Mine', 'Done']);
-  assert.deepEqual(once.views[0].order, ['send', 'done', 'file.name']);
+  assert.deepEqual(once.views[0].order, ['send', 'done', 'file.name', 'status']);
+  assert.deepEqual(once.views[1].order, ['file.name']);
   assert.ok(once.views[0].filters.and.includes('done != true'));
   assert.deepEqual(once.views[1].filters.and, ['file.hasTag("x")']);
   // Again: nothing more is added.
   const twice = retargetMemoBase(once, 'a', 'A', 'V') as { views: { name: string; order: string[] }[] };
   assert.deepEqual(twice.views.map((view) => view.name), ['Chat: A', 'Mine', 'Done']);
-  assert.deepEqual(twice.views[0].order, ['send', 'done', 'file.name']);
+  assert.deepEqual(twice.views[0].order, ['send', 'done', 'file.name', 'status']);
 });
 
 test("a link from the table finds the memo's first passage from its chat", () => {
@@ -315,4 +332,93 @@ test('a link keeps working when its words hold an unmatched parenthesis', () => 
   assert.equal(link, 'obsidian://vault-claude?vault=V&chat=c&msg=u%231&find=His%20CV%20%28fetched%202026');
   const note = `**Claude** · [Go to the passage](${link}) · [Continue](${chatLink({ vault: 'V', chat: 'c', quote: 'on [0,1)' })})`;
   assert.deepEqual(firstPassageTarget(note, 'c'), { msg: 'u#1', find: 'His CV (fetched 2026' });
+});
+
+test('a passage carries its label, the date its message was written, and your comment; the group, the day it was saved', () => {
+  const note = memoNoteMarkdown({
+    title: 'Repayment timing matters',
+    description: '',
+    why: 'This may resolve the inconsistency in the proof.',
+    tags: ['idea'],
+    notes: [],
+    sources: { ...sources, passages: [{ role: 'you', text: 'Could repayment happen first?', needle: 'Could repayment', message: 'm1', written: '2026-10-02', label: 'Starting point', comment: 'the question that started it' }] },
+  });
+  assert.ok(note.includes('## Why\n\nThis may resolve the inconsistency in the proof.\n\n## Next\n\n## Sources'));
+  assert.ok(note.includes('### Debt model draft · saved 2026-10-03'));
+  assert.ok(note.includes('**Starting point · You · 2026-10-02** · [Go to the passage]'));
+  assert.ok(note.includes('> Could repayment happen first?\n\n*Comment:* the question that started it'));
+  // A bookmark has no Why or Next of yours.
+  assert.ok(!memoNoteMarkdown({ title: 'B', description: '', tags: ['bookmark'], notes: [], sources }).includes('## Why'));
+});
+
+test('read back from a memo: its Why, Next and passages; the same passage of the same message is found already in it', () => {
+  const passage = { role: 'claude' as const, text: 'Under that timing, $x$ holds.', needle: 'Under that timing', message: 'm2', label: 'Development' as const, comment: 'the key step' };
+  let note = memoNoteMarkdown({ title: 'Idea', description: 'D.', why: 'Why so.', tags: ['idea'], notes: [], sources: { ...sources, passages: [passage] } });
+  note = note.replace('## Next\n', '## Next\n\nCheck continuous z.\n');
+  assert.equal(memoSection(note, 'Why'), 'Why so.');
+  assert.equal(memoSection(note, 'Next'), 'Check continuous z.');
+  assert.deepEqual(savedPassages(note), [{ header: 'Development · Claude', text: 'Under that timing, $x$ holds.', comment: 'the key step', chat: 'chat-1', msg: 'm2' }]);
+  assert.equal(passagesAlreadyIn(note, 'chat-1', [passage]).length, 1);
+  assert.equal(passagesAlreadyIn(note, 'chat-1', [{ ...passage, message: 'm3' }]).length, 0);
+  assert.equal(passagesAlreadyIn(note, 'chat-2', [passage]).length, 0);
+  // Adding passages leaves your Why and Next as they are.
+  const added = addMemoSources(note, { ...sources, passages: [{ role: 'you', text: 'More.', needle: 'More.' }] });
+  assert.equal(memoSection(added, 'Why'), 'Why so.');
+  assert.equal(memoSection(added, 'Next'), 'Check continuous z.');
+  const draft = continueDraft({ name: 'Idea', why: 'Why so.', next: '', passages: savedPassages(note), notes: ['[[Model setup]]'] });
+  assert.ok(draft.startsWith('Continuing from the memo [[Idea]].\n\nWhy I kept it: Why so.\n\nPassages:\n\nDevelopment · Claude:\n> Under that timing, $x$ holds.\n(the key step)'));
+  assert.ok(draft.endsWith('Related notes: @[[Model setup]]\n\n'));
+});
+
+test('a bookmark saved with a Why keeps it', () => {
+  const note = memoNoteMarkdown({ title: 'B', description: '', why: 'Worth a look.', tags: ['bookmark'], notes: [], sources });
+  assert.ok(note.includes('## Why\n\nWorth a look.\n\n## Next'));
+});
+
+test('a passage is already in a memo only as one saved passage: the same text, chat and message together', () => {
+  const at = (text: string, message: string) => ({ role: 'claude' as const, text, needle: text, message });
+  const note = memoNoteMarkdown({ title: 'M', description: '', tags: [], notes: [], sources: { ...sources, passages: [at('Text A', 'm1'), at('Text B', 'm2')] } });
+  assert.equal(passagesAlreadyIn(note, 'chat-1', [at('Text A', 'm2')]).length, 0);
+  assert.equal(passagesAlreadyIn(note, 'chat-1', [at('Text B', 'm2')]).length, 1);
+  assert.equal(passagesAlreadyIn(note, 'chat-1', [{ role: 'claude', text: 'Text A', needle: 'Text A' }]).length, 1);
+});
+
+test('continuing from a memo: a mention in what is quoted does not attach its note', () => {
+  const draft = continueDraft({
+    name: 'Idea',
+    why: 'See @[[Private note]].',
+    next: '@[[Other]] first',
+    passages: [{ header: 'Claude', text: 'As in @[[Private note]].', comment: 'cf. @[[Third]]' }],
+    notes: [],
+  });
+  assert.equal(mentionTargets(draft).length, 0);
+  assert.ok(draft.includes('As in [[Private note]].'));
+  assert.deepEqual(mentionTargets(continueDraft({ name: 'Idea', why: '', next: '', passages: [], notes: ['[[Kept]]'] })), ['Kept']);
+});
+
+test('a heading inside a code example in a memo is not a section', () => {
+  const why = 'An example:\n\n```markdown\n## Sources\n\n## Next\n```';
+  const note = memoNoteMarkdown({ title: 'M', description: '', why, tags: [], notes: [], sources });
+  assert.equal(memoSection(note, 'Why'), why);
+  assert.equal(savedPassages(note).length, 2);
+  const added = addMemoSources(note, { ...sources, chatTitle: 'Later', passages: [{ role: 'you', text: 'More.', needle: 'More.' }] });
+  assert.equal(memoSection(added, 'Why'), why);
+  assert.ok(added.indexOf('### Later') > added.indexOf('### Debt model'));
+  assert.equal(savedPassages(added).length, 3);
+});
+
+test('a comment is read back as written, emphasis and all', () => {
+  const passage = { role: 'claude' as const, text: 'X.', needle: 'X.', comment: '**Important** correction' };
+  const note = memoNoteMarkdown({ title: 'M', description: '', tags: [], notes: [], sources: { ...sources, passages: [passage] } });
+  assert.ok(note.includes('*Comment:* **Important** correction'));
+  assert.equal(savedPassages(note)[0]?.comment, '**Important** correction');
+});
+
+test('a long title already taken still gets a free name: the date and number are never cut off', () => {
+  const title = 'A very long memo title that goes on and on well past what fits into a note name in this vault of ours';
+  const taken = new Set([memoNoteName(title)]);
+  const free = freeMemoTitle(title, '2026-10-05 1200', (name) => taken.has(name));
+  assert.ok(!taken.has(memoNoteName(free)));
+  taken.add(memoNoteName(free));
+  assert.ok(!taken.has(memoNoteName(freeMemoTitle(title, '2026-10-05 1200', (name) => taken.has(name)))));
 });

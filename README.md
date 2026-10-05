@@ -19,6 +19,18 @@ Built by **Claude Opus 5** (`claude-opus-5`) and **Claude Opus 5.5** (`claude-op
 
 ## Installation
 
+### With BRAT (installs and updates automatically)
+
+Vault Claude is not in Obsidian's community plugin directory. [BRAT](https://github.com/TfTHacker/obsidian42-brat) (Beta Reviewers Auto-update Tool), itself a community plugin, installs plugins from their GitHub releases and keeps them up to date.
+
+1. In Obsidian, open **Settings → Community plugins**, turn off Restricted mode if it is on, choose **Browse**, search for **BRAT**, install it and enable it.
+2. Run the command **BRAT: Add a beta plugin for testing**.
+3. Paste `manuelamador/obsidian-vault-claude` and choose **Add Plugin**. BRAT downloads `main.js`, `manifest.json` and `styles.css` from the latest release into `<vault>/.obsidian/plugins/vault-claude/`.
+4. If the plugin is not enabled already, enable **Vault Claude** under **Settings → Community plugins**.
+5. Open the chat with the robot icon in the left ribbon, or the command **Vault Claude: Open chat**.
+
+**Updating:** BRAT can update its plugins each time Obsidian starts (a setting in BRAT's settings tab); otherwise run **BRAT: Check for updates to all beta plugins and UPDATE**. Switch Vault Claude off and on afterwards if it was running.
+
 ### From a release (no build needed)
 
 1. Download `main.js`, `manifest.json` and `styles.css` from the latest [release](https://github.com/manuelamador/obsidian-vault-claude/releases).
@@ -254,7 +266,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ### Safety
 
-- Remote images in replies appear as links rather than loading automatically.
+- Images in replies display only when they are files in the vault; any other appears as a link rather than loading automatically. Raw HTML in replies shows as text, except a few plain tags such as `<br>` and `<sup>`.
 - Bypass mode requires enabling it in settings and never runs from the phone.
 - Closing a panel transfers running chats to another Claude panel, or stops them if none remains; a plan, question or approval still waiting is then answered as not approved. Claude processes end when Obsidian quits.
 - Chats are saved as they go and can be resumed from history.

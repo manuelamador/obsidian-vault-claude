@@ -1926,6 +1926,65 @@ button.vc-continue-button:hover span:last-child {
   gap: var(--size-4-1);
 }
 
+/* Add to: a button that opens the search of memos. */
+.vc-memo-target {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Related notes: each a chip with an ×, then Add a note…. */
+.vc-memo-notes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-1);
+}
+
+.vc-memo-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 0 0 var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-small);
+}
+
+.vc-memo-note .clickable-icon {
+  padding: 2px;
+}
+
+/* A passage's head: who and when, then Label…, quiet until used. */
+.vc-memo-role {
+  display: flex;
+  gap: var(--size-4-2);
+}
+
+.vc-memo-label-link {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-memo-labelling {
+  display: flex;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-1);
+}
+
+.vc-memo-labelling input {
+  flex: 1;
+}
+
+/* Continue from a memo: what goes along, a box each. */
+.vc-memo-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-4-2);
+}
+
 .vc-memo-kind.is-on {
   background: var(--interactive-accent);
   color: var(--text-on-accent);

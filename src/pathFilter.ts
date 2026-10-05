@@ -12,6 +12,7 @@ export function hiddenPaths(patterns: string): (path: string) => boolean {
   return (path: string) => !/\.md$/i.test(path) || rules.some((rule) => rule.test(path));
 }
 
-function escapeRegExp(text: string): string {
+/** `text` matched as it is in a regular expression. */
+export function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

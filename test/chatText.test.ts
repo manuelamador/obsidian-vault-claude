@@ -49,3 +49,9 @@ test('withQuote adds a quote after what is typed, with a line to write on, cut u
   assert.equal(withQuote('', long).includes('end'), false);
   assert.equal(withQuote('', long, Infinity).endsWith('end\n\n'), true);
 });
+
+test("a reply's text as it reads drawn: no equations, links as their text, no emphasis or code marks", async () => {
+  const { shownText } = await import('../src/chatText');
+  assert.equal(shownText('A **bold** move, $\\frac{a}{b}$ and [the paper](https://x.org) in `code`, file_name kept.'), 'A bold move,   and the paper in code, file_name kept.');
+  assert.equal(shownText('## Heading\n> quoted [[Note|alias]]\n$$\nx\n$$'), 'Heading\nquoted alias\n ');
+});
