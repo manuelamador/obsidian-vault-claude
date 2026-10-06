@@ -203,7 +203,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Files left out of a chat\'s notes')
-      .setDesc('Only notes (.md) are listed by the notes button and by a note\'s chat links. These patterns leave out more of them, one per line; * stands for any characters.')
+      .setDesc('Only notes (.md) are listed by the notes button, by a note\'s chat links, and when linking a memo. These patterns leave out more of them, one per line; * stands for any characters.')
       .addTextArea((text) =>
         text
           .setPlaceholder('*attachments/*')

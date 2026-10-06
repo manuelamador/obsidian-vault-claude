@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
 import { ContinueMemoModal } from './memoModal';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
@@ -349,7 +349,10 @@ export default class VaultClaudePlugin extends Plugin {
     this.registerNoteEvents();
     this.registerEvent(this.app.workspace.on('files-menu', (menu, files) => attachItem(menu, files)));
     // A memo's Send box ticked or cleared, in the Memos base: the memo goes into the chat's input, or out of it (see followMemoBox).
-    this.app.workspace.onLayoutReady(() => this.seedMemoBoxes());
+    this.app.workspace.onLayoutReady(() => {
+      this.seedMemoBoxes();
+      void this.renameDoneMemos();
+    });
     this.registerEvent(
       this.app.metadataCache.on('changed', (file, _data, cache) => {
         if (cache.frontmatter?.type === 'memo') void this.followMemoBox(file, cache.frontmatter.send === true);
@@ -1043,6 +1046,25 @@ export default class VaultClaudePlugin extends Plugin {
     for (const file of this.memoNotes()) this.memoBoxes.set(file.path, this.app.metadataCache.getFileCache(file)?.frontmatter?.send === true);
   }
 
+  /** Memos from when an archived memo was called done (before 0.27.0): their `done` property becomes `archived`. */
+  private async renameDoneMemos(): Promise<void> {
+    for (const file of this.memoNotes()) {
+      if (this.app.metadataCache.getFileCache(file)?.frontmatter?.done === undefined) continue;
+      await this.app.fileManager
+        .processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+          if (frontmatter.done === undefined) return;
+          frontmatter.archived ??= frontmatter.done === true;
+          delete frontmatter.done;
+        })
+        .catch((error: unknown) => log(`renaming done to archived in ${file.path} failed`, error));
+    }
+  }
+
+  /** Whether memo `file` is archived (its `archived` box ticked). */
+  isArchived(file: TFile): boolean {
+    return this.app.metadataCache.getFileCache(file)?.frontmatter?.archived === true;
+  }
+
   async attachToClaude(items: TAbstractFile[]): Promise<void> {
     const view = this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView());
     view?.mentionItems(items);
@@ -1216,13 +1238,18 @@ export default class VaultClaudePlugin extends Plugin {
    */
   async continueFromMemo(file: TFile): Promise<void> {
     const note = await this.app.vault.cachedRead(file);
-    const notes = this.app.metadataCache.getFileCache(file)?.frontmatter?.notes;
-    const parts = {
-      why: memoSection(note, 'Why'),
-      next: memoSection(note, 'Next'),
-      passages: savedPassages(note),
-      notes: Array.isArray(notes) ? notes.map(String) : [],
-    };
+    const listed = this.app.metadataCache.getFileCache(file)?.frontmatter?.notes;
+    // Its links that are memos are offered as linked memos, the rest as related notes.
+    const notes: string[] = [];
+    const linked: LinkedMemo[] = [];
+    for (const link of Array.isArray(listed) ? listed.map(String) : []) {
+      const target = this.app.metadataCache.getFirstLinkpathDest(link.replace(/^\[\[|\]\]$/g, '').split('|')[0], file.path);
+      if (target && target.path !== file.path && this.isMemo(target)) {
+        const text = await this.app.vault.cachedRead(target);
+        linked.push({ name: target.basename, why: memoSection(text, 'Why'), passages: savedPassages(text) });
+      } else notes.push(link);
+    }
+    const parts = { why: memoSection(note, 'Why'), next: memoSection(note, 'Next'), passages: savedPassages(note), notes, linked };
     new ContinueMemoModal(this.app, file.basename, parts, async (chosen) => {
       const panel = await this.activateView();
       const view = panel && (await this.openChatTab(panel.leaf));

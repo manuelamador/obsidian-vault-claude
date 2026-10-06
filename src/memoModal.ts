@@ -1,27 +1,21 @@
-// The form for saving passages of a chat as a memo: a new memo, with its title, description, why you
-// keep it, tags and related notes, or a memo already saved, to add the passages (and any tags and
-// notes) to. Each passage can be given a label for how it contributed to the idea, and a comment.
-// Claude suggests a title and description from the passages as the form opens; what you type is
-// never overwritten. Saved with no title, before the suggestion or without one, the memo is a
-// bookmark (see quickMemoTitle).
-import { Modal, SuggestModal, TFile, setIcon, type App } from 'obsidian';
-import { CONTRIBUTIONS, MEMO_KINDS, cleanTags, type Contribution, type MemoPassage, type SavedPassage } from './memos';
+// The form for saving passages of a chat as a memo: a new memo each time, with its title, a
+// description, why you keep it, tags, and the memos and notes it links to. Claude suggests a title
+// and description from the passages as the form opens; what you type is never overwritten. Saved
+// with no title, before the suggestion or without one, the memo is a bookmark (see quickMemoTitle).
+import { Modal, SuggestModal, setIcon, type App, type TFile } from 'obsidian';
+import { MEMO_KINDS, cleanTags, type LinkedMemo, type MemoPassage, type SavedPassage } from './memos';
 import { errorText, log } from './log';
-import { NotePicker } from './notePicker';
 
 /**
- * What the form was filled in with: the memo to add to (null for a new one), a new memo's title (empty
- * for a bookmark), description and why, the tags, the related notes kept (as wikilinks), and the
- * passages with any labels and comments given.
+ * What the form was filled in with: the title (empty for a bookmark), description and why, the
+ * tags, and the memos and notes linked (as wikilinks).
  */
 export interface MemoChoice {
-  memo: TFile | null;
   title: string;
   description: string;
   why: string;
   tags: string[];
   notes: string[];
-  passages: MemoPassage[];
 }
 
 /** Asks for a title and description for the passages; null when there is none. */
@@ -29,23 +23,26 @@ type MemoSuggester = (signal: AbortSignal) => Promise<{ title: string; descripti
 
 /** What the form needs from the panel besides the passages. */
 export interface MemoFormHost {
-  /** The memos to add to, in the order offered: about the note in front, then this chat's, then the rest by date. */
+  /** The memos offered to link first: this chat's and those about the note in front, then the rest by date; archived ones last. */
   memos: TFile[];
-  /** The related notes suggested for the passages, as wikilinks: the attached note first. */
-  notes: string[];
-  /** A note as a wikilink, for one added by hand. */
+  /** Whether a memo is archived: still offered, labelled so. */
+  archived(memo: TFile): boolean;
+  /** The vault's other notes, offered after the memos. */
+  notes(): TFile[];
+  /** The links suggested for the passages, as wikilinks: the attached note first. */
+  links: string[];
+  /** A note as a wikilink. */
   noteLink(file: TFile): string;
   /** Why a new memo cannot take `title` (a note of that name exists), or null. */
   titleProblem(title: string): string | null;
-  /** How many of the passages memo `memo` holds already (see passagesAlreadyIn). */
-  alreadyIn(memo: TFile, passages: MemoPassage[]): Promise<number>;
-  /** Opens memo `memo`. */
-  open(memo: TFile): void;
   suggest?: MemoSuggester;
 }
 
 /** Longest stretch of a passage shown in the form; the note gets the whole of it. */
 const PREVIEW_CHARS = 400;
+
+/** The most notes listed in the link picker at once; typing narrows them. */
+const MAX_LINK_CHOICES = 100;
 
 export class MemoModal extends Modal {
   /** The suggestion being asked for; aborted when it is not wanted any more. */
@@ -65,23 +62,14 @@ export class MemoModal extends Modal {
     this.titleEl.setText('Save a memo');
     contentEl.addClass('vc-memo-form');
 
-    // Where the passages go: a new memo, or one picked from a search of those saved.
-    let memo: TFile | null = null;
-    const target = contentEl.createDiv({ cls: 'vc-memo-field' });
-    target.createEl('label', { text: 'Add to' });
-    const pick = target.createEl('button', { cls: 'vc-memo-target' });
-    const showTarget = () => pick.setText(memo ? memo.basename : 'A new memo');
-    showTarget();
-
-    const fresh = contentEl.createDiv();
-    const titleField = fresh.createDiv({ cls: 'vc-memo-field' });
+    const titleField = contentEl.createDiv({ cls: 'vc-memo-field' });
     titleField.createEl('label', { text: 'Title' });
     const title = titleField.createEl('input', { attr: { type: 'text', placeholder: 'None: saved as a bookmark, titled by its first words' } });
-    const descriptionField = fresh.createDiv({ cls: 'vc-memo-field' });
+    const descriptionField = contentEl.createDiv({ cls: 'vc-memo-field' });
     descriptionField.createEl('label', { text: 'Description' });
     const description = descriptionField.createEl('textarea', { attr: { rows: '3' } });
-    const status = fresh.createDiv({ cls: 'vc-memo-status' });
-    const whyField = fresh.createDiv({ cls: 'vc-memo-field' });
+    const status = contentEl.createDiv({ cls: 'vc-memo-status' });
+    const whyField = contentEl.createDiv({ cls: 'vc-memo-field' });
     whyField.createEl('label', { text: 'Why I’m keeping this' });
     const why = whyField.createEl('textarea', { attr: { rows: '2', placeholder: 'Optional: what it might do for you' } });
 
@@ -101,66 +89,42 @@ export class MemoModal extends Modal {
     }
     const otherTags = tagsField.createEl('input', { attr: { type: 'text', placeholder: 'Other tags, separated by commas' } });
 
-    // Related notes: those suggested, each removable, and any added from the vault.
-    const notesField = contentEl.createDiv({ cls: 'vc-memo-field' });
-    notesField.createEl('label', { text: 'Related notes' });
-    const chips = notesField.createDiv({ cls: 'vc-memo-notes' });
-    const notes = [...this.host.notes];
-    const drawNotes = () => {
+    // Links: to other memos and to notes, those suggested each removable, and any added.
+    const linksField = contentEl.createDiv({ cls: 'vc-memo-field' });
+    linksField.createEl('label', { text: 'Related memos and notes' });
+    const chips = linksField.createDiv({ cls: 'vc-memo-notes' });
+    const links = [...this.host.links];
+    const drawLinks = () => {
       chips.empty();
-      for (const note of notes) {
+      for (const link of links) {
         const chip = chips.createDiv({ cls: 'vc-memo-note' });
-        chip.createSpan({ text: note.replace(/^\[\[|\]\]$/g, '') });
-        const remove = chip.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Leave this note out' } });
+        chip.createSpan({ text: link.replace(/^\[\[|\]\]$/g, '') });
+        const remove = chip.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Leave this link out' } });
         setIcon(remove, 'x');
         remove.addEventListener('click', () => {
-          notes.splice(notes.indexOf(note), 1);
-          drawNotes();
+          links.splice(links.indexOf(link), 1);
+          drawLinks();
         });
       }
-      const add = chips.createEl('button', { cls: 'vc-memo-add-note', text: 'Add a note…' });
+      const add = chips.createEl('button', { cls: 'vc-memo-add-note', text: 'Link a memo or note…' });
       add.addEventListener('click', () =>
-        new NotePicker(
-          this.app,
-          (file) => {
-            if (!(file instanceof TFile)) return;
-            const link = this.host.noteLink(file);
-            if (!notes.includes(link)) notes.push(link);
-            drawNotes();
-          },
-          true,
-        ).open(),
+        new LinkPicker(this.app, this.host, (file) => {
+          const link = this.host.noteLink(file);
+          if (!links.includes(link)) links.push(link);
+          drawLinks();
+        }).open(),
       );
     };
-    drawNotes();
+    drawLinks();
 
-    // The passages, each with a label and a comment of yours behind "Label…".
-    const passages = this.passages.map((passage) => ({ ...passage }));
+    // The passages, as they will be saved.
     const list = contentEl.createDiv({ cls: 'vc-memo-passages' });
-    list.createDiv({ cls: 'vc-memo-passages-title', text: passages.length === 1 ? 'Passage' : `${passages.length} passages, in order` });
-    for (const passage of passages) {
+    list.createDiv({ cls: 'vc-memo-passages-title', text: this.passages.length === 1 ? 'Passage' : `${this.passages.length} passages, in order` });
+    for (const passage of this.passages) {
       const item = list.createDiv({ cls: 'vc-memo-passage' });
-      const head = item.createDiv({ cls: 'vc-memo-role' });
-      head.createSpan({ text: [passage.role === 'you' ? 'You' : 'Claude', passage.written].filter(Boolean).join(' · ') });
-      const labelLink = head.createEl('a', { cls: 'vc-memo-label-link', text: 'Label…', href: '#' });
+      item.createDiv({ cls: 'vc-memo-role', text: [passage.role === 'you' ? 'You' : 'Claude', passage.written].filter(Boolean).join(' · ') });
       const text = passage.text.trim();
       item.createDiv({ cls: 'vc-memo-excerpt', text: text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS - 1)}…` : text });
-      const labelling = item.createDiv({ cls: 'vc-memo-labelling' });
-      labelling.hide();
-      const select = labelling.createEl('select', { cls: 'dropdown' });
-      select.createEl('option', { text: 'No label', attr: { value: '' } });
-      for (const label of CONTRIBUTIONS) select.createEl('option', { text: label, attr: { value: label } });
-      const comment = labelling.createEl('input', { attr: { type: 'text', placeholder: 'A comment of yours (optional)' } });
-      select.addEventListener('change', () => {
-        passage.label = (select.value || undefined) as Contribution | undefined;
-        labelLink.setText(passage.label ?? 'Label…');
-      });
-      comment.addEventListener('input', () => (passage.comment = comment.value.trim() || undefined));
-      labelLink.addEventListener('click', (evt) => {
-        evt.preventDefault();
-        labelling.toggle(!labelling.isShown());
-        if (labelling.isShown()) select.focus();
-      });
     }
 
     const problem = contentEl.createDiv({ cls: 'vc-memo-problem' });
@@ -170,34 +134,10 @@ export class MemoModal extends Modal {
     const save = buttons.createEl('button', { cls: 'mod-cta', text: 'Save' });
     buttons.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
 
-    // The same passage of the same message, in the memo chosen already: said once, then added if saved again.
-    let duplicatesSeen = false;
-    // One save at a time: a check on its way is let go when the form closes or the memo chosen changes.
-    let saving = 0;
-    pick.addEventListener('click', () =>
-      new MemoPicker(this.app, this.host.memos, (chosen) => {
-        memo = chosen;
-        duplicatesSeen = false;
-        saving += 1;
-        save.disabled = false;
-        showTarget();
-        fresh.toggle(!memo);
-        problem.hide();
-        // Adding to a memo already saved needs no title or description: a suggestion on its way is let go,
-        // and asked for again on going back to a new memo.
-        if (memo) {
-          this.suggesting.abort();
-          this.suggesting = new AbortController();
-          status.setText('');
-        } else if (!title.value.trim()) void askClaude();
-      }).open(),
-    );
-
     // A suggestion fills a field only while it is empty or holds the last suggestion: never what was typed.
     const filled = { title: '', description: '' };
     const fillable = (field: HTMLInputElement | HTMLTextAreaElement, last: string) => !field.value.trim() || field.value === last;
-    // Only the latest request fills the form or gives back the button: an older one, let go or
-    // overtaken, answers into nothing.
+    // Only the latest request fills the form or gives back the button: an older one answers into nothing.
     let asked = 0;
     const askClaude = async () => {
       if (!this.host.suggest) return;
@@ -225,113 +165,81 @@ export class MemoModal extends Modal {
     };
     again?.addEventListener('click', () => void askClaude());
 
-    const submit = async () => {
+    const submit = () => {
       if (save.disabled) return;
       // No title: a bookmark, titled by the passage's first words (see ChatView.saveMemo).
-      const titleProblem = memo || !title.value.trim() ? null : this.host.titleProblem(title.value.trim());
+      const titleProblem = title.value.trim() ? this.host.titleProblem(title.value.trim()) : null;
       if (titleProblem) {
         problem.setText(titleProblem);
         problem.show();
         return;
       }
-      const chosen = memo;
-      const choice: MemoChoice = {
-        memo: chosen,
+      save.disabled = true;
+      this.close();
+      this.done({
         title: title.value.trim(),
         description: description.value.trim(),
         why: why.value.trim(),
         tags: cleanTags([...picked, ...otherTags.value.split(',')]),
-        notes: [...notes],
-        passages: passages.map((passage) => ({ ...passage })),
-      };
-      if (chosen && !duplicatesSeen) {
-        const mine = (saving += 1);
-        save.disabled = true;
-        let count: number;
-        try {
-          count = await this.host.alreadyIn(chosen, choice.passages);
-        } catch (error) {
-          if (mine !== saving || this.closed) return;
-          log('checking a memo for the passages failed', error);
-          save.disabled = false;
-          duplicatesSeen = true;
-          problem.setText(`Could not check whether that memo holds these passages already: ${errorText(error)}. Save again to add them anyway.`);
-          problem.show();
-          return;
-        }
-        // Closed, or another memo chosen, while it was checked: this save is not wanted any more.
-        if (mine !== saving || this.closed) return;
-        save.disabled = false;
-        if (count > 0) {
-          duplicatesSeen = true;
-          problem.empty();
-          problem.appendText(count === passages.length ? 'This is already in that memo. ' : `${count} of these passages are already in that memo. `);
-          problem.createEl('a', { text: 'Open it', href: '#' }).addEventListener('click', (evt) => {
-            evt.preventDefault();
-            this.close();
-            this.host.open(chosen);
-          });
-          problem.appendText(' · or save again to add anyway.');
-          problem.show();
-          return;
-        }
-      }
-      save.disabled = true;
-      this.close();
-      this.done(choice);
+        notes: [...links],
+      });
     };
-    save.addEventListener('click', () => void submit());
+    save.addEventListener('click', submit);
     title.addEventListener('keydown', (evt) => {
       if (evt.key !== 'Enter' || evt.isComposing) return;
       evt.preventDefault();
-      void submit();
+      submit();
     });
     window.setTimeout(() => title.focus(), 0);
     void askClaude();
   }
 
-  /** Closed: a save still being checked is not made. */
-  private closed = false;
-
   onClose(): void {
-    this.closed = true;
     // A suggestion still on its way is not wanted any more.
     this.suggesting.abort();
     this.contentEl.empty();
   }
 }
 
-/** The memo to add passages to, searched by name; first, "A new memo" (null). */
-class MemoPicker extends SuggestModal<TFile | null> {
+/**
+ * A memo or note to link, searched by name: the memos first (see MemoFormHost.memos), archived ones
+ * labelled, then the vault's other notes.
+ */
+class LinkPicker extends SuggestModal<TFile> {
   constructor(
     app: App,
-    private readonly memos: TFile[],
-    private readonly chosen: (memo: TFile | null) => void,
+    private readonly host: MemoFormHost,
+    private readonly chosen: (file: TFile) => void,
   ) {
     super(app);
-    this.setPlaceholder('Add to a memo: type to search');
+    this.setPlaceholder('Link a memo or note: type to search');
   }
 
-  getSuggestions(query: string): (TFile | null)[] {
+  getSuggestions(query: string): TFile[] {
     const needle = query.trim().toLowerCase();
-    return needle ? this.memos.filter((memo) => memo.basename.toLowerCase().includes(needle)) : [null, ...this.memos];
+    const memos = new Set(this.host.memos.map((memo) => memo.path));
+    const all = [...this.host.memos, ...this.host.notes().filter((note) => !memos.has(note.path))];
+    const found = needle ? all.filter((file) => file.path.toLowerCase().includes(needle)) : all;
+    return found.slice(0, MAX_LINK_CHOICES);
   }
 
-  renderSuggestion(memo: TFile | null, el: HTMLElement): void {
-    el.createDiv({ text: memo ? memo.basename : 'A new memo' });
+  renderSuggestion(file: TFile, el: HTMLElement): void {
+    const line = el.createDiv({ cls: 'vc-memo-pick', text: file.basename });
+    if (this.host.memos.includes(file)) line.createSpan({ cls: 'vc-memo-tag', text: this.host.archived(file) ? 'Archived memo' : 'Memo' });
   }
 
-  onChooseSuggestion(memo: TFile | null): void {
-    this.chosen(memo);
+  onChooseSuggestion(file: TFile): void {
+    this.chosen(file);
   }
 }
 
-/** What Continue from this memo can take along: the memo's Why and Next, its passages, and its related notes. */
+/** What Continue from this memo can take along: the memo's Why and Next, its passages, its related notes, and the memos it links to. */
 export interface MemoParts {
   why: string;
   next: string;
   passages: SavedPassage[];
   notes: string[];
+  linked: LinkedMemo[];
 }
 
 /**
@@ -353,10 +261,10 @@ export class ContinueMemoModal extends Modal {
     this.titleEl.setText(`Continue from “${this.name}”`);
     contentEl.addClass('vc-memo-form');
     contentEl.createDiv({ cls: 'vc-memo-status', text: 'A new chat opens with what you tick in its input, for you to add your question. Nothing is sent.' });
-    const box = (parent: HTMLElement, label: string, detail: string, cls = 'vc-memo-choice') => {
-      const row = parent.createEl('label', { cls });
+    const box = (parent: HTMLElement, label: string, detail: string, ticked = true) => {
+      const row = parent.createEl('label', { cls: 'vc-memo-choice' });
       const input = row.createEl('input', { attr: { type: 'checkbox' } });
-      input.checked = true;
+      input.checked = ticked;
       const text = row.createDiv();
       text.createDiv({ cls: 'vc-memo-role', text: label });
       if (detail) text.createDiv({ cls: 'vc-memo-excerpt', text: detail.length > PREVIEW_CHARS ? `${detail.slice(0, PREVIEW_CHARS - 1)}…` : detail });
@@ -368,6 +276,11 @@ export class ContinueMemoModal extends Modal {
     if (this.parts.passages.length === 0) list.createDiv({ cls: 'vc-memo-passages-title', text: 'No passages in this memo.' });
     const passages = this.parts.passages.map((passage) => ({ passage, input: box(list, passage.header, passage.text) }));
     const notes = this.parts.notes.map((note) => ({ note, input: box(contentEl, `Related note: ${note.replace(/^\[\[|\]\]$/g, '')}`, '') }));
+    // Linked memos: not ticked to begin with; ticked, their Why and passages go along.
+    const linked = this.parts.linked.map((memo) => ({
+      memo,
+      input: box(contentEl, `Linked memo: ${memo.name}`, [memo.why, ...memo.passages.map((passage) => passage.text)].filter(Boolean).join('\n\n'), false),
+    }));
     const buttons = contentEl.createDiv({ cls: 'modal-button-container' });
     const go = buttons.createEl('button', { cls: 'mod-cta', text: 'Start the chat' });
     buttons.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
@@ -378,6 +291,7 @@ export class ContinueMemoModal extends Modal {
         next: next?.checked ? this.parts.next : '',
         passages: passages.filter((item) => item.input.checked).map((item) => item.passage),
         notes: notes.filter((item) => item.input.checked).map((item) => item.note),
+        linked: linked.filter((item) => item.input.checked).map((item) => item.memo),
       });
     });
   }

@@ -1926,15 +1926,7 @@ button.vc-continue-button:hover span:last-child {
   gap: var(--size-4-1);
 }
 
-/* Add to: a button that opens the search of memos. */
-.vc-memo-target {
-  align-self: flex-start;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Related notes: each a chip with an ×, then Add a note…. */
+/* Related memos and notes: each a chip with an ×, then Link a memo or note…. */
 .vc-memo-notes {
   display: flex;
   flex-wrap: wrap;
@@ -1954,27 +1946,6 @@ button.vc-continue-button:hover span:last-child {
 
 .vc-memo-note .clickable-icon {
   padding: 2px;
-}
-
-/* A passage's head: who and when, then Label…, quiet until used. */
-.vc-memo-role {
-  display: flex;
-  gap: var(--size-4-2);
-}
-
-.vc-memo-label-link {
-  color: var(--text-faint);
-  font-size: var(--font-ui-smaller);
-}
-
-.vc-memo-labelling {
-  display: flex;
-  gap: var(--size-4-2);
-  margin-top: var(--size-4-1);
-}
-
-.vc-memo-labelling input {
-  flex: 1;
 }
 
 /* Continue from a memo: what goes along, a box each. */
@@ -2011,4 +1982,14 @@ button.vc-continue-button:hover span:last-child {
   border-radius: var(--radius-s);
   box-shadow: 0 0 0 2px var(--interactive-accent);
   transition: box-shadow 400ms ease;
+}
+
+/* A memo in the link picker, labelled as one (and as archived); notes are not. */
+.vc-memo-pick .vc-memo-tag {
+  margin-left: var(--size-4-2);
+  padding: 0 var(--size-4-1);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
 }

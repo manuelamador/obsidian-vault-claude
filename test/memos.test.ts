@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import { TFile } from 'obsidian';
 import { mentionTargets } from '../src/contextSize';
 import {
-  addMemoSources,
   chatLink,
   cleanTags,
   memoBaseYaml,
@@ -17,7 +16,6 @@ import {
   pairChat,
   passageNeedle,
   readMemoSuggestion,
-  passagesAlreadyIn,
   memoSection,
   savedPassages,
   continueDraft,
@@ -39,26 +37,13 @@ test('a new memo note: frontmatter with its tags, title, description, and each p
   const note = memoNoteMarkdown({ title: 'Repayment timing may change equilibrium selection', description: 'Test it under other continuation choices.', tags: ['idea', 'read'], notes: ['[[Model setup]]'], sources });
   assert.match(
     note,
-    /^---\ntype: memo\ntags: \[idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\ndone: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Why\n\n## Next\n\n## Sources\n\n### Debt model draft · saved 2026-10-03\n/,
+    /^---\ntype: memo\ntags: \[idea, read\]\ncreated: 2026-10-03\nupdated: 2026-10-03\nchats: \["Debt model \[draft\]"\]\nnotes: \["\[\[Model setup\]\]"\]\nsend: false\narchived: false\nclaude_chats: \[chat-1\]\n---\n\n# Repayment timing may change equilibrium selection\n\nTest it under other continuation choices\.\n\n## Why\n\n## Next\n\n## Sources\n\n### Debt model draft · saved 2026-10-03\n/,
   );
   assert.ok(note.includes('**You** · [Go to the passage](obsidian://vault-claude?vault=Obsidian&chat=chat-1&find=Does%20the%20result%20survive)'));
   assert.ok(note.includes('> Does the result survive\n> recursive repayment?'));
   assert.ok(note.includes('**Claude** · '));
   assert.ok(note.includes('> A possible mechanism: $q(b)$ falls.'));
   assert.ok(note.endsWith('falls.\n'));
-});
-
-test('passages added later go at the end of the Sources section, before any section after it', () => {
-  const note = memoNoteMarkdown({ title: 'Memo', description: '', tags: [], notes: [], sources });
-  const withNotes = `${note}\n## Notes\n\nMine.\n`;
-  const added = addMemoSources(withNotes, { ...sources, chatId: 'chat-2', chatTitle: 'Follow-up', passages: [{ role: 'you', text: 'A refinement.', needle: 'A refinement.' }] });
-  const follow = added.indexOf('### Follow-up · saved 2026-10-03');
-  assert.ok(follow > added.indexOf('A possible mechanism'));
-  assert.ok(follow < added.indexOf('## Notes'));
-  assert.ok(added.endsWith('Mine.\n'));
-  // A note whose Sources heading was removed gets one again.
-  const bare = addMemoSources('# Memo\n\nJust a description.\n', sources);
-  assert.ok(bare.includes('Just a description.\n\n## Sources\n\n### Debt model draft'));
 });
 
 test('tags as Obsidian takes them, each once', () => {
@@ -96,10 +81,10 @@ test('the suggestion request names who wrote each passage, and the reply is read
 test("the Memos base opens on the chat's memos, then all, those about the note in front, and each kind", () => {
   const base = memoBaseYaml('chat-1', 'Debt model [v2] #draft', 'My vault');
   const views = [...base.matchAll(/^    name: "(.*)"$/gm)].map((match) => match[1]);
-  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas', 'Bookmarks', 'By chat', 'By note', 'Done']);
-  // Finished memos only in Done.
-  assert.equal(base.split('"done != true"').length - 1, 10);
-  assert.ok(base.includes('        - "done == true"'));
+  assert.deepEqual(views, ['Chat: Debt model v2 draft', 'All memos', 'About this note', 'To do', 'To read', 'To explore', 'Ideas', 'Bookmarks', 'By chat', 'By note', 'Archived']);
+  // Archived memos only in Archived.
+  assert.equal(base.split('"archived != true"').length - 1, 10);
+  assert.ok(base.includes('        - "archived == true"'));
   assert.ok(base.includes('    groupBy:\n      property: chats\n      direction: ASC'));
   assert.ok(base.includes('    groupBy:\n      property: notes\n      direction: ASC'));
   assert.ok(base.includes('        - "claude_chats.contains(\\"chat-1\\")"'));
@@ -120,7 +105,7 @@ test("turning the base to another chat changes its chat view only, and keeps wha
   };
   const turned = retargetMemoBase(base, 'chat-2', 'Second', 'V') as { views: { name: string; filters: unknown; columnSize?: unknown; order?: string[] }[]; properties: Record<string, unknown>; formulas: Record<string, string> };
   assert.equal(turned.views[0].name, 'Chat: Second');
-  assert.deepEqual(turned.views[0].filters, { and: ['type == "memo"', 'claude_chats.contains("chat-2")', 'done != true'] });
+  assert.deepEqual(turned.views[0].filters, { and: ['type == "memo"', 'claude_chats.contains("chat-2")', 'archived != true'] });
   assert.deepEqual(turned.views[0].columnSize, { 'file.name': 320 });
   assert.equal(turned.views[1].name, 'My own view');
   assert.deepEqual(turned.properties.send, base.properties.send);
@@ -130,9 +115,9 @@ test("turning the base to another chat changes its chat view only, and keeps wha
   assert.deepEqual(turned.views[0].order, ['file.name', 'status']);
   // A base whose chat view was removed gets one again, first; something else is not a base.
   const without = retargetMemoBase({ views: [{ name: 'Only mine', order: ['chats'] }] }, 'chat-3', 'Third', 'V') as { views: { name: string; order?: string[]; filters?: { and: string[] } }[] };
-  assert.deepEqual(without.views.map((view) => view.name), ['Chat: Third', 'Only mine', 'Done']);
+  assert.deepEqual(without.views.map((view) => view.name), ['Chat: Third', 'Only mine', 'Archived']);
   // The chat view it gets leaves finished memos out once, not twice.
-  assert.equal(without.views[0].filters?.and.filter((filter) => filter === 'done != true').length, 1);
+  assert.equal(without.views[0].filters?.and.filter((filter) => filter === 'archived != true').length, 1);
   assert.deepEqual(without.views[1].order, ['formula.chat']);
   assert.equal(retargetMemoBase('not a base', 'c', 't', 'V'), null);
 });
@@ -278,7 +263,7 @@ test("renaming a chat renames it in the memos saved from it", async () => {
   assert.deepEqual(frontmatter.chats, ['First', 'New title']);
 });
 
-test('a table from before the Done box gets it once: the column, the filter in its memo views, a Done view', () => {
+test('a table from before the Archived box gets it once: the column, the filter in its memo views, an Archived view', () => {
   const old = {
     formulas: { chat: 'claude_chats.map(link("obsidian://vault-claude?vault=V&chat=" + value, chats[index]))' },
     properties: { send: { displayName: 'Send to chat' } },
@@ -288,15 +273,15 @@ test('a table from before the Done box gets it once: the column, the filter in i
     ],
   };
   const once = retargetMemoBase(old, 'a', 'A', 'V') as { properties: Record<string, unknown>; views: { name: string; order: string[]; filters: { and: string[] } }[] };
-  assert.deepEqual(once.views.map((view) => view.name), ['Chat: A', 'Mine', 'Done']);
-  assert.deepEqual(once.views[0].order, ['send', 'done', 'file.name', 'status']);
+  assert.deepEqual(once.views.map((view) => view.name), ['Chat: A', 'Mine', 'Archived']);
+  assert.deepEqual(once.views[0].order, ['send', 'archived', 'file.name', 'status']);
   assert.deepEqual(once.views[1].order, ['file.name']);
-  assert.ok(once.views[0].filters.and.includes('done != true'));
+  assert.ok(once.views[0].filters.and.includes('archived != true'));
   assert.deepEqual(once.views[1].filters.and, ['file.hasTag("x")']);
   // Again: nothing more is added.
   const twice = retargetMemoBase(once, 'a', 'A', 'V') as { views: { name: string; order: string[] }[] };
-  assert.deepEqual(twice.views.map((view) => view.name), ['Chat: A', 'Mine', 'Done']);
-  assert.deepEqual(twice.views[0].order, ['send', 'done', 'file.name', 'status']);
+  assert.deepEqual(twice.views.map((view) => view.name), ['Chat: A', 'Mine', 'Archived']);
+  assert.deepEqual(twice.views[0].order, ['send', 'archived', 'file.name', 'status']);
 });
 
 test("a link from the table finds the memo's first passage from its chat", () => {
@@ -334,53 +319,39 @@ test('a link keeps working when its words hold an unmatched parenthesis', () => 
   assert.deepEqual(firstPassageTarget(note, 'c'), { msg: 'u#1', find: 'His CV (fetched 2026' });
 });
 
-test('a passage carries its label, the date its message was written, and your comment; the group, the day it was saved', () => {
+test('a passage carries the date its message was written; the group, the day it was saved', () => {
   const note = memoNoteMarkdown({
     title: 'Repayment timing matters',
     description: '',
     why: 'This may resolve the inconsistency in the proof.',
     tags: ['idea'],
     notes: [],
-    sources: { ...sources, passages: [{ role: 'you', text: 'Could repayment happen first?', needle: 'Could repayment', message: 'm1', written: '2026-10-02', label: 'Starting point', comment: 'the question that started it' }] },
+    sources: { ...sources, passages: [{ role: 'you', text: 'Could repayment happen first?', needle: 'Could repayment', message: 'm1', written: '2026-10-02' }] },
   });
   assert.ok(note.includes('## Why\n\nThis may resolve the inconsistency in the proof.\n\n## Next\n\n## Sources'));
   assert.ok(note.includes('### Debt model draft · saved 2026-10-03'));
-  assert.ok(note.includes('**Starting point · You · 2026-10-02** · [Go to the passage]'));
-  assert.ok(note.includes('> Could repayment happen first?\n\n*Comment:* the question that started it'));
+  assert.ok(note.includes('**You · 2026-10-02** · [Go to the passage]'));
   // A bookmark has no Why or Next of yours.
   assert.ok(!memoNoteMarkdown({ title: 'B', description: '', tags: ['bookmark'], notes: [], sources }).includes('## Why'));
 });
 
-test('read back from a memo: its Why, Next and passages; the same passage of the same message is found already in it', () => {
-  const passage = { role: 'claude' as const, text: 'Under that timing, $x$ holds.', needle: 'Under that timing', message: 'm2', label: 'Development' as const, comment: 'the key step' };
+test('read back from a memo: its Why, Next and passages, with the linked memos chosen in the draft', () => {
+  const passage = { role: 'claude' as const, text: 'Under that timing, $x$ holds.', needle: 'Under that timing', message: 'm2' };
   let note = memoNoteMarkdown({ title: 'Idea', description: 'D.', why: 'Why so.', tags: ['idea'], notes: [], sources: { ...sources, passages: [passage] } });
   note = note.replace('## Next\n', '## Next\n\nCheck continuous z.\n');
   assert.equal(memoSection(note, 'Why'), 'Why so.');
   assert.equal(memoSection(note, 'Next'), 'Check continuous z.');
-  assert.deepEqual(savedPassages(note), [{ header: 'Development · Claude', text: 'Under that timing, $x$ holds.', comment: 'the key step', chat: 'chat-1', msg: 'm2' }]);
-  assert.equal(passagesAlreadyIn(note, 'chat-1', [passage]).length, 1);
-  assert.equal(passagesAlreadyIn(note, 'chat-1', [{ ...passage, message: 'm3' }]).length, 0);
-  assert.equal(passagesAlreadyIn(note, 'chat-2', [passage]).length, 0);
-  // Adding passages leaves your Why and Next as they are.
-  const added = addMemoSources(note, { ...sources, passages: [{ role: 'you', text: 'More.', needle: 'More.' }] });
-  assert.equal(memoSection(added, 'Why'), 'Why so.');
-  assert.equal(memoSection(added, 'Next'), 'Check continuous z.');
-  const draft = continueDraft({ name: 'Idea', why: 'Why so.', next: '', passages: savedPassages(note), notes: ['[[Model setup]]'] });
-  assert.ok(draft.startsWith('Continuing from the memo [[Idea]].\n\nWhy I kept it: Why so.\n\nPassages:\n\nDevelopment · Claude:\n> Under that timing, $x$ holds.\n(the key step)'));
+  assert.deepEqual(savedPassages(note), [{ header: 'Claude', text: 'Under that timing, $x$ holds.', comment: '', chat: 'chat-1', msg: 'm2' }]);
+  const linked = { name: 'Earlier idea', why: 'It started here.', passages: [{ header: 'You', text: 'What if repayment comes first?', comment: '' }] };
+  const draft = continueDraft({ name: 'Idea', why: 'Why so.', next: '', passages: savedPassages(note), notes: ['[[Model setup]]'], linked: [linked] });
+  assert.ok(draft.startsWith('Continuing from the memo [[Idea]].\n\nWhy I kept it: Why so.\n\nPassages:\n\nClaude:\n> Under that timing, $x$ holds.'));
+  assert.ok(draft.includes('From the linked memo [[Earlier idea]]:\n\nWhy I kept it: It started here.\n\nYou:\n> What if repayment comes first?'));
   assert.ok(draft.endsWith('Related notes: @[[Model setup]]\n\n'));
 });
 
 test('a bookmark saved with a Why keeps it', () => {
   const note = memoNoteMarkdown({ title: 'B', description: '', why: 'Worth a look.', tags: ['bookmark'], notes: [], sources });
   assert.ok(note.includes('## Why\n\nWorth a look.\n\n## Next'));
-});
-
-test('a passage is already in a memo only as one saved passage: the same text, chat and message together', () => {
-  const at = (text: string, message: string) => ({ role: 'claude' as const, text, needle: text, message });
-  const note = memoNoteMarkdown({ title: 'M', description: '', tags: [], notes: [], sources: { ...sources, passages: [at('Text A', 'm1'), at('Text B', 'm2')] } });
-  assert.equal(passagesAlreadyIn(note, 'chat-1', [at('Text A', 'm2')]).length, 0);
-  assert.equal(passagesAlreadyIn(note, 'chat-1', [at('Text B', 'm2')]).length, 1);
-  assert.equal(passagesAlreadyIn(note, 'chat-1', [{ role: 'claude', text: 'Text A', needle: 'Text A' }]).length, 1);
 });
 
 test('continuing from a memo: a mention in what is quoted does not attach its note', () => {
@@ -401,17 +372,11 @@ test('a heading inside a code example in a memo is not a section', () => {
   const note = memoNoteMarkdown({ title: 'M', description: '', why, tags: [], notes: [], sources });
   assert.equal(memoSection(note, 'Why'), why);
   assert.equal(savedPassages(note).length, 2);
-  const added = addMemoSources(note, { ...sources, chatTitle: 'Later', passages: [{ role: 'you', text: 'More.', needle: 'More.' }] });
-  assert.equal(memoSection(added, 'Why'), why);
-  assert.ok(added.indexOf('### Later') > added.indexOf('### Debt model'));
-  assert.equal(savedPassages(added).length, 3);
 });
 
-test('a comment is read back as written, emphasis and all', () => {
-  const passage = { role: 'claude' as const, text: 'X.', needle: 'X.', comment: '**Important** correction' };
-  const note = memoNoteMarkdown({ title: 'M', description: '', tags: [], notes: [], sources: { ...sources, passages: [passage] } });
-  assert.ok(note.includes('*Comment:* **Important** correction'));
-  assert.equal(savedPassages(note)[0]?.comment, '**Important** correction');
+test('a label and comment in a memo saved with 0.26.0 are read back, emphasis and all', () => {
+  const note = '## Sources\n\n### Chat · saved 2026-10-05\n\n**Evidence · Claude** · [Go to the passage](obsidian://vault-claude?vault=V&chat=c&find=X.) · [Continue in the chat](obsidian://vault-claude?vault=V&chat=c&quote=X.)\n\n> X.\n\n*Comment:* **Important** correction\n';
+  assert.deepEqual(savedPassages(note)[0], { header: 'Evidence · Claude', text: 'X.', comment: '**Important** correction', chat: 'c', msg: undefined });
 });
 
 test('a long title already taken still gets a free name: the date and number are never cut off', () => {
@@ -421,4 +386,22 @@ test('a long title already taken still gets a free name: the date and number are
   assert.ok(!taken.has(memoNoteName(free)));
   taken.add(memoNoteName(free));
   assert.ok(!taken.has(memoNoteName(freeMemoTitle(title, '2026-10-05 1200', (name) => taken.has(name)))));
+});
+
+test('a table from when archived memos were called done has its Done column, filters and view renamed, once', () => {
+  const old = {
+    formulas: { chat: 'claude_chats.map(link("obsidian://vault-claude?vault=V&chat=" + value, chats[index]))' },
+    properties: { send: { displayName: 'Send to chat' }, done: { displayName: 'Done' }, status: { displayName: 'Status' } },
+    views: [
+      { type: 'table', name: 'Chat: A', filters: { and: ['type == "memo"', 'claude_chats.contains("a")', 'done != true'] }, order: ['send', 'done', 'file.name', 'status'] },
+      { type: 'table', name: 'Done', filters: { and: ['type == "memo"', 'done == true'] }, order: ['send', 'done', 'file.name', 'status'] },
+    ],
+  };
+  const turned = retargetMemoBase(old, 'a', 'A', 'V') as { properties: Record<string, unknown>; views: { name: string; order: string[]; filters: { and: string[] } }[] };
+  assert.deepEqual(turned.views.map((view) => view.name), ['Chat: A', 'Archived']);
+  assert.deepEqual(turned.views[0].order, ['send', 'archived', 'file.name', 'status']);
+  assert.deepEqual(turned.views[0].filters.and, ['type == "memo"', 'claude_chats.contains("a")', 'archived != true']);
+  assert.deepEqual(turned.views[1].filters.and, ['type == "memo"', 'archived == true']);
+  assert.equal(turned.properties.done, undefined);
+  assert.deepEqual(turned.properties.archived, { displayName: 'Archived' });
 });

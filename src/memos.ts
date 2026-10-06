@@ -20,15 +20,7 @@ export interface MemoPassage {
   message?: string;
   /** When that message was written, `YYYY-MM-DD`, when known: not when the passage was saved. */
   written?: string;
-  /** How you take it to have contributed to the idea (see CONTRIBUTIONS): yours, never assigned. */
-  label?: Contribution;
-  /** A remark of yours on it. */
-  comment?: string;
 }
-
-/** The labels a passage can be given for how it contributed to an idea. */
-export const CONTRIBUTIONS = ['Starting point', 'Development', 'Correction', 'Evidence', 'Open question'] as const;
-export type Contribution = (typeof CONTRIBUTIONS)[number];
 
 
 /** Passages saved together from one chat. */
@@ -103,7 +95,7 @@ export function cleanTags(tags: string[]): string[] {
   return [...new Set(clean)];
 }
 
-/** What starts the line of your comment on a passage: the comment follows it as written. */
+/** What started the line of a comment on a passage, in memos saved with 0.26.0, which had them: read back still. */
 const COMMENT_MARK = '*Comment:* ';
 
 /**
@@ -146,10 +138,9 @@ function memoSourcesMarkdown(sources: MemoSources): string {
   for (const passage of sources.passages) {
     const find = chatLink({ vault: sources.vault, chat: sources.chatId, msg: passage.message, find: passage.needle });
     const quote = chatLink({ vault: sources.vault, chat: sources.chatId, quote: passage.text.slice(0, QUOTE_LINK_CHARS) });
-    const who = [passage.label, passage.role === 'you' ? 'You' : 'Claude', passage.written].filter(Boolean).join(' · ');
+    const who = [passage.role === 'you' ? 'You' : 'Claude', passage.written].filter(Boolean).join(' · ');
     lines.push(`**${who}** · [Go to the passage](${find}) · [Continue in the chat](${quote})`, '');
     lines.push(blockquote(passage.text.trim()), '');
-    if (passage.comment?.trim()) lines.push(`${COMMENT_MARK}${passage.comment.trim().replace(/\s+/g, ' ')}`, '');
   }
   return lines.join('\n');
 }
@@ -179,8 +170,8 @@ export function memoNoteMarkdown(memo: { title: string; description: string; why
     // A box in the Memos base, in step with the chat's input: ticked while the memo is mentioned in it
     // (see VaultClaudePlugin.followMemoBox and ChatView.followMemoBoxes).
     'send: false',
-    // A box in the Memos base: ticked, the memo is finished with, and shows only in the Done view.
-    'done: false',
+    // A box in the Memos base: ticked, the memo is finished with, kept for reference in the Archived view only.
+    'archived: false',
     `claude_chats: [${chatId}]`,
     '---',
   ];
@@ -190,30 +181,6 @@ export function memoNoteMarkdown(memo: { title: string; description: string; why
   if (!tags.includes(BOOKMARK_TAG) || memo.why?.trim()) body.push('## Why', '', ...(memo.why?.trim() ? [memo.why.trim(), ''] : []), '## Next', '');
   body.push('## Sources', '', memoSourcesMarkdown(memo.sources));
   return `${[...frontmatter, '', ...body].join('\n').trimEnd()}\n`;
-}
-
-/** `note` with passages added at the end of its Sources section, which is made when it has none. */
-export function addMemoSources(note: string, sources: MemoSources): string {
-  const section = memoSourcesMarkdown(sources);
-  const text = note.trimEnd();
-  const bounds = sectionBounds(text, 'Sources');
-  if (!bounds) return `${`${text}\n\n## Sources\n\n${section}`.trimEnd()}\n`;
-  // At the end of the Sources section: before the next heading of its level or above, else at the end of the note.
-  const at = bounds.end;
-  const next = at < text.length;
-  return `${`${text.slice(0, at).trimEnd()}\n\n${section.trimEnd()}\n${next ? `\n${text.slice(at)}` : ''}`.trimEnd()}\n`;
-}
-
-/**
- * The passages of `passages` already in memo `note` from chat `chatId`: a saved passage of the same
- * text, from that chat and the same message (or, for one with no message, from that chat).
- */
-export function passagesAlreadyIn(note: string, chatId: string, passages: MemoPassage[]): MemoPassage[] {
-  const saved = savedPassages(note).filter((one) => one.chat === chatId);
-  return passages.filter((passage) => {
-    const quoted = blockquote(passage.text.trim());
-    return saved.some((one) => blockquote(one.text) === quoted && (!passage.message || one.msg === passage.message));
-  });
 }
 
 /** The text of section `heading` (a `## ` heading) of a memo note, without its heading; empty when it has none. */
@@ -255,21 +222,30 @@ export function savedPassages(note: string): SavedPassage[] {
   return passages;
 }
 
+/** A memo linked from the one continued from: its name, Why and passages (see ContinueMemoModal). */
+export interface LinkedMemo {
+  name: string;
+  why: string;
+  passages: SavedPassage[];
+}
+
 /**
  * The draft that starts a chat from a memo (see ContinueMemoModal): the memo by name, what you chose
- * of it (your Why and Next, passages), and the related notes as `@` mentions, so they go with it.
+ * of it (your Why and Next, passages), the linked memos chosen with their Why and passages, and the
+ * related notes as `@` mentions, so they go with it.
  */
-export function continueDraft(memo: { name: string; why: string; next: string; passages: SavedPassage[]; notes: string[] }): string {
+export function continueDraft(memo: { name: string; why: string; next: string; passages: SavedPassage[]; notes: string[]; linked?: LinkedMemo[] }): string {
   // Only the related notes ticked go with it: a mention in what is quoted stays a plain link.
   const quiet = (text: string) => text.replace(/@(?=\[\[)/g, '');
+  const quoted = (passage: SavedPassage) => `${quiet(passage.header)}:\n${blockquote(quiet(passage.text))}${passage.comment ? `\n(${quiet(passage.comment)})` : ''}`;
   const parts = [`Continuing from the memo [[${memo.name}]].`];
   if (memo.why) parts.push(`Why I kept it: ${quiet(memo.why)}`);
   if (memo.next) parts.push(`Next: ${quiet(memo.next)}`);
-  if (memo.passages.length > 0) {
-    parts.push('Passages:');
-    for (const passage of memo.passages) {
-      parts.push(`${quiet(passage.header)}:\n${blockquote(quiet(passage.text))}${passage.comment ? `\n(${quiet(passage.comment)})` : ''}`);
-    }
+  if (memo.passages.length > 0) parts.push('Passages:', ...memo.passages.map(quoted));
+  for (const linked of memo.linked ?? []) {
+    parts.push(`From the linked memo [[${linked.name}]]:`);
+    if (linked.why) parts.push(`Why I kept it: ${quiet(linked.why)}`);
+    parts.push(...linked.passages.map(quoted));
   }
   if (memo.notes.length > 0) parts.push(`Related notes: ${memo.notes.map((note) => `@${note}`).join(' ')}`);
   return `${parts.join('\n\n')}\n\n`;
@@ -384,13 +360,13 @@ export function chatMemosView(chatTitle: string): string {
 export const ALL_MEMOS_VIEW = 'All memos';
 
 /** The columns of the Memos base's views: its chats as links that open them (see chatLinksFormula). */
-const BASE_COLUMNS = ['send', 'done', 'file.name', 'status', 'tags', 'formula.chat', 'notes', 'updated'];
+const BASE_COLUMNS = ['send', 'archived', 'file.name', 'status', 'tags', 'formula.chat', 'notes', 'updated'];
 
-/** Every view of the Memos base but Done leaves out the memos finished with. */
-const NOT_DONE = 'done != true';
+/** Every view of the Memos base but Archived leaves out the memos archived. */
+const NOT_ARCHIVED = 'archived != true';
 
-/** The name of the Memos base's view of the memos finished with. */
-const DONE_VIEW = 'Done';
+/** The name of the Memos base's view of the memos archived. */
+const ARCHIVED_VIEW = 'Archived';
 
 /**
  * The Memos base's formula for a memo's chats as links, each showing the chat's title and opening
@@ -431,7 +407,7 @@ function chatView(chatId: string, chatTitle: string): Record<string, unknown> {
   return {
     type: 'table',
     name: chatMemosView(chatTitle),
-    filters: { and: ['type == "memo"', NOT_DONE, chatFilter(chatId)] },
+    filters: { and: ['type == "memo"', NOT_ARCHIVED, chatFilter(chatId)] },
     order: BASE_COLUMNS,
     sort: [{ property: 'updated', direction: 'DESC' }],
   };
@@ -450,7 +426,7 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
       `    name: ${JSON.stringify(name)}`,
       '    filters:',
       '      and:',
-      ...['type == "memo"', ...(name === DONE_VIEW ? [] : [NOT_DONE]), ...filters].map((filter) => `        - ${JSON.stringify(filter)}`),
+      ...['type == "memo"', ...(name === ARCHIVED_VIEW ? [] : [NOT_ARCHIVED]), ...filters].map((filter) => `        - ${JSON.stringify(filter)}`),
       ...(group ? ['    groupBy:', `      property: ${group}`, '      direction: ASC'] : []),
       '    order:',
       ...BASE_COLUMNS.filter((column) => !(group === 'chats' && column === 'formula.chat') && column !== group).map((column) => `      - ${column}`),
@@ -466,8 +442,8 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
     'properties:',
     '  send:',
     '    displayName: Send to chat',
-    '  done:',
-    '    displayName: Done',
+    '  archived:',
+    '    displayName: Archived',
     '  status:',
     '    displayName: Status',
     '  file.name:',
@@ -492,7 +468,7 @@ export function memoBaseYaml(chatId: string, chatTitle: string, vault: string): 
     view('Bookmarks', [`file.hasTag("${BOOKMARK_TAG}")`], newest),
     view('By chat', [], newest, 'chats'),
     view('By note', [], newest, 'notes'),
-    view(DONE_VIEW, ['done == true'], newest),
+    view(ARCHIVED_VIEW, ['archived == true'], newest),
     '',
   ].join('\n');
 }
@@ -540,7 +516,7 @@ export function retargetMemoBase(base: unknown, chatId: string, chatTitle: strin
       typeof value === 'string' ? (picksChat(value) ? chatFilter(chatId) : value) : Array.isArray(value) ? value.map(retarget) : typeof value === 'object' && value !== null ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, retarget(inner)])) : value;
     views[at] = { ...view, name: chatMemosView(chatTitle), filters: retarget(view.filters) };
   }
-  return addStatusColumn(addDoneBoxes({ ...record, formulas, properties, views }));
+  return addStatusColumn(addArchivedBoxes(renameDoneToArchived({ ...record, formulas, properties, views })));
 }
 
 /**
@@ -562,21 +538,47 @@ function addStatusColumn(base: Record<string, unknown>): Record<string, unknown>
 }
 
 /**
- * A Memos base from before the Done box, given it once: the column beside Send and the filter that
- * leaves finished memos out in each of the plugin's views (those that pick memos by type), and a
- * Done view at the end. One that has it is returned as it is.
+ * A Memos base from before the Archived box, given it once: the column beside Send and the filter
+ * that leaves archived memos out in each of the plugin's views (those that pick memos by type), and
+ * an Archived view at the end. One that has it is returned as it is.
  */
-function addDoneBoxes(base: Record<string, unknown>): Record<string, unknown> {
+function addArchivedBoxes(base: Record<string, unknown>): Record<string, unknown> {
   const properties = base.properties as Record<string, unknown>;
-  if (properties.done !== undefined) return base;
+  if (properties.archived !== undefined) return base;
   const views = (base.views as unknown[]).map((view) => {
     if (typeof view !== 'object' || view === null) return view;
     const record = view as Record<string, unknown>;
-    const order = Array.isArray(record.order) ? record.order.flatMap((column) => (column === 'send' ? ['send', 'done'] : [column])) : record.order;
+    const order = Array.isArray(record.order) ? record.order.flatMap((column) => (column === 'send' ? ['send', 'archived'] : [column])) : record.order;
     const and = (record.filters as { and?: unknown } | undefined)?.and;
-    const ours = Array.isArray(and) && and.includes('type == "memo"') && !and.includes(NOT_DONE);
-    return { ...record, order, ...(ours ? { filters: { ...(record.filters as object), and: [...and, NOT_DONE] } } : {}) };
+    const ours = Array.isArray(and) && and.includes('type == "memo"') && !and.includes(NOT_ARCHIVED);
+    return { ...record, order, ...(ours ? { filters: { ...(record.filters as object), and: [...and, NOT_ARCHIVED] } } : {}) };
   });
-  views.push({ type: 'table', name: DONE_VIEW, filters: { and: ['type == "memo"', 'done == true'] }, order: BASE_COLUMNS, sort: [{ property: 'updated', direction: 'DESC' }] });
-  return { ...base, properties: { ...properties, done: { displayName: 'Done' } }, views };
+  views.push({ type: 'table', name: ARCHIVED_VIEW, filters: { and: ['type == "memo"', 'archived == true'] }, order: BASE_COLUMNS, sort: [{ property: 'updated', direction: 'DESC' }] });
+  return { ...base, properties: { ...properties, archived: { displayName: 'Archived' } }, views };
+}
+
+/**
+ * A Memos base from when an archived memo was called done (before 0.27.0): its Done column, filters
+ * and view become Archived ones, everything else as it was. One without them is returned as it is.
+ */
+function renameDoneToArchived(base: Record<string, unknown>): Record<string, unknown> {
+  const properties = { ...(base.properties as Record<string, unknown>) };
+  if (properties.done === undefined || properties.archived !== undefined) return base;
+  delete properties.done;
+  properties.archived = { displayName: 'Archived' };
+  const renamed = (value: unknown): unknown =>
+    typeof value === 'string'
+      ? value.replace(/^done ([!=]=) true$/, 'archived $1 true')
+      : Array.isArray(value)
+        ? value.map(renamed)
+        : typeof value === 'object' && value !== null
+          ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, renamed(inner)]))
+          : value;
+  const views = (base.views as unknown[]).map((view) => {
+    if (typeof view !== 'object' || view === null) return view;
+    const record = view as Record<string, unknown>;
+    const order = Array.isArray(record.order) ? record.order.map((column) => (column === 'done' ? 'archived' : column)) : record.order;
+    return { ...record, ...(record.name === 'Done' ? { name: ARCHIVED_VIEW } : {}), order, filters: renamed(record.filters) };
+  });
+  return { ...base, properties, views };
 }

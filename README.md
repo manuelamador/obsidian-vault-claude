@@ -154,24 +154,26 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 **Save ideas as notes linked to their source.** Turn selected passages or a reply into a memo, with a title, description and tags, or save a quick bookmark. Memos are ordinary notes in `Claude chats/Memos/` in your vault (**Folder for memos** in the settings), beside the Memos table, `Memos.base`. Browse memos by chat, note or tag in the Memos table, and return to the conversation where each passage came from.
 
-<img src="docs/memos-table.webp" width="800" alt="The Memos table open on the left on its view “Chat: Demo — Solow model”, one memo listed with its send and done boxes, its title, its chat as a link and its note, beside the chat it came from in the panel on the right">
+<img src="docs/memos-table.webp" width="800" alt="The Memos table open on the left on its view “Chat: Demo — Solow model”, one memo listed with its send and archived boxes, its title, its chat as a link and its note, beside the chat it came from in the panel on the right">
 
 <details>
 <summary>Saving and using memos</summary>
 
 - Choose **Memo** over a chat selection or the sticky-note icon under a reply. A selection spanning messages keeps a passage for each, labelled You or Claude; a reply's memo includes your prompt and the reply. Equations stay as LaTeX.
-- Claude's model for small jobs suggests a title and description for you to edit. Add tags such as idea, todo, explore, read or bookmark, or your own. You can also add passages to an existing memo.
+- Claude's model for small jobs suggests a title and description for you to edit. Add tags such as idea, todo, explore, read or bookmark, or your own, and optionally **Why I'm keeping this**. Each save makes a new memo.
+- **Related memos and notes** lists the chat's attached note and the notes the passages link to, each removable. **Link a memo or note…** links others: memos first (this chat's and those about the note in front, archived ones last and labelled), then the vault's notes. Link memos to each other to follow an idea across chats.
 
   <img src="docs/memo-form.png" width="420" alt="The Save a memo form: Add to (A new memo), the title and description Claude suggested for a passage on the Solow model's steady state, “Suggested by Claude: edit as you like.”, the tag toggles idea, todo, explore and read, a field for other tags, the passage with its equations as LaTeX, and Suggest again, Save and Cancel">
 
 - For a quick bookmark, save with the title empty or ⌥-click (Alt-click) Memo or the reply's sticky-note icon to skip the form. The first words become its title, with a timestamp if needed; it gets the `bookmark` tag and appears in Bookmarks.
-- Memo properties identify the source chats and link to the attached note and notes mentioned in the passages, creating backlinks.
+- A memo note holds its description, then **Why**, **Next** (yours to fill in) and **Sources**: each passage with who wrote it and when, and links back to the chat. Its properties name the source chat and link the related memos and notes, creating backlinks.
+- **Continue from this memo** (command palette, or a memo's file menu) opens a new chat with a draft of what you tick: the memo's Why, Next and passages, its related notes as mentions, and, if you tick them, the Why and passages of the memos it links to. Nothing is sent.
 - **Go to the passage** opens the source message, drawing earlier turns if needed or searching its words if the message is missing. **Continue in the chat** opens the chat with the passage quoted.
 - The sticky-note icon at the top opens all memos; ⌘-click opens this chat's. The notes menu beside the paperclip also lists its memos.
 
   <img src="docs/memos-button.png" width="300" alt="The sticky-note button at the top right of the panel, between the phone and history buttons, with its tooltip “All memos, in a table (⌘-click: this chat's)”">
 
-- The table has views by chat, note and tag. Left open, it follows the panel's chat. **Send to chat** puts a memo in the input; clearing it removes the mention. **Done** moves a memo into the Done view. The Chats column opens each source chat at its first passage.
+- The table has views by chat, note and tag. Left open, it follows the panel's chat. **Send to chat** puts a memo in the input; clearing it removes the mention. **Status** takes exploring, incorporated, resolved or discarded. **Archived** moves a memo into the Archived view; it is still offered, labelled, when you link memos. The Chats column opens each source chat at its first passage.
 - Delete a memo like any note, or select its table row and choose **Delete** from the right-click menu.
 
 </details>

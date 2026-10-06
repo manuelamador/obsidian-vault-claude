@@ -44,7 +44,7 @@ import {
 import { chipFor, renderChip } from './chip';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
-import { BOOKMARK_TAG, addMemoSources, cleanTags, freeMemoTitle, memoNoteMarkdown, memoNoteName, pairChat, passageNeedle, passagesAlreadyIn, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
+import { BOOKMARK_TAG, cleanTags, freeMemoTitle, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -5590,7 +5590,7 @@ export class ChatView extends ItemView {
     // Taken before the dates are read: by then another chat, with another note, may be on screen.
     const notes = this.memoNotesFor(passages);
     sources.passages = await this.datedPassages(sources.chatId, passages);
-    const saved = await this.saveMemo({ memo: null, title: '', description: '', why: '', tags: [], notes, passages: sources.passages }, sources, true);
+    const saved = await this.saveMemo({ title: '', description: '', why: '', tags: [], notes }, sources, true);
     if (saved) this.flashHint(`Memo saved: ${saved.basename}`);
     return saved;
   }
@@ -5610,11 +5610,16 @@ export class ChatView extends ItemView {
       sources.passages,
       {
         memos,
-        notes,
+        archived: (memo) => this.plugin.isArchived(memo),
+        // Not those the settings hide from a chat's notes; the most recently edited first.
+        notes: () =>
+          this.app.vault
+            .getMarkdownFiles()
+            .filter((file) => !this.plugin.isHiddenPath(file.path))
+            .sort((a, b) => b.stat.mtime - a.stat.mtime),
+        links: notes,
         noteLink: (file) => this.wikilink(file),
         titleProblem: (title) => this.memoTitleProblem(title),
-        alreadyIn: async (memo, chosen) => passagesAlreadyIn(await this.app.vault.cachedRead(memo), sources.chatId, chosen).length,
-        open: (memo) => void this.app.workspace.getLeaf('tab').openFile(memo),
         suggest: (signal) => this.plugin.suggestMemo(sources.chatTitle, passages, signal),
       },
       (choice) => void this.saveMemo(choice, sources),
@@ -5622,18 +5627,21 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * The memos offered to add passages to, in order: those about the note attached or in front, then
-   * those saved from chat `chatId`, then the rest, the most recently changed first within each.
+   * The memos offered first to link a new memo to, in order: those about the note attached or in
+   * front, then those saved from chat `chatId`, then the rest, the most recently changed first within
+   * each, archived ones last.
    */
   private memosToOffer(chatId: string): TFile[] {
     const path = this.attachedNote ?? this.activeNote()?.file.path;
     const note = path ? this.app.vault.getAbstractFileByPath(path) : null;
     const link = note instanceof TFile ? this.wikilink(note) : null;
+    // Archived memos last, in the same order among themselves.
     const rank = (memo: TFile) => {
       const frontmatter = this.app.metadataCache.getFileCache(memo)?.frontmatter;
       const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
-      if (link && list(frontmatter?.notes).includes(link)) return 0;
-      return list(frontmatter?.claude_chats).includes(chatId) ? 1 : 2;
+      const archived = frontmatter?.archived === true ? 3 : 0;
+      if (link && list(frontmatter?.notes).includes(link)) return archived;
+      return archived + (list(frontmatter?.claude_chats).includes(chatId) ? 1 : 2);
     };
     // Each ranked once; a stable sort: within a rank, the most recently changed first, as memoNotes gives them.
     const ranked = this.plugin.memoNotes().map((memo) => ({ memo, rank: rank(memo) }));
@@ -5665,46 +5673,19 @@ export class ChatView extends ItemView {
   }
 
   private async writeMemo(choice: MemoChoice, sources: MemoSources, quiet: boolean): Promise<TFile | null> {
-    // The passages as the form gave them back: with any labels and comments.
-    sources = { ...sources, passages: choice.passages };
-    if (!choice.memo && !choice.title.trim()) {
+    if (!choice.title.trim()) {
       const stamp = formatDate(Date.now()).replace(':', '');
       const title = freeMemoTitle(quickMemoTitle(sources.passages), stamp, (name) => this.noteNameTaken(name));
       choice = { ...choice, title, tags: cleanTags([...choice.tags, BOOKMARK_TAG]) };
     }
     try {
-      let file = choice.memo;
-      if (file) {
-        await this.app.vault.process(file, (text) => addMemoSources(text, sources));
-        // Only the notes kept in the form: the memo's own are never taken away.
-        const notes = choice.notes;
-        const target = file;
-        // The passages are in once written: a failure here is said as such, and saving them again is
-        // caught by the form's check for passages a memo holds already.
-        await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-          const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : typeof value === 'string' ? [value] : []);
-          // Ids and titles stay paired, which the table's chat links rely on.
-          const paired = pairChat(list(frontmatter.claude_chats), list(frontmatter.chats), sources.chatId, sources.chatTitle);
-          frontmatter.claude_chats = paired.ids;
-          frontmatter.chats = paired.titles;
-          const known = list(frontmatter.notes);
-          if (notes.some((note) => !known.includes(note))) frontmatter.notes = [...known, ...notes.filter((note) => !known.includes(note))];
-          const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags.map(String) : typeof frontmatter.tags === 'string' ? [frontmatter.tags] : [];
-          if (choice.tags.some((tag) => !tags.includes(tag))) frontmatter.tags = cleanTags([...tags, ...choice.tags]);
-          frontmatter.updated = sources.date;
-        }).catch((error: unknown) => {
-          log('updating the properties of a memo failed', error);
-          new Notice(`The passages were added to “${target.basename}”, but its properties (chats, notes, tags, updated) could not be updated: ${errorText(error)}`, 10000);
-        });
-      } else {
-        const path = await this.plugin.memosPath(`${memoNoteName(choice.title)}.md`);
-        file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, why: choice.why, tags: choice.tags, notes: choice.notes, sources }));
-      }
+      const path = await this.plugin.memosPath(`${memoNoteName(choice.title)}.md`);
+      const file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, why: choice.why, tags: choice.tags, notes: choice.notes, sources }));
       this.plugin.linkNoteChat(file.path, sources.chatId);
       const saved = file;
       if (quiet) return saved;
       const frag = createFragment((parts) => {
-        parts.appendText(`${choice.memo ? 'Added to' : 'Saved'} “${saved.basename}”. `);
+        parts.appendText(`Saved “${saved.basename}”. `);
         parts.createEl('a', { text: 'Open it', href: '#' }).addEventListener('click', (evt) => {
           evt.preventDefault();
           void this.app.workspace.getLeaf('tab').openFile(saved);

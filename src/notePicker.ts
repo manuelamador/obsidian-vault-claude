@@ -1,23 +1,15 @@
 import { FuzzySuggestModal, TFile, TFolder, type App, type TAbstractFile } from 'obsidian';
 
-/**
- * The `@` picker: notes, other files and folders; with `notesOnly`, notes alone (a memo's related
- * notes). `onPick` is given null when it closes with nothing chosen.
- */
+/** The `@` picker: notes, other files and folders. */
 export class NotePicker extends FuzzySuggestModal<TAbstractFile> {
   private chosen = false;
 
-  constructor(
-    app: App,
-    private readonly onPick: (item: TAbstractFile | null) => void,
-    private readonly notesOnly = false,
-  ) {
+  constructor(app: App, private readonly onPick: (item: TAbstractFile | null) => void) {
     super(app);
-    this.setPlaceholder(notesOnly ? 'Add a related note' : 'Mention a note, file or folder');
+    this.setPlaceholder('Mention a note, file or folder');
   }
 
   getItems(): TAbstractFile[] {
-    if (this.notesOnly) return this.app.vault.getMarkdownFiles();
     return this.app.vault.getAllLoadedFiles().filter((item) => item.path !== '/' && (item instanceof TFile || item instanceof TFolder));
   }
 
