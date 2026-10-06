@@ -88,7 +88,7 @@ Open the chat from the robot icon in the left ribbon.
 
 - Open a side chat beside Quote or the chat title. It runs in Plan mode without changing your notes; paste or drop images to ask about them. **Minimise** shrinks it to a bar at the bottom, showing its last question, so you can read and use the chat; click the bar to open it again. Choose **Keep as a chat** to retain it.
 
-  <img src="docs/side-chat.png" width="520" alt="A side chat open over the right of a chat about a Solow-model note, before its first question: “Ask about this chat. The answer does not change it.”, its delete, keep-as-a-chat and close buttons, and its input at the bottom">
+  <img src="docs/side-chat.png" width="520" alt="A side chat open over the right of a chat about a Solow-model note, before its first question: “Ask about this chat. The answer does not change it.”, its start-over, keep-as-a-chat, minimise and close buttons, and its input at the bottom">
 
 - Buttons under a reply let you reply to it, copy it, insert it into a note, save it as a memo, or branch from there.
 
@@ -218,6 +218,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
   <img src="docs/history.png" width="480" alt="The history: its search field, the Scratch chat, and a chat marked “● 2 tasks in the background” in the accent colour">
 
+- **Pick up where you left off.** The command, the link on an empty chat, or the New chat button's right-click menu asks Claude's model for small jobs which chats you are likely to carry on: a few recent ones, and one or two older ones that look unfinished, picked at random. The list is kept for the day; **Suggest again** asks anew. Click a row for its details beside the list: the suggested next step (never a decision made for you), the notes it touched with their folders and tags, the memos saved from it, what made it a candidate, and its last exchanges, whose links and file names open the note (⌘-hover for a preview). **Use suggested step** opens the chat with the step added after any draft there; **Open chat** opens it as it is. On each row, the clock reminds you of it first each time you open the list, on up to five days (the clock on a reminder stops it); ↻ skips it for a week, another taking its place; the crossed-out eye never suggests it again (**Clear ignored chats**, at the foot of the list, brings those back). It reads the chats and the memos saved from them locally, and sends short excerpts to the model only when it asks; nothing is sent in a chat.
 - **Keep several conversations going.** Chats continue working when you switch away, keeping their drafts and attached notes. Open chats in separate tabs or branch from a reply or one of your messages.
 - **Use a scratch chat.** A standing chat for quick questions starts over after 24 hours unused by default. Keep a useful exchange as a separate chat.
 - **Save a conversation.** Buttons beside the title save the chat or a summary as a note, or delete it.
@@ -268,7 +269,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ### Safety
 
-- Images in replies display only when they are files in the vault; any other appears as a link rather than loading automatically, and an embedded note appears as a link to it. Raw HTML in replies shows as text, except a few plain tags such as `<br>` and `<sup>`. Anything drawn in the panel is checked against an allow-list of local addresses, including what appears after a reply is drawn.
+- Images in replies display only when they are files in the vault; any other appears as a link rather than loading automatically, and an embedded note appears as a link to it. Raw HTML in replies shows as text, except a few plain tags such as `<br>` and `<sup>`. Anything drawn in the panel, and the excerpts in Pick up where you left off, is checked against an allow-list of local addresses, including what appears after it is drawn.
 - Bypass mode requires enabling it in settings and never runs from the phone.
 - Closing a panel transfers running chats to another Claude panel, or stops them if none remains; a plan, question or approval still waiting is then answered as not approved. Claude processes end when Obsidian quits.
 - Chats are saved as they go and can be resumed from history.
@@ -322,7 +323,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ## Commands
 
-Open chat · New chat · New chat in a new tab · Edit selection with Claude · Find in chat · Go to previous / next message you sent · List messages you sent · Write this message in a note · Send the draft note · Send this note to Claude as a prompt · Quote the selected chat text in your next message · Open side chat · Open scratch chat · Clear scratch chat · Toggle fast mode · Chat history · Focus chat input · Stop Claude · Rename chat · Branch this chat into a new tab · Save chat as note · Save chat summary as note · Ask Claude about selection · Take all chats off the phone · Toggle phone access (Remote Control)
+Open chat · New chat · New chat in a new tab · Edit selection with Claude · Find in chat · Go to previous / next message you sent · List messages you sent · Write this message in a note · Send the draft note · Send this note to Claude as a prompt · Quote the selected chat text in your next message · Open side chat · Open scratch chat · Clear scratch chat · Toggle fast mode · Chat history · Focus chat input · Stop Claude · Rename chat · Branch this chat into a new tab · Save chat as note · Save chat summary as note · Ask Claude about selection · Take all chats off the phone · Toggle phone access (Remote Control) · Pick up where you left off · Pick up where you left off: show ignored chats again
 
 ## Limitations
 

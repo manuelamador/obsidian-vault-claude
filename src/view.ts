@@ -29,7 +29,7 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
   filePathOf,
@@ -43,6 +43,7 @@ import {
   type SelectionAttachment,
 } from './attachments';
 import { chipFor, closeImage, renderChip } from './chip';
+import { hintAbove } from './hint';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
@@ -321,6 +322,8 @@ interface BackgroundChat {
   sentIds: Set<string>;
   /** The mode its approved plan returns to (see ChatView.modeBeforePlan). */
   modeBeforePlan: PermissionMode;
+  /** Its messages still queued, by id, with their text and chips: not yet in its file, so drawn again from here. */
+  queued: Map<string, { text: string; chips: Chip[] }>;
 }
 
 /** A background chat with nothing left to keep its process for: not working, no tasks, not on the phone, nothing waiting on you. */
@@ -575,7 +578,7 @@ export class ChatView extends ItemView {
    */
   /** Messages sent while a reply runs, by the uuid the result echoes back. */
   /** Messages sent and not yet answered; `text`, a queued one's, by which it is known should Claude Code save it under an id of its own. */
-  private readonly pending = new Map<string, { bubble: HTMLElement; running: boolean; id: MessageId; text?: string }>();
+  private readonly pending = new Map<string, { bubble: HTMLElement; running: boolean; id: MessageId; text?: string; chips?: Chip[] }>();
   /** Working chats moved off screen by opening another chat. */
   private readonly background = new Set<BackgroundChat>();
   /** Approval cards currently on screen, so they can move with their chat to the background. */
@@ -740,12 +743,13 @@ export class ChatView extends ItemView {
     setIcon(this.historyButton, 'history');
     this.registerDomEvent(this.historyButton, 'click', () => void this.openHistory());
     const newTabHint = MOD_CLICK;
-    const newButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `New chat (${newTabHint}: in a new tab)` } });
+    const newButton = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': `New chat (${newTabHint}: in a new tab; right-click for more)` } });
     setIcon(newButton, 'square-pen');
     this.registerDomEvent(newButton, 'contextmenu', (evt) => {
       evt.preventDefault();
       const menu = new Menu();
       menu.addItem((item) => item.setTitle('New chat in a new tab').setIcon('square-pen').onClick(() => void this.plugin.openChatTab(this.leaf).then((view) => view?.focusInput())));
+      menu.addItem((item) => item.setTitle('Pick up where you left off').setIcon('history').onClick(() => void this.plugin.openPickUp()));
       if (this.plugin.settings.scratchChat) {
         menu.addItem((item) => item.setTitle('Open scratch chat').setIcon('eraser').onClick(() => void this.openScratch()));
         menu.addItem((item) => item.setTitle('Clear scratch chat').setIcon('trash-2').onClick(() => void this.plugin.clearScratchChat()));
@@ -1539,6 +1543,11 @@ export class ChatView extends ItemView {
       const prompt = messagePrompt(message);
       const shown = prompt && promptBubble(prompt.text, prompt.images);
       if (!shown || shown === 'stopped') continue;
+      // Already drawn (sent here before the panel was reloaded, say, so not known as sent here): not again.
+      if (Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).some((drawn) => drawn.dataset.uuid === message.uuid)) {
+        this.sentIds.add(message.uuid);
+        continue;
+      }
       // A message queued here, saved by Claude Code under an id of its own: it is this panel's,
       // already shown, and now taken up.
       const queued = [...this.pending].find(([, entry]) => entry.text !== undefined && entry.text.trim() === shown.text.trim());
@@ -1569,6 +1578,8 @@ export class ChatView extends ItemView {
       remoteUrl: this.remoteUrl,
       approvals: [],
       pendingIds: new Set(this.pending.keys()),
+      // Those still queued, not yet in the session file: drawn again when the chat is shown again.
+      queued: new Map([...this.pending].filter(([, sent]) => sent.bubble.hasClass('is-queued') && sent.text !== undefined).map(([id, sent]) => [id, { text: sent.text ?? '', chips: sent.chips ?? [] }])),
       waitedForQueue: false,
       mode: this.mode,
       modelOverride: this.modelOverride,
@@ -1906,6 +1917,12 @@ export class ChatView extends ItemView {
         this.tools.set(id, tool);
         if (tool.group) this.updateToolGroup(tool.group);
       }
+    }
+    // Messages still queued, not yet in its file: shown again, in the turn running, marked as queued.
+    for (const [id, queued] of entry.queued) {
+      const waiting = this.pending.get(id);
+      if (!waiting || waiting.running) continue;
+      this.pending.set(id, { ...waiting, bubble: this.drawQueued(queued.text, queued.chips), text: queued.text, chips: queued.chips });
     }
     for (const approval of entry.approvals) this.renderApprovalCard(approval);
     this.currentModel = entry.currentModel;
@@ -3275,17 +3292,9 @@ export class ChatView extends ItemView {
     // Sent while Claude works: shown where the conversation is now, marked until a turn takes it up.
     const queued = this.busy;
     // A queued message may be saved folded into the reply rather than under its own id: no copy from it.
-    const bubble = this.renderUserBubble(text, chips, queued && this.draw.turn ? this.draw.turn : this.messagesEl, queued ? undefined : uuid);
+    const bubble = queued ? this.drawQueued(text, chips) : this.renderUserBubble(text, chips, this.messagesEl, uuid);
     if (queued) {
-      bubble.addClass('is-queued');
-      const label = bubble.createDiv({ cls: 'vc-queued-label' });
-      label.appendText('Queued: Claude reads this at its next step · ');
-      // Claude Code holds it and folds it in at its next pause; this ends the step so it is read now.
-      const now = label.createSpan({ cls: 'vc-welcome-link', text: 'send now' });
-      now.setAttr('aria-label', 'End the current step so this message is read now');
-      now.addEventListener('click', () => this.interruptTurn());
-      this.pending.set(uuid, { bubble, running: false, id: uuid, text });
-      this.draw.group = null;
+      this.pending.set(uuid, { bubble, running: false, id: uuid, text, chips });
       this.scrollToBottom(true);
     }
     // The chat it was typed in, for its draft should another chat be opened while it is prepared.
@@ -3317,6 +3326,24 @@ export class ChatView extends ItemView {
     // Claude Code queues it and folds it into the running reply at its next pause.
     session.send(content, undefined, uuid);
     this.linkSentNotes(notes);
+  }
+
+  /**
+   * A queued message's bubble, where the conversation is now (in the turn running), marked until a
+   * turn takes it up. A queued message may be saved folded into the reply rather than under its own
+   * id: no copy from it.
+   */
+  private drawQueued(text: string, chips: Chip[]): HTMLElement {
+    const bubble = this.renderUserBubble(text, chips, this.draw.turn ?? this.messagesEl, undefined);
+    bubble.addClass('is-queued');
+    const label = bubble.createDiv({ cls: 'vc-queued-label' });
+    label.appendText('Queued: Claude reads this at its next step · ');
+    // Claude Code holds it and folds it in at its next pause; this ends the step so it is read now.
+    const now = label.createSpan({ cls: 'vc-welcome-link', text: 'send now' });
+    now.setAttr('aria-label', 'End the current step so this message is read now');
+    now.addEventListener('click', () => this.interruptTurn());
+    this.draw.group = null;
+    return bubble;
   }
 
   /**
@@ -4358,7 +4385,32 @@ export class ChatView extends ItemView {
 
   // ---- Stream handling ---------------------------------------------------
 
+  /** When the session file was last read for queued messages taken up (see noticeQueuedTaken). */
+  private queuedCheckedAt = 0;
+
+  /**
+   * Queued messages Claude Code has folded into the turn running: their "Queued" mark goes as soon as
+   * its file says so (see queuedTaken), not only when the turn ends. Read at most every two seconds,
+   * and only while one is queued.
+   */
+  private noticeQueuedTaken(): void {
+    const queued = [...this.pending].filter(([, sent]) => sent.bubble.hasClass('is-queued') && sent.text !== undefined);
+    const id = this.chatId;
+    const root = this.plugin.vaultRoot();
+    if (queued.length === 0 || !id || !root || Date.now() - this.queuedCheckedAt < 2000) return;
+    this.queuedCheckedAt = Date.now();
+    void queuedTaken(id, root).then((taken) => {
+      if (id !== this.chatId) return;
+      for (const [key, sent] of queued) {
+        const text = sent.text?.trim() ?? '';
+        // Its prompt holds what was typed, after any notes that went with it.
+        if (text && taken.some((prompt) => prompt.includes(text))) this.markDelivered(key, false);
+      }
+    });
+  }
+
   private onMessage(message: SDKMessage): void {
+    if (message.type === 'assistant' && message.parent_tool_use_id === null) this.noticeQueuedTaken();
     if (trackTask(this.tasks, message)) {
       this.updateStopButton();
       this.updateTab();
@@ -5814,6 +5866,17 @@ export class ChatView extends ItemView {
     this.growInput();
   }
 
+  /** Adds `text` to the input, on a line after anything already there, which stays (a suggested step to pick a chat up by). */
+  addToInput(text: string): void {
+    const typed = this.inputEl.value.trimEnd();
+    this.inputEl.value = typed ? `${typed}\n\n${text}` : text;
+    this.inputEdited();
+    this.focusInput();
+    this.inputEl.setSelectionRange(this.inputEl.value.length, this.inputEl.value.length);
+    this.growInput();
+    if (typed) hintAbove(this.inputEl, 'Suggested step added after your draft');
+  }
+
   /** Puts `text` in the input as a quote, to carry on from it (a link from a memo note). */
   quote(text: string): void {
     this.quoteText(text);
@@ -5865,7 +5928,7 @@ export class ChatView extends ItemView {
     const adding = this.sideChat.isOpen() && !!quoted;
     this.sideChat.open(quoted);
     this.hideSelectionButtons();
-    if (adding) this.flashHint('Selection added to the side chat');
+    if (adding) this.sideChat.hint('Selection added to the side chat');
   }
 
   /**
@@ -5986,7 +6049,7 @@ export class ChatView extends ItemView {
   private quoteText(text: string): void {
     const input = this.inputEl;
     input.value = withQuote(input.value, text);
-    this.flashHint('Selection added to your message');
+    hintAbove(this.inputEl, 'Selection added to your message');
     this.focusInput();
     input.setSelectionRange(input.value.length, input.value.length);
     this.suggest.update();
@@ -6130,6 +6193,12 @@ export class ChatView extends ItemView {
       const link = line.createSpan({ cls: 'vc-welcome-link', text: 'Open the scratch chat' });
       line.appendText(' for daily odds and ends');
       link.addEventListener('click', () => void this.openScratch());
+    }
+    if (!this.scratch) {
+      const line = el.createDiv({ cls: 'vc-muted vc-welcome-pick-up' });
+      const link = line.createSpan({ cls: 'vc-welcome-link', text: 'Pick up where you left off' });
+      line.appendText(': chats to carry on');
+      link.addEventListener('click', () => void this.plugin.openPickUp());
     }
   }
 

@@ -214,6 +214,25 @@ export function applyTicks(markdown: string, toggled: ReadonlySet<number>): stri
     .join('\n');
 }
 
+/** The task checkboxes left unticked (`- [ ]`) in `markdown`, outside fenced code, as applyTicks counts them. */
+export function uncheckedCount(markdown: string): number {
+  let count = 0;
+  let fence: string | null = null;
+  for (const line of markdown.split('\n')) {
+    if (fence) {
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    const marker = fenceMarker(line);
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    if (/^((?:\s*>)*\s*(?:[-*+]|\d+[.)])\s+)\[ \]/.test(line)) count += 1;
+  }
+  return count;
+}
+
 /** `ticks`: this chat's checkbox ticks by reply key (see replyKey), applied to the replies' text. */
 export function chatToMarkdown(title: string, sessionId: string, transcript: SessionMessage[], date: string, ticks: Record<string, number[]> = {}): string {
   const parts: string[] = [];

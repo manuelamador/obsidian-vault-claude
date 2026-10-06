@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { Component, setIcon } from 'obsidian';
 import { imageFromBlob, pastedFiles, toImageBlock, type ImageAttachment } from './attachments';
 import { textBlocks, withQuote } from './chatText';
+import { hintAbove } from './hint';
 import { chipFor, renderChip } from './chip';
 import type { ClaudeSession, PermissionRequest, SessionHandlers, UserContent } from './session';
 
@@ -92,7 +93,7 @@ export class SideChat {
       });
       return el;
     };
-    button('trash-2', 'Start over', () => this.startOver()).addClass('vc-side-chat-full-only');
+    button('rotate-ccw', 'Start over: a new side chat, this one deleted (× closes it)', () => this.startOver()).addClass('vc-side-chat-full-only');
     button('copy-plus', 'Keep as a chat, in a new tab', () => this.keep()).addClass('vc-side-chat-full-only');
     this.sizeButton = button('minus', 'Minimise: keep it, out of the way', () => (this.isMinimised() ? this.restore() : this.minimise()));
     button('x', 'Close (Esc)', () => this.close());
@@ -100,7 +101,9 @@ export class SideChat {
     this.status = this.el.createDiv({ cls: 'vc-side-chat-status vc-muted' });
     this.tray = this.el.createDiv({ cls: 'vc-tray vc-side-chat-tray' });
     this.tray.hide();
-    this.input = this.el.createEl('textarea', { cls: 'vc-side-chat-input', attr: { rows: '2', placeholder: 'Ask about this chat…' } });
+    this.input = this.el.createEl('textarea', { cls: 'vc-side-chat-input', attr: { rows: '3', placeholder: 'Ask about this chat…' } });
+    // It grows with what is in it (a quote, say), up to a point, and scrolls past that.
+    this.input.addEventListener('input', () => this.growInput());
     this.el.addEventListener('keydown', (evt) => this.onKey(evt));
     // Pasted images go with the question; pasted text is left to the input.
     this.input.addEventListener('paste', (evt) => {
@@ -116,6 +119,17 @@ export class SideChat {
 
   isOpen(): boolean {
     return this.el.isShown();
+  }
+
+  /** Shows `text` for a moment just above its input (a selection put in it, say). */
+  hint(text: string): void {
+    hintAbove(this.input, text);
+  }
+
+  /** The input as tall as what is in it, from three lines to six (see the stylesheet). */
+  private growInput(): void {
+    this.input.style.height = 'auto';
+    this.input.style.height = `${this.input.scrollHeight + 2}px`;
   }
 
   /** Whether it is open but minimised to a bar, the chat under it free to read and use. */
@@ -145,6 +159,7 @@ export class SideChat {
     if (this.isMinimised()) this.restore();
     // Whole: a side chat given only what is asked knows no more of the selection than this.
     if (quote) this.input.value = withQuote(this.input.value, quote, Infinity);
+    this.growInput();
     this.input.focus();
     this.input.setSelectionRange(this.input.value.length, this.input.value.length);
   }
@@ -177,10 +192,14 @@ export class SideChat {
     images.forEach((image, index) => renderChip(this.tray, chipFor(image), () => this.setImages(this.images.filter((_, i) => i !== index))));
   }
 
-  /** Empties it and ends its session, deleting its copy; the next question starts a new one. */
+  /** A new side chat in its place: this one's conversation and copy deleted, its input emptied. */
   private startOver(): void {
     this.end('delete');
     this.clear();
+    this.input.value = '';
+    this.setImages([]);
+    this.lastQuestion.setText('');
+    this.growInput();
     this.input.focus();
   }
 
@@ -257,6 +276,7 @@ export class SideChat {
       for (const image of images) renderChip(row, chipFor(image));
     }
     this.input.value = '';
+    this.growInput();
     this.setImages([]);
     this.setBusy(true);
     this.scrollToEnd();

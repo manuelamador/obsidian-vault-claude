@@ -85,11 +85,21 @@
 }
 
 /* Set apart from the keys above it by a short rule. */
-.vc-welcome-scratch {
-  max-width: 24em;
+/* The welcome's offers (the scratch chat, picking up): one block under a rule, of one width. */
+.vc-welcome-scratch,
+.vc-welcome-pick-up {
+  max-width: 32em;
+  /* Wrapped evenly: no word left alone on a line. */
+  text-wrap: balance;
   margin: var(--size-4-3) auto 0;
   padding-top: var(--size-4-3);
   border-top: 1px solid var(--background-modifier-border);
+}
+
+.vc-welcome-scratch + .vc-welcome-pick-up {
+  margin-top: var(--size-4-3);
+  padding-top: 0;
+  border-top: none;
 }
 
 .vc-welcome-link,
@@ -1906,6 +1916,24 @@ button.vc-continue-button:hover span:last-child {
   margin: 0 var(--size-4-2) var(--size-4-2);
   resize: none;
   font-size: var(--font-ui-small);
+  /* Three lines at least; it grows with what is in it to six, then scrolls. */
+  min-height: calc(3lh + var(--size-4-2));
+  max-height: calc(6lh + var(--size-4-2));
+  flex-shrink: 0;
+}
+
+/* A short message just above an input, saying what was put in it (see hintAbove). */
+.vc-input-hint {
+  position: absolute;
+  z-index: 6;
+  padding: var(--size-2-1) var(--size-4-2);
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  pointer-events: none;
 }
 
 /* The form for saving a memo (see MemoModal). */
@@ -2069,4 +2097,334 @@ button.vc-continue-button:hover span:last-child {
 .vc-image-preview-label {
   color: #fff;
   font-size: var(--font-ui-small);
+}
+
+/* Pick up where you left off: a card per chat suggested (see PickUpModal). */
+.vc-pick-up-card {
+  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-2) var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.vc-pick-up-head {
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.vc-pick-up-title {
+  font-weight: var(--font-semibold);
+}
+
+.vc-pick-up-age,
+.vc-pick-up-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-pick-up-why,
+.vc-pick-up-next {
+  margin-top: var(--size-4-1);
+  font-size: var(--font-ui-small);
+}
+
+.vc-pick-up-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-2);
+}
+
+
+/* The list: a bar with the status and Suggest again; rows that open in place. */
+.vc-pick-up-bar {
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Lists take room only once they have rows: while Claude looks, the status line stands alone. */
+.vc-pick-up-list:empty {
+  display: none;
+}
+
+.vc-pick-up-list {
+  margin-top: var(--size-4-2);
+}
+
+/* A row set aside fades out; the one taking its place fades in; a reminder set says so first. */
+.vc-pick-up-card {
+  transition:
+    opacity 300ms ease,
+    transform 300ms ease;
+}
+
+.vc-pick-up-card.is-leaving {
+  opacity: 0;
+  transform: translateX(16px);
+  pointer-events: none;
+}
+
+.vc-pick-up-card.is-arriving {
+  animation: vc-pick-up-arrive 400ms ease;
+}
+
+@keyframes vc-pick-up-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+.vc-pick-up-card.is-said {
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: center;
+  border-color: var(--interactive-accent);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  animation: vc-pick-up-arrive 300ms ease;
+}
+
+.vc-pick-up-said-icon {
+  display: inline-flex;
+  color: var(--interactive-accent);
+}
+
+.vc-pick-up-summary {
+  cursor: pointer;
+}
+
+.vc-pick-up-head {
+  justify-content: flex-start;
+}
+
+.vc-pick-up-head .vc-pick-up-title {
+  flex: 1;
+}
+
+.vc-pick-up-chevron {
+  display: inline-flex;
+  color: var(--text-faint);
+  transition: transform 120ms ease;
+}
+
+.vc-pick-up-card.is-open .vc-pick-up-chevron {
+  transform: rotate(90deg);
+}
+
+/* Each section of an opened row in a shaded box; each note, memo or exchange in it a block of its own. */
+.vc-pick-up-section {
+  margin-top: var(--size-4-3);
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+
+.vc-pick-up-section > .vc-pick-up-label {
+  margin-bottom: var(--size-2-3);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vc-pick-up-item {
+  padding: var(--size-2-3) 0;
+}
+
+.vc-pick-up-item + .vc-pick-up-item {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.vc-pick-up-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-2);
+  margin-top: var(--size-2-2);
+}
+
+.vc-pick-up-tag {
+  padding: 0 var(--size-4-1);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-pick-up-tag.is-status {
+  color: var(--text-accent);
+}
+
+/* An exchange: who said it on top, what they said under it; yours set in a little. */
+.vc-pick-up-exchange .vc-pick-up-who {
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+
+.vc-pick-up-exchange.is-you {
+  padding-left: var(--size-4-3);
+  border-left: 2px solid var(--interactive-accent);
+}
+
+.vc-pick-up-meta,
+.vc-pick-up-who {
+  color: var(--text-muted);
+}
+
+/* A note's folder, under its name (and under a chat's title, that of the first note it touched). */
+.vc-pick-up-path {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-family: var(--font-monospace);
+  overflow-wrap: anywhere;
+}
+
+/* A row's icons (remind me later, skip for now, never suggest): quiet until hovered. */
+.vc-pick-up-later {
+  padding: 2px;
+  color: var(--text-faint);
+}
+
+.vc-pick-up-later:hover {
+  color: var(--text-normal);
+}
+
+/* The status line, with a turning wheel while Claude looks. */
+.vc-pick-up-status {
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: center;
+}
+
+.vc-pick-up-wheel {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--background-modifier-border);
+  border-top-color: var(--interactive-accent);
+  border-radius: 50%;
+  animation: vc-pick-up-turn 800ms linear infinite;
+}
+
+@keyframes vc-pick-up-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-pick-up-wheel {
+    animation-duration: 3s;
+  }
+}
+
+/* A reminder: its days left beside its age, the clock lit (a click stops it), fading as its days run out. */
+.vc-pick-up-card.is-reminder {
+  opacity: var(--vc-reminder-fade, 1);
+}
+
+.vc-pick-up-left {
+  padding: 0 var(--size-4-1);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  color: var(--text-accent);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-pick-up-later.is-on {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-radius: var(--radius-s);
+}
+
+.vc-pick-up-later.is-on:hover {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent-hover);
+}
+
+/* The row open: its frame in the accent colour. */
+.vc-pick-up-card.is-open {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent), var(--shadow-s);
+}
+
+/* The foot of the list: chats left out, and a link to let them back in. */
+.vc-pick-up-foot {
+  margin-top: var(--size-4-3);
+  padding-top: var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+}
+
+/* Pick up, two panes: the list on the left, the row clicked on the right; the window widened for them. */
+.modal.vc-pick-up-wide {
+  width: min(1180px, 94vw);
+  max-width: none;
+  overflow: hidden;
+}
+
+.modal.vc-pick-up-wide .vc-pick-up {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(380px, 1.1fr);
+  gap: var(--size-4-4);
+  align-items: start;
+}
+
+.modal.vc-pick-up-wide .vc-pick-up {
+  overflow: hidden;
+}
+
+.modal.vc-pick-up-wide .vc-pick-up-main,
+.vc-pick-up-detail {
+  max-height: 72vh;
+  overflow-y: auto;
+}
+
+.vc-pick-up-detail {
+  padding: var(--size-4-2) var(--size-4-4) var(--size-4-4);
+  border-left: 1px solid var(--background-modifier-border);
+  animation: vc-pick-up-arrive 250ms ease;
+}
+
+.vc-pick-up-detail-head {
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.vc-pick-up-detail-title {
+  font-size: var(--h3-size, 1.2em);
+  font-weight: var(--font-semibold);
+  line-height: 1.3;
+}
+
+.vc-pick-up-detail > .vc-pick-up-why {
+  margin: var(--size-4-2) 0;
+}
+
+/* The status line and Suggest again stay at the top of the list as it scrolls, never cut off. */
+.vc-pick-up-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--size-2-2) 0 var(--size-4-2);
+  background: var(--modal-background, var(--background-primary));
+}
+
+/* An excerpt drawn as Markdown, compact: paragraphs close together, at the panel's small size. */
+.vc-pick-up-said > :first-child {
+  margin-top: 0;
+}
+
+.vc-pick-up-said > :last-child {
+  margin-bottom: 0;
+}
+
+.vc-pick-up-said p {
+  margin: var(--size-2-2) 0;
 }

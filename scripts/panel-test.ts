@@ -1848,7 +1848,7 @@ async function main(): Promise<void> {
       sideInput.dispatchEvent(evt);
       return evt.defaultPrevented;
     };
-    const sideButton = (label: string) => (side.querySelector(`[aria-label="${label}"]`) as HTMLElement).click();
+    const sideButton = (label: string) => (side.querySelector(`[aria-label^="${label}"]`) as HTMLElement).click();
     // A question's session starts after a pause (see startSideSession), and is used after it.
     const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
     const ask = async (started = true) => {
@@ -2486,10 +2486,10 @@ async function main(): Promise<void> {
     // Turned off, an empty chat stops offering it; the opening lines are redrawn where they are shown.
     plugin.settings.scratchChat = false;
     view.newChat();
-    const offerGone = !root.querySelector('.vc-welcome .vc-welcome-link');
+    const offerGone = !root.querySelector('.vc-welcome .vc-welcome-scratch');
     plugin.settings.scratchChat = true;
     view.refreshWelcome();
-    const offerBack = !!root.querySelector('.vc-welcome .vc-welcome-link');
+    const offerBack = !!root.querySelector('.vc-welcome .vc-welcome-scratch');
     console.log(`scratch offer follows the setting: off ${offerGone}; on ${offerBack}`);
     if (!offerGone || !offerBack) process.exitCode = 1;
     await (view as unknown as { openScratch(): Promise<void> }).openScratch();
@@ -2757,7 +2757,7 @@ async function main(): Promise<void> {
     const placeholder = (view as unknown as { inputEl: HTMLTextAreaElement }).inputEl.placeholder;
     const welcomeOk =
       welcome ===
-        'Claude Code, running in this vault\n⌘↩ send · ↑ last message · @ file · / command\n⌥↑↓ your messages · ⌘F find\nOpen the scratch chat for daily odds and ends' &&
+        'Claude Code, running in this vault\n⌘↩ send · ↑ last message · @ file · / command\n⌥↑↓ your messages · ⌘F find\nOpen the scratch chat for daily odds and ends\nPick up where you left off: chats to carry on' &&
       placeholder === 'Ask Claude about this vault…';
     console.log(`new chat lists the keys: ${welcomeOk}`);
     if (!welcomeOk) {

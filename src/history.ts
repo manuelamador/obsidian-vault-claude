@@ -403,6 +403,38 @@ export async function sessionStamp(id: string, dir: string): Promise<string | nu
  * When messages `uuids` of session `id` were written, each as a local `YYYY-MM-DD`, read from the end
  * of its file until all are found; one not found (its file gone, say) is left out.
  */
+/** How far back from the end of a chat's file to look for queued messages taken up. */
+const QUEUED_TAIL_BYTES = 256 * 1024;
+
+/**
+ * The queued messages Claude Code has taken up mid-turn in session `id`, by their text, read from
+ * the end of its file (no further than QUEUED_TAIL_BYTES): it writes one as an attachment the moment
+ * it folds it into the turn running, before any result says so.
+ */
+export async function queuedTaken(id: string, dir: string): Promise<string[]> {
+  const taken: string[] = [];
+  await eachRowFromEnd(
+    id,
+    dir,
+    (row) => {
+      if (row.type === 'attachment' && row.attachment?.type === 'queued_command') {
+        const prompt = row.attachment.prompt;
+        const text = typeof prompt === 'string' ? prompt : Array.isArray(prompt) ? textBlocksOf(prompt) : '';
+        if (text) taken.push(text);
+      }
+      return false;
+    },
+    QUEUED_TAIL_BYTES,
+    QUEUED_TAIL_BYTES,
+  ).catch((error: unknown) => log(`reading the queued messages of session ${id} failed`, error));
+  return taken;
+}
+
+/** The text of content blocks, as a queued message's prompt may be given. */
+function textBlocksOf(blocks: unknown[]): string {
+  return blocks.flatMap((block) => (typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text' && typeof (block as { text?: unknown }).text === 'string' ? [(block as { text: string }).text] : [])).join('\n');
+}
+
 export async function messageDates(id: string, dir: string, uuids: string[]): Promise<Map<string, string>> {
   const wanted = new Set(uuids);
   const dates = new Map<string, string>();
@@ -485,6 +517,8 @@ interface SessionRow {
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;
+  /** What Claude Code attached to the chat: a queued message taken up mid-turn is one (`queued_command`). */
+  attachment?: { type?: string; prompt?: unknown };
   isVisibleInTranscriptOnly?: boolean;
 }
 

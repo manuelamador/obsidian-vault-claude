@@ -4,13 +4,16 @@ import { join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
-import { deleteSessionIfAny, deleteSessions, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem } from './history';
+import { deleteSessionIfAny, deleteSessions, lastMessages, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem } from './history';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
 import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, upgradeMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
 import { ContinueMemoModal } from './memoModal';
+import { DAY_MS, OLDER_LOOKED_AT, PICK_UP_SYSTEM, SKIP_DAYS, candidateOf, leftOut, ownMessage, chatsToLookAt, keptToday, localDay, remindersNow, pickUpPrompt, readPickUp, type Candidate, type PickUpState, type Suggestion } from './pickUp';
+import { PickUpModal, type ChatDetails } from './pickUpModal';
+import { renderSafely } from './safeRender';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -53,6 +56,11 @@ export interface ChatDraft {
 
 /** A chat outside the panel's list (a session run elsewhere, opened here) keeps its draft this long. */
 const DRAFT_DAYS = 30;
+/** How much of a chat's file is read for picking it up: its last messages, from at most its last bytes. */
+const PICK_UP_MESSAGES = 60;
+const PICK_UP_BYTES = 2_000_000;
+/** The most older chats read, at random, for those with a clue that something was left open. */
+const PICK_UP_OLDER_READS = 30;
 
 /** A plan edited in a note (see ChatView.renderPlanCard): the note, and the plan as Claude wrote it. */
 interface PlanNote {
@@ -78,6 +86,7 @@ interface PluginData {
   unseen?: Record<string, 'done' | 'error'>;
   scratch?: { id: string; usedAt: number };
   sideSessions?: string[];
+  pickUp?: PickUpState;
 }
 
 export default class VaultClaudePlugin extends Plugin {
@@ -91,6 +100,8 @@ export default class VaultClaudePlugin extends Plugin {
    * Dropped with the chat's record when the history is trimmed.
    */
   ticks: Record<string, Record<string, number[]>> = {};
+  /** Pick up where you left off: the chats set aside (see pickUp.ts). */
+  pickUp: PickUpState = { hidden: {} };
   /** Models reported by Claude Code, cached so a new chat can list them before its session starts. */
   models: ModelInfo[] = [];
   modelsFetchedAt = 0;
@@ -176,6 +187,12 @@ export default class VaultClaudePlugin extends Plugin {
       id: 'chat-history',
       name: 'Chat history',
       callback: async () => (await this.activateView())?.openHistory(),
+    });
+    this.addCommand({ id: 'pick-up', name: 'Pick up where you left off', callback: () => void this.openPickUp() });
+    this.addCommand({
+      id: 'pick-up-reset',
+      name: 'Pick up where you left off: show ignored chats again',
+      callback: () => this.clearIgnoredChats(),
     });
     this.addCommand({
       id: 'continue-from-memo',
@@ -409,6 +426,9 @@ export default class VaultClaudePlugin extends Plugin {
     if (ids) {
       for (const id of Object.keys(this.ticks)) if (!ids.has(id)) changed = delete this.ticks[id] || changed;
       for (const id of Object.keys(this.unseen)) if (!ids.has(id)) changed = delete this.unseen[id] || changed;
+      for (const record of [this.pickUp.hidden, this.pickUp.later ?? {}, this.pickUp.skipped ?? {}]) for (const id of Object.keys(record)) if (!ids.has(id)) changed = delete record[id] || changed;
+      // Skips that have run out.
+      for (const [id, until] of Object.entries(this.pickUp.skipped ?? {})) if (until <= Date.now()) changed = delete this.pickUp.skipped?.[id] || changed;
       const pinned = this.pinned.filter((id) => ids.has(id));
       if (pinned.length !== this.pinned.length) {
         this.pinned = pinned;
@@ -1196,16 +1216,173 @@ export default class VaultClaudePlugin extends Plugin {
     await view?.sendText(text);
   }
 
+  /** How many chats Pick up where you left off never suggests (skipped ones come back by themselves). */
+  ignoredChats(): number {
+    return Object.keys(this.pickUp.hidden).length;
+  }
+
+  /** The chats never to be suggested (see ignoredChats) may be suggested again; a notice says how many. */
+  clearIgnoredChats(): void {
+    const count = this.ignoredChats();
+    this.pickUp.hidden = {};
+    void this.saveSettings();
+    new Notice(count > 0 ? `${count} ignored chat${count === 1 ? '' : 's'} can be suggested again.` : 'No chats were ignored.');
+  }
+
+  /** Pick up where you left off: Claude's suggestions of chats to carry on (see pickUp.ts, PickUpModal). */
+  async openPickUp(): Promise<void> {
+    // Listed first, so that the reminders kept can be shown with their chats' titles.
+    if (!this.lastListing) await this.listChats().catch(() => []);
+    new PickUpModal(this.app, {
+      load: async (signal, fresh) => {
+        // Listed now: what was worked on since the kept list was made is told by it.
+        await this.listChats().catch(() => []);
+        const kept = fresh ? null : keptToday(this.pickUp, Date.now(), (id) => this.lastListing?.find((item) => item.id === id)?.updatedAt);
+        if (kept) return kept;
+        const made = await this.suggestPickUp(signal);
+        if (!made || signal.aborted) return made && { ...made, at: Date.now() };
+        // Kept for the rest of the day: only the chats suggested, not every one looked at.
+        const at = Date.now();
+        const suggested = new Set(made.suggestions.map((suggestion) => suggestion.id));
+        this.pickUp.kept = { day: localDay(at), at, suggestions: made.suggestions, note: made.note, candidates: made.candidates.filter((candidate) => suggested.has(candidate.id)) };
+        void this.saveSettings();
+        return { ...made, at };
+      },
+      details: (id) => this.pickUpDetails(id),
+      open: async (id, step) => {
+        const title = this.lastListing?.find((item) => item.id === id)?.title ?? 'Chat';
+        const view = await this.openChatById(id, title);
+        if (!view) new Notice('That chat could not be opened: it may have been deleted.');
+        else if (step) view.addToInput(step);
+      },
+      hide: (id) => {
+        this.pickUp.hidden[id] = Date.now();
+        delete this.pickUp.later?.[id];
+        void this.saveSettings();
+      },
+      ignoredCount: () => this.ignoredChats(),
+      leftOut: (id) => leftOut(this.pickUp, id, Date.now()) || !!this.pickUp.later?.[id],
+      clearIgnored: () => this.clearIgnoredChats(),
+      skip: (id) => {
+        (this.pickUp.skipped ??= {})[id] = Date.now() + SKIP_DAYS * DAY_MS;
+        delete this.pickUp.later?.[id];
+        void this.saveSettings();
+      },
+      openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
+      renderMarkdown: (markdown, el, component, leaving, parent) =>
+        void renderSafely(this.app, markdown, el, component, {
+          resolve: (name) => {
+            const file = this.app.vault.getAbstractFileByPath(name) ?? this.app.metadataCache.getFirstLinkpathDest(name, '');
+            return file instanceof TFile ? file.path : null;
+          },
+          open: (linktext, newTab) => {
+            leaving();
+            void this.app.workspace.openLinkText(linktext, '', newTab);
+          },
+          preview: (linktext, event, target) => this.app.workspace.trigger('hover-link', { event, source: VIEW_TYPE, hoverParent: parent, targetEl: target, linktext }),
+        }),
+      previewNote: (path, event, target, parent) => this.app.workspace.trigger('hover-link', { event, source: VIEW_TYPE, hoverParent: parent, targetEl: target, linktext: path }),
+      remindLater: (suggestion) => {
+        (this.pickUp.later ??= {})[suggestion.id] = { why: suggestion.why, next: suggestion.next, at: Date.now(), days: [] };
+        void this.saveSettings();
+      },
+      forget: (id) => {
+        if (!this.pickUp.later?.[id]) return;
+        delete this.pickUp.later[id];
+        void this.saveSettings();
+      },
+      reminders: (before) => {
+        // Kept as they are while the chats are not listed yet (just after Obsidian starts).
+        const listing = this.lastListing;
+        if (!listing) return [];
+        const before_ = JSON.stringify(this.pickUp.later ?? {});
+        const shown = remindersNow(this.pickUp, Date.now(), before, (id) => listing.some((item) => item.id === id));
+        // Saved only when a day was counted or a reminder let go of.
+        if (JSON.stringify(this.pickUp.later ?? {}) !== before_) void this.saveSettings();
+        return shown.flatMap(({ id, why, next, left }) => {
+          const item = listing.find((listed) => listed.id === id);
+          return item ? [{ chat: { id, title: item.title, updatedAt: item.updatedAt, older: false, exchanges: [], clues: [] }, suggestion: { id, why, next }, left }] : [];
+        });
+      },
+    }).open();
+  }
+
+  /**
+   * What a suggested chat is about, from the plugin's own records: the notes it changed, was sent
+   * with or mentioned, each with its folder and tags, and the memos saved from it. Nothing is asked.
+   */
+  private pickUpDetails(id: string): ChatDetails {
+    const tagsOf = (file: TFile) => {
+      const cache = this.app.metadataCache.getFileCache(file);
+      const listed = cache?.frontmatter?.tags;
+      const front = Array.isArray(listed) ? listed.map(String) : typeof listed === 'string' ? [listed] : [];
+      const inline = (cache?.tags ?? []).map((tag) => tag.tag.replace(/^#/, ''));
+      return [...new Set([...front, ...inline])];
+    };
+    const notes: ChatDetails['notes'] = [];
+    const seen = new Set<string>();
+    for (const [index, how] of [
+      [this.noteChats, 'changed'],
+      [this.noteRefs, 'sent with a message'],
+      [this.noteMentions, 'mentioned'],
+    ] as const) {
+      for (const [path, ids] of Object.entries(index)) {
+        if (!ids.includes(id) || seen.has(path)) continue;
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile) || this.isMemo(file)) continue;
+        seen.add(path);
+        notes.push({ path, name: file.basename, folder: file.parent?.path ?? '/', tags: tagsOf(file), how });
+      }
+    }
+    const memos = this.memoNotes(id).map((file) => {
+      const status = this.app.metadataCache.getFileCache(file)?.frontmatter?.status;
+      return { path: file.path, name: file.basename, tags: tagsOf(file), status: typeof status === 'string' ? status : '' };
+    });
+    return { notes, memos };
+  }
+
+  /**
+   * The chats to pick up, suggested on the model for small jobs from short excerpts of the recent
+   * chats and of older ones with a clue that something was left open (see chatsToLookAt, candidateOf);
+   * read locally from their session files and the memos saved from them. Null when Claude Code cannot run.
+   */
+  private async suggestPickUp(signal: AbortSignal): Promise<{ suggestions: Suggestion[]; note: string; candidates: Candidate[] } | null> {
+    const launch = this.claudeLaunch();
+    const dir = this.vaultRoot();
+    if (typeof launch === 'string' || !dir) return null;
+    const now = Date.now();
+    const { recent, older } = chatsToLookAt(await this.listChats(), this.pickUp, now);
+    const memoNext = async (id: string) =>
+      (await Promise.all(this.memoNotes(id).map(async (file) => memoSection(await this.app.vault.cachedRead(file), 'Next')))).filter((next) => next.trim() !== '');
+    const look = async (item: HistoryItem, isOlder: boolean) =>
+      candidateOf(item, isOlder, await lastMessages(item.id, dir, ownMessage, PICK_UP_MESSAGES, PICK_UP_BYTES).catch(() => []), this.ticks[item.id] ?? {}, await memoNext(item.id));
+    const candidates: Candidate[] = [];
+    for (const item of recent) candidates.push(await look(item as HistoryItem, false));
+    // Older chats, in a random order, only with a clue that something was left open; no more read than PICK_UP_OLDER_READS.
+    for (const item of older.slice(0, PICK_UP_OLDER_READS)) {
+      if (candidates.filter((candidate) => candidate.older).length >= OLDER_LOOKED_AT || signal.aborted) break;
+      const candidate = await look(item as HistoryItem, true);
+      if (candidate.clues.length > 0) candidates.push(candidate);
+    }
+    if (signal.aborted) return { suggestions: [], note: '', candidates };
+    if (candidates.length === 0) return { suggestions: [], note: 'No chats from the last six months to look at.', candidates };
+    const reply = await runOneShot(launch, { system: PICK_UP_SYSTEM, prompt: pickUpPrompt(candidates, now), model: this.smallJobModel(), effort: 'low' }, () => undefined, signal);
+    const read = readPickUp(reply, candidates);
+    if (!read) throw new Error('Claude did not reply in the form asked for');
+    return { ...read, candidates };
+  }
+
   /**
    * Opens a chat by its session id in the panel, as listed when it was (its copies with it): a kept
    * side chat whose panel has closed, a passage a memo came from. The panel that shows it, once
-   * shown; null when it could not be.
+   * shown (another panel, when that one held it already); null when it could not be.
    */
   async openChatById(id: string, title: string): Promise<ChatView | null> {
     const view = await this.activateView();
     const listed = this.lastListing?.find((item) => item.id === id);
     const opened = await view?.openChat(listed ? { ...listed, title } : { id, title, updatedAt: Date.now(), fromPanel: this.isPanelChat(id) });
-    return opened ? view : null;
+    if (!opened) return null;
+    return this.chatViews().find((each) => each.holdsChat(id)) ?? view ?? null;
   }
 
   /**
@@ -1635,6 +1812,13 @@ export default class VaultClaudePlugin extends Plugin {
     }
     this.unseen = raw.unseen && typeof raw.unseen === 'object' ? raw.unseen : {};
     this.ticks = raw.ticks && typeof raw.ticks === 'object' ? raw.ticks : {};
+    const pickUp = raw.pickUp && typeof raw.pickUp === 'object' ? raw.pickUp : null;
+    this.pickUp = {
+      hidden: pickUp?.hidden && typeof pickUp.hidden === 'object' ? pickUp.hidden : {},
+      later: pickUp?.later && typeof pickUp.later === 'object' ? pickUp.later : {},
+      skipped: pickUp?.skipped && typeof pickUp.skipped === 'object' ? pickUp.skipped : {},
+      kept: pickUp?.kept && typeof pickUp.kept === 'object' && Array.isArray(pickUp.kept.suggestions) ? pickUp.kept : undefined,
+    };
     this.models = Array.isArray(raw.models) ? raw.models : [];
     this.modelsFetchedAt = typeof raw.modelsFetchedAt === 'number' ? raw.modelsFetchedAt : 0;
     this.commands = Array.isArray(raw.commands) ? raw.commands : [];
@@ -1682,6 +1866,7 @@ export default class VaultClaudePlugin extends Plugin {
       pinned: this.pinned,
       ticks: this.ticks,
       sideSessions: this.sideSessions,
+      pickUp: this.pickUp,
     };
   }
 }
