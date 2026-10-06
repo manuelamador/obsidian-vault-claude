@@ -1,6 +1,7 @@
 // Chat text: prompts and replies as the panel shows them and as a saved note, branch titles,
 // and background-task notifications. Kept free of `obsidian` imports.
 import { closesFence, fenceMarker } from './fences';
+import { MATH } from './safeMarkdown';
 import type { EffortLevel, PermissionMode, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import { stripContext } from './history';
 
@@ -121,8 +122,8 @@ export function textBlocks(content: readonly { type?: string; text?: unknown }[]
  */
 export function shownText(markdown: string): string {
   return markdown
-    .replace(/\$\$[\s\S]*?\$\$/g, ' ')
-    .replace(/\$[^$\n]+\$/g, ' ')
+    // As the reply filter reads math (see MATH): two prices in a sentence are not an equation.
+    .replace(MATH, ' ')
     .replace(/!?\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1')
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\*+|~~|`+/g, '')

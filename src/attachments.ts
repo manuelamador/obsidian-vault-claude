@@ -109,3 +109,15 @@ export function filePathOf(file: File): string | null {
   }
   return (file as File & { path?: string }).path || null;
 }
+
+/**
+ * The files a paste attaches: none when it carries text and its files are only images, as cells
+ * copied from a spreadsheet or a slide do (a picture of the text beside the text): the text is
+ * pasted instead. A screenshot carries no text, and attaches.
+ */
+export function pastedFiles(data: DataTransfer | null): File[] {
+  const files = Array.from(data?.files ?? []);
+  if (files.length === 0) return [];
+  const text = typeof data?.getData === 'function' ? data.getData('text/plain').trim() : '';
+  return text && files.every((file) => file.type.startsWith('image/')) ? [] : files;
+}

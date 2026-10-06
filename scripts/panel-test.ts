@@ -12,7 +12,7 @@ for (const key of ['window', 'document', 'Node', 'HTMLElement', 'Element', 'Docu
 async function main(): Promise<void> {
   const stub = await import('./obsidian-stub');
   stub.installDomHelpers(dom.window as unknown as Window & typeof globalThis);
-  for (const key of ['createDiv', 'createFragment', 'activeDocument']) g[key] = (dom.window as unknown as Record<string, unknown>)[key];
+  for (const key of ['createDiv', 'createFragment', 'activeDocument', 'MutationObserver']) g[key] = (dom.window as unknown as Record<string, unknown>)[key];
 
   const { ChatView } = await import('../src/view');
   const { chatToMarkdown } = await import('../src/chatText');
@@ -1127,8 +1127,9 @@ async function main(): Promise<void> {
         return { answered, card: internals.messagesEl.querySelector('.vc-question-card') as HTMLElement };
       };
       const option = (card: HTMLElement, label: string) => [...card.querySelectorAll<HTMLElement>('.vc-question-option')].find((el) => el.querySelector('.vc-question-label')?.textContent === label);
-      // One question, one answer: a click answers it.
-      const one = ask([fruit]);
+      // One question, one answer, no previews: a click answers it.
+      const plain = { ...fruit, options: fruit.options.map(({ label, description }) => ({ label, description })) };
+      const one = ask([plain]);
       const oneTitle = one.card.querySelector('.vc-permission-title')?.textContent;
       option(one.card, 'Banana')?.click();
       const oneResult = await one.answered;
@@ -3491,6 +3492,47 @@ async function main(): Promise<void> {
         ]);
       console.log(`a reply saved as a memo: button ${memoButton !== null}; passages ${JSON.stringify(opened?.passages)}; Option-click bookmarked ${bookmarked.length}, form ${formOnAlt} -> ${replyMemoOk}`);
       if (!replyMemoOk) process.exitCode = 1;
+    }
+    // The sweep on an allow-list of schemes: every address of an image (srcset with src too), SVG's
+    // loaders, style elements; and what is drawn in the panel later is swept as it comes in.
+    {
+      const { sweepRemoteMedia } = await import('../src/safeMarkdown');
+      const box = document.createElement('div');
+      box.innerHTML =
+        '<img src="a.png" srcset="https://evil.test/q 1x"><img src="HTTPS:evil.test/r"><img src="data:image/png;base64,AA" alt="ok">' +
+        '<svg><image href="https://evil.test/s"></image></svg><style>@import url(https://evil.test/t)</style>';
+      sweepRemoteMedia(box);
+      const swept = [box.querySelectorAll('img').length, box.querySelectorAll('a.external-link').length, box.querySelector('image') === null, box.querySelector('style') === null];
+      const late = internals.messagesEl.createDiv();
+      const img = late.createEl('img', { attr: { src: 'https://evil.test/late.png' } });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const lateSwept = !img.isConnected && late.querySelector('a.external-link') !== null;
+      late.remove();
+      const sweepOk = JSON.stringify(swept) === '[1,2,true,true]' && lateSwept;
+      console.log(`sweep: images left ${swept[0]}, links ${swept[1]}, svg image gone ${swept[2]}, style gone ${swept[3]}; drawn later swept ${lateSwept} -> ${sweepOk}`);
+      if (!sweepOk) process.exitCode = 1;
+    }
+    // A pasted image's chip opens the image full size; Esc closes it, and only it.
+    {
+      const { renderChip } = await import('../src/chip');
+      const row = document.body.appendChild(document.createElement('div'));
+      let removed = false;
+      const chipEl = renderChip(row, { label: 'Pasted image.png', image: 'data:image/png;base64,iVBORw0KGgo=' }, () => (removed = true));
+      chipEl.click();
+      const shown = document.querySelector('.vc-image-preview img')?.getAttribute('src');
+      let reached = false;
+      const below = () => (reached = true);
+      document.addEventListener('keydown', below);
+      document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
+      document.removeEventListener('keydown', below);
+      const closed = document.querySelector('.vc-image-preview') === null;
+      // The × removes it, opening nothing.
+      (chipEl.querySelector('.vc-chip-remove') as HTMLElement).click();
+      const noneOnRemove = document.querySelector('.vc-image-preview') === null;
+      row.remove();
+      const imageOk = shown === 'data:image/png;base64,iVBORw0KGgo=' && closed && !reached && removed && noneOnRemove;
+      console.log(`image chip: opened ${shown !== undefined}, Esc closed it ${closed} and went no further ${!reached}, × removed ${removed} without opening ${noneOnRemove} -> ${imageOk}`);
+      if (!imageOk) process.exitCode = 1;
     }
     // A reply's inline style that would load something is gone before the reply goes into the panel.
     {

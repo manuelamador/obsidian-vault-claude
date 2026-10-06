@@ -43,15 +43,16 @@ export function answeredText(questions: Question[], answers: Record<string, stri
 
 /**
  * Draws `questions` into `card`: each with its options as buttons (several may be picked when the
- * question allows it) and a box for an answer of your own. A single question with one answer is
- * answered by its click; otherwise Send sends once every question has an answer. `done` gets the
+ * question allows it) and a box for an answer of your own. A single question with one answer, and
+ * no previews to read, is answered by its click; otherwise Send sends once every question has an answer. `done` gets the
  * answers by question text (several picks joined by commas, as Claude Code joins them), or null
  * when the questions are skipped.
  */
 export function renderQuestionCard(card: HTMLElement, questions: Question[], done: (answers: Record<string, string> | null) => void): void {
   card.addClass('vc-question-card');
   card.createDiv({ cls: 'vc-permission-title', text: questions.length === 1 ? 'Claude has a question' : `Claude has ${questions.length} questions` });
-  const instant = questions.length === 1 && !questions[0].multiSelect;
+  // Options with a preview are picked first, so that the preview can be read, and then sent.
+  const instant = questions.length === 1 && !questions[0].multiSelect && !questions[0].options.some((option) => option.preview);
   const picked = questions.map(() => new Set<string>());
   const typed = questions.map(() => '');
   const answer = (index: number): string => {

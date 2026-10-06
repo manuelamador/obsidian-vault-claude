@@ -86,7 +86,7 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/quote-button.png" width="480" alt="Text and an equation selected in a reply, the equation shown as selected too, with the Quote, Side chat and Memo buttons just above them">
 
-- Open a side chat beside Quote or the chat title. It runs in Plan mode without changing your notes; paste or drop images to ask about them. Choose **Keep as a chat** to retain it.
+- Open a side chat beside Quote or the chat title. It runs in Plan mode without changing your notes; paste or drop images to ask about them. **Minimise** shrinks it to a bar at the bottom, showing its last question, so you can read and use the chat; click the bar to open it again. Choose **Keep as a chat** to retain it.
 
   <img src="docs/side-chat.png" width="520" alt="A side chat open over the right of a chat about a Solow-model note, before its first question: “Ask about this chat. The answer does not change it.”, its delete, keep-as-a-chat and close buttons, and its input at the bottom">
 
@@ -123,7 +123,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ### Working with notes
 
-- **Bring notes into the conversation.** Attach the open note, include selected text, or mention notes, files and folders with `@`. Add files and images through the paperclip, paste or drag and drop; hover over a chip to see what accompanies your message.
+- **Bring notes into the conversation.** Attach the open note, include selected text, or mention notes, files and folders with `@`. Add files and images through the paperclip, paste or drag and drop; hover over a chip to see what accompanies your message, and click an image's chip to see it full size.
 - **Edit a selection.** Right-click text in a note to ask Claude about it or request an edit, then review the word diff before accepting.
 
   <img src="docs/edit-selection.png" width="560" alt="The Edit selection with Claude dialog after “check the grammar”: the proposed change as a word diff, with Run again, Accept and Cancel">
@@ -161,7 +161,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 - Choose **Memo** over a chat selection or the sticky-note icon under a reply. A selection spanning messages keeps a passage for each, labelled You or Claude; a reply's memo includes your prompt and the reply. Equations stay as LaTeX.
 - Claude's model for small jobs suggests a title and description for you to edit. Add tags such as idea, todo, explore, read or bookmark, or your own, and optionally **Why I'm keeping this**. Each save makes a new memo.
-- **Related memos and notes** lists the chat's attached note and the notes the passages link to, each removable. **Link a memo or note…** links others: memos first (this chat's and those about the note in front, archived ones last and labelled), then the vault's notes. Link memos to each other to follow an idea across chats.
+- **Related memos and notes** lists the chat's attached note and the notes the passages link to, each removable. **Link a memo or note…** links others: memos first (those about the note in front, then this chat's, archived ones last and labelled), then the vault's notes. Link memos to each other to follow an idea across chats.
 
   <img src="docs/memo-form.png" width="420" alt="The Save a memo form: an empty title (saved as a bookmark if left so), the description with “Claude is suggesting a title and description…” below it, Why I’m keeping this, the tag toggles idea, todo, explore, read and bookmark and a field for other tags, Related memos and notes with the chip “Demo — Solow model” and Link a memo or note…, two passages in order, You and Claude dated 2026-09-25, the reply’s equations as LaTeX, and Suggest again, Save and Cancel">
 
@@ -173,7 +173,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
   <img src="docs/memos-button.png" width="300" alt="The sticky-note button at the top right of the panel, between the phone and history buttons, with its tooltip “All memos, in a table (⌘-click: this chat's)”">
 
-- The table has views by chat, note and tag. Left open, it follows the panel's chat. **Send to chat** puts a memo in the input; clearing it removes the mention. **Status** takes exploring, incorporated, resolved or discarded. **Archived** moves a memo into the Archived view; it is still offered, labelled, when you link memos. The Chats column opens each source chat at its first passage.
+- The table has views by chat, note and tag. Left open, it follows the panel's chat. **Send to chat** puts a memo in the input; clearing it removes the mention. **Status** is yours to fill in, for example exploring, incorporated, resolved or discarded. **Archived** moves a memo into the Archived view; it is still offered, labelled, when you link memos. The Chats column opens each source chat at its first passage.
 - Delete a memo like any note, or select its table row and choose **Delete** from the right-click menu.
 
 </details>
@@ -268,7 +268,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ### Safety
 
-- Images in replies display only when they are files in the vault; any other appears as a link rather than loading automatically. Raw HTML in replies shows as text, except a few plain tags such as `<br>` and `<sup>`.
+- Images in replies display only when they are files in the vault; any other appears as a link rather than loading automatically, and an embedded note appears as a link to it. Raw HTML in replies shows as text, except a few plain tags such as `<br>` and `<sup>`. Anything drawn in the panel is checked against an allow-list of local addresses, including what appears after a reply is drawn.
 - Bypass mode requires enabling it in settings and never runs from the phone.
 - Closing a panel transfers running chats to another Claude panel, or stops them if none remains; a plan, question or approval still waiting is then answered as not approved. Claude processes end when Obsidian quits.
 - Chats are saved as they go and can be resumed from history.

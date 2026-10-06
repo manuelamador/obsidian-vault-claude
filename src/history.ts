@@ -336,7 +336,10 @@ let customPlans: string | null = null;
 
 /** Sets the plans folder from Claude Code's `plansDirectory` setting, relative to the vault `cwd`; none, the default. */
 export function setPlansDirectory(setting: string | undefined, cwd: string): void {
-  const next = setting ? path.resolve(cwd, setting).normalize('NFC') : null;
+  const root = path.resolve(cwd).normalize('NFC');
+  const named = setting ? path.resolve(root, setting).normalize('NFC') : null;
+  // As Claude Code takes it: only a folder inside the vault, else its default.
+  const next = named && (named === root || named.startsWith(root + path.sep)) ? named : null;
   if (next === customPlans) return;
   customPlans = next;
   plansFolder = null;
@@ -363,25 +366,27 @@ export async function readPlanFile(file: unknown): Promise<string | null> {
  */
 export function isPlanFile(file: string): boolean {
   const plans = plansDir();
-  const real = (where: string) => {
+  const real = (where: string): string | null => {
     try {
       return realpathSync(where).normalize('NFC');
     } catch {
-      return where;
+      return null;
     }
   };
   // Every file a chat changes is asked about, a chat opened from the history replaying them all:
   // the folder's real path is looked up once for each config folder, and the file's only when its
   // folder is called `plans`.
-  if (plansFolder?.path !== plans) plansFolder = { path: plans, real: real(plans) };
+  // A folder not there yet is looked up again next time, rather than kept as it was named.
+  if (plansFolder?.path !== plans || plansFolder.real === null) plansFolder = { path: plans, real: real(plans) };
   const folder = path.dirname(path.resolve(file.normalize('NFC')));
   if (path.basename(folder).toLowerCase() !== path.basename(plans).toLowerCase()) return false;
-  const inFolder = real(folder);
-  return process.platform === 'win32' ? inFolder.toLowerCase() === plansFolder.real.toLowerCase() : inFolder === plansFolder.real;
+  const inFolder = real(folder) ?? folder;
+  const plansReal = plansFolder.real ?? plans;
+  return process.platform === 'win32' ? inFolder.toLowerCase() === plansReal.toLowerCase() : inFolder === plansReal;
 }
 
 /** The real path of Claude Code's plans folder, for the path it was found for (see isPlanFile). */
-let plansFolder: { path: string; real: string } | null = null;
+let plansFolder: { path: string; real: string | null } | null = null;
 
 /** Where Claude Code keeps a session: `<config>/projects/<projectFolder>/<id>.jsonl`. */
 function sessionFile(id: string, dir: string): string {

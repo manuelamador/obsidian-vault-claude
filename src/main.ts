@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, upgradeMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
 import { ContinueMemoModal } from './memoModal';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
@@ -352,6 +352,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       this.seedMemoBoxes();
       void this.renameDoneMemos();
+      void this.upgradeMemosBase();
     });
     this.registerEvent(
       this.app.metadataCache.on('changed', (file, _data, cache) => {
@@ -404,6 +405,16 @@ export default class VaultClaudePlugin extends Plugin {
     const dir = this.vaultRoot();
     const ids = dir ? await sessionIds(dir) : null;
     let changed = false;
+    // Ticks, pins and unseen replies of chats whose sessions are gone: nothing left to show them on.
+    if (ids) {
+      for (const id of Object.keys(this.ticks)) if (!ids.has(id)) changed = delete this.ticks[id] || changed;
+      for (const id of Object.keys(this.unseen)) if (!ids.has(id)) changed = delete this.unseen[id] || changed;
+      const pinned = this.pinned.filter((id) => ids.has(id));
+      if (pinned.length !== this.pinned.length) {
+        this.pinned = pinned;
+        changed = true;
+      }
+    }
     // A plan note kept for a chat whose session is gone has no next plan to go to.
     for (const [id, note] of Object.entries(this.planNotes)) {
       if (!ids || ids.has(id)) continue;
@@ -1208,7 +1219,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (!id) return;
     const dir = this.vaultRoot();
     if (dir && (await sessionStamp(id, dir)) === null) {
-      new Notice('Source chat unavailable: it has been deleted. The passage stays readable in the memo.');
+      new Notice('Source chat not found on this computer: deleted, or saved on another computer or with the vault in another folder. The passage stays readable in the memo.');
       return;
     }
     const title = this.chats.find((chat) => chat.id === id)?.title ?? this.lastListing?.find((item) => item.id === id)?.title ?? 'Chat';
@@ -1323,7 +1334,10 @@ export default class VaultClaudePlugin extends Plugin {
     const vault = this.app.vault.getName();
     if (!(existing instanceof TFile)) return this.app.vault.create(path, memoBaseYaml(chatId, chatTitle, vault));
     // A chat not started has no id to pick its memos by: the chat view keeps the last chat's.
-    if (!chatId) return existing;
+    if (!chatId) {
+      await this.upgradeMemosBase();
+      return existing;
+    }
     const before = await this.app.vault.read(existing);
     let parsed: unknown = null;
     try {
@@ -1338,6 +1352,24 @@ export default class VaultClaudePlugin extends Plugin {
       await this.followRenamedView(chatMemosView(chatTitle));
     }
     return existing;
+  }
+
+  /**
+   * The Memos base brought up to date (see upgradeMemoBase) as it is: when Obsidian has loaded, so
+   * that a base opened from the files, not from the panel, has Archived in place of Done too.
+   */
+  async upgradeMemosBase(): Promise<void> {
+    const folder = this.memosFolder();
+    const existing = this.app.vault.getAbstractFileByPath(`${folder === '/' ? '' : `${folder}/`}Memos.base`);
+    if (!(existing instanceof TFile)) return;
+    try {
+      const parsed: unknown = parseYaml(await this.app.vault.read(existing));
+      const upgraded = upgradeMemoBase(parsed);
+      // Written only when something changed: not reformatted at every start.
+      if (upgraded && JSON.stringify(upgraded) !== JSON.stringify(parsed)) await this.app.vault.modify(existing, stringifyYaml(upgraded));
+    } catch (error) {
+      log('updating the memos base failed', error);
+    }
   }
 
   /**

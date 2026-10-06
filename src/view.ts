@@ -35,13 +35,14 @@ import {
   filePathOf,
   imageFromBlob,
   mimeForExtension,
+  pastedFiles,
   toImageBlock,
   type Attachment,
   type FileAttachment,
   type ImageAttachment,
   type SelectionAttachment,
 } from './attachments';
-import { chipFor, renderChip } from './chip';
+import { chipFor, closeImage, renderChip } from './chip';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
@@ -126,6 +127,13 @@ const LONG_MESSAGE_CHARS = 700;
 const MAX_PREVIEW_LINES = 60;
 const PLAN_USAGE_INTERVAL_MS = 60_000;
 
+/** Where a message not sent went back to (see ChatView.unsend), for its notice. */
+function unsentWhere(back: 'input' | 'draft' | null, attachments: boolean): string {
+  if (back === 'input') return ' It is back in the input.';
+  if (back === 'draft') return ` It is back in that chat's input${attachments ? ', without its attachments' : ''}.`;
+  return '';
+}
+
 /** `n` and `word`, made plural unless `n` is 1: "1 chat", "3 chats". */
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -209,9 +217,9 @@ const APPEND_SYSTEM_PROMPT =
 /** Added for a side chat (see SideChat); `seen`: it has a copy of the chat it was opened beside. */
 function sideChatPrompt(seen: boolean): string {
   const where = seen
-    ? 'a question asked beside the conversation, in a small pane, which does not change it.'
+    ? 'a question asked beside the conversation, in a small pane, which does not change it. What you have of that conversation is a copy, made when the side chat started, running in a process of its own: anything still running in the original (subagents, background tasks, a reply in progress) goes on there, out of your sight, and its results come there, not here. Do not take work you cannot see as stopped or failed; say you cannot see it from here. Plan mode here is the side chat\'s own read-only setting, not the original conversation\'s mode.'
     : 'a question asked beside a conversation, in a small pane. You have not seen that conversation: work from what the user quotes or tells you.';
-  return ` This is a side chat: ${where} Answer briefly and directly. You can read files but not change them.`;
+  return ` This is a side chat: ${where} Answer briefly and directly. You can read files but not change them. When you do not know why something happened, say so rather than guess.`;
 }
 
 interface ToolGroup {
@@ -311,6 +319,8 @@ interface BackgroundChat {
   turnPrompts: string[];
   /** The messages sent from the panel (see ChatView.sentIds), so that one is not drawn again as sent from elsewhere. */
   sentIds: Set<string>;
+  /** The mode its approved plan returns to (see ChatView.modeBeforePlan). */
+  modeBeforePlan: PermissionMode;
 }
 
 /** A background chat with nothing left to keep its process for: not working, no tasks, not on the phone, nothing waiting on you. */
@@ -438,7 +448,10 @@ export class ChatView extends ItemView {
   /** A minute of the plan-usage countdown passed while the panel was hidden. */
   private planStale = false;
   private motionStep = 0;
-  private pendingApprovals = 0;
+  /** Approvals waiting on you in the chat on screen. */
+  private get pendingApprovals(): number {
+    return this.openApprovals.length;
+  }
   private stickToBottom = true;
 
   private messagesEl!: HTMLElement;
@@ -561,7 +574,8 @@ export class ChatView extends ItemView {
    * running turn or runs it as the next turn; the turn's result lists the uuids it consumed.
    */
   /** Messages sent while a reply runs, by the uuid the result echoes back. */
-  private readonly pending = new Map<string, { bubble: HTMLElement; running: boolean; id: MessageId }>();
+  /** Messages sent and not yet answered; `text`, a queued one's, by which it is known should Claude Code save it under an id of its own. */
+  private readonly pending = new Map<string, { bubble: HTMLElement; running: boolean; id: MessageId; text?: string }>();
   /** Working chats moved off screen by opening another chat. */
   private readonly background = new Set<BackgroundChat>();
   /** Approval cards currently on screen, so they can move with their chat to the background. */
@@ -695,7 +709,8 @@ export class ChatView extends ItemView {
     });
     const sideChatButton = titleActions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Side chat: ask about this chat without changing it' } });
     setIcon(sideChatButton, 'messages-square');
-    this.registerDomEvent(sideChatButton, 'click', () => (this.sideChat.isOpen() ? this.sideChat.close() : this.openSideChat()));
+    // Minimised, it opens again; open, it closes.
+    this.registerDomEvent(sideChatButton, 'click', () => (this.sideChat.isMinimised() ? this.sideChat.restore() : this.sideChat.isOpen() ? this.sideChat.close() : this.openSideChat()));
     this.deleteButton = titleActions.createEl('button', { cls: 'clickable-icon vc-delete-chat' });
     setIcon(this.deleteButton, 'trash-2');
     this.deleteButton.hide();
@@ -806,6 +821,20 @@ export class ChatView extends ItemView {
 
     const messagesWrap = root.createDiv({ cls: 'vc-messages-wrap' });
     this.messagesEl = messagesWrap.createDiv({ cls: 'vc-messages' });
+    // What is drawn in the panel after a reply is rendered (an embed, another plugin's post-processor),
+    // and the side chat's, is swept as it comes in (see sweepRemoteMedia): replies are swept before
+    // they go in (see renderMarkdown), this catches the rest.
+    const sweeper = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === 'attributes') {
+          if (record.target instanceof Element) sweepRemoteMedia(record.target, true);
+          continue;
+        }
+        for (const node of Array.from(record.addedNodes)) if (node instanceof Element && node.isConnected) sweepRemoteMedia(node);
+      }
+    });
+    sweeper.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset', 'data', 'style', 'href', 'xlink:href', 'background', 'poster'] });
+    this.register(() => sweeper.disconnect());
     this.draw = this.liveDraw = { parent: this.messagesEl, turn: null, group: null, liveText: null, turnHadText: false };
     this.promptNav = new PromptNav(messagesWrap, this.messagesEl, () => this.earlier?.listed() ?? []);
     this.quoteButton = messagesWrap.createEl('button', { cls: 'vc-quote-button', text: 'Quote', attr: { 'aria-label': 'Quote the selected text in your next message' } });
@@ -947,7 +976,7 @@ export class ChatView extends ItemView {
     });
     this.registerDomEvent(this.inputEl, 'blur', () => this.suggest.hide());
     this.registerDomEvent(this.inputEl, 'paste', (evt) => {
-      const files = Array.from(evt.clipboardData?.files ?? []);
+      const files = pastedFiles(evt.clipboardData);
       if (files.length === 0) return;
       evt.preventDefault();
       void this.attachExternalFiles(files);
@@ -1087,6 +1116,7 @@ export class ChatView extends ItemView {
 
   async onClose(): Promise<void> {
     this.closing = true;
+    closeImage();
     this.sideChat.close();
     this.saveDraft();
     // Another panel takes the running chats over; with none, they stop and the notice says so.
@@ -1113,7 +1143,7 @@ export class ChatView extends ItemView {
     if (refused && this.session) this.closeAfterAnswer(this.session, PANEL_CLOSED_ANSWER);
     else this.closeSession(this.session);
     this.session = null;
-    for (const entry of [...this.background]) this.dropBackground(entry);
+    for (const entry of [...this.background]) this.dropBackground(entry, true);
     this.stopStatusTimer();
   }
 
@@ -1182,7 +1212,6 @@ export class ChatView extends ItemView {
     this.remoteRequested = false;
     this.updatePhoneButton();
     this.openApprovals = [];
-    this.pendingApprovals = 0;
     this.resumeId = null;
     this.chatId = null;
     this.backChat = null;
@@ -1206,6 +1235,8 @@ export class ChatView extends ItemView {
       this.mode = this.modeBeforePlan === 'plan' ? this.plugin.settings.permissionMode : this.modeBeforePlan;
       this.showMode();
     }
+    // What a plan approved in this chat returns to: this chat's own mode, not another chat's.
+    this.modeBeforePlan = this.mode === 'plan' ? 'default' : this.mode;
     this.draftPath = null;
     this.updateDraftLine();
     this.populateModelSelect();
@@ -1374,7 +1405,10 @@ export class ChatView extends ItemView {
       } else {
         // The chat went to the background meanwhile: its entry is off the phone, and closes once idle.
         const entry = [...this.background].find((candidate) => candidate.session === session);
-        if (entry) entry.remoteUrl = null;
+        if (entry) {
+          entry.remoteUrl = null;
+          if (isIdle(entry)) this.settleBackground(entry);
+        }
         this.updateBackgroundIndicator();
       }
       return;
@@ -1505,6 +1539,14 @@ export class ChatView extends ItemView {
       const prompt = messagePrompt(message);
       const shown = prompt && promptBubble(prompt.text, prompt.images);
       if (!shown || shown === 'stopped') continue;
+      // A message queued here, saved by Claude Code under an id of its own: it is this panel's,
+      // already shown, and now taken up.
+      const queued = [...this.pending].find(([, entry]) => entry.text !== undefined && entry.text.trim() === shown.text.trim());
+      if (queued) {
+        this.sentIds.add(message.uuid);
+        this.markDelivered(queued[0]);
+        continue;
+      }
       const bubble = this.renderUserBubble(shown.text, shown.chips, undefined, message.uuid);
       bubble.createDiv({ cls: 'vc-origin-label', text: this.remoteUrl ? 'Sent from your phone' : 'Sent outside the panel' });
       turn.before(bubble);
@@ -1544,6 +1586,7 @@ export class ChatView extends ItemView {
       ]),
       turnPrompts: this.turnPrompts,
       sentIds: this.sentIds,
+      modeBeforePlan: this.modeBeforePlan,
     };
     this.tasks = new Set();
     for (const approval of this.openApprovals) this.adoptApproval(entry, approval);
@@ -1562,6 +1605,9 @@ export class ChatView extends ItemView {
     this.onWithdrawn(approval, () => {
       entry.approvals = entry.approvals.filter((open) => open !== approval);
       approval.resolve({ behavior: 'deny', message: 'Cancelled.' });
+      // Nothing waits on you there any more: its notice and the tab's sign go.
+      if (entry.approvals.length === 0) entry.notice?.hide();
+      this.updateBackgroundIndicator();
     });
   }
 
@@ -1667,6 +1713,11 @@ export class ChatView extends ItemView {
    * The last background task of an idle chat has ended. Claude Code normally answers with a turn
    * that reads its result, and that turn's end closes the chat; if none starts, it is closed here.
    */
+  /** The background chat whose process is `session`, if one is. */
+  private entryOf(session: ClaudeSession): BackgroundChat | undefined {
+    return [...this.background].find((entry) => entry.session === session);
+  }
+
   private settleBackground(entry: BackgroundChat): void {
     clearSettle(entry);
     entry.settleTimer = window.setTimeout(() => {
@@ -1702,7 +1753,6 @@ export class ChatView extends ItemView {
       approval.resolve({ behavior: 'deny', message });
     }
     this.openApprovals = [];
-    this.pendingApprovals = 0;
     return refused;
   }
 
@@ -1713,6 +1763,8 @@ export class ChatView extends ItemView {
    * anything else it asks is refused with `message`.
    */
   private closeAfterAnswer(session: ClaudeSession, message: string): void {
+    // Its process is ending from now on: deleting its chat meanwhile waits for it to exit.
+    if (session.sessionId) this.plugin.processEnding(session.sessionId, session.ended);
     let open = true;
     const close = () => {
       if (!open) return;
@@ -1731,10 +1783,14 @@ export class ChatView extends ItemView {
   }
 
   /** Stops a background chat: its approvals refused, its timer and notice gone, its process closed. */
-  private dropBackground(entry: BackgroundChat): void {
+  /**
+   * `keep`: a plan's note keeps your edits for the chat's next plan, as on screen (the panel closing:
+   * the chat can be reopened); otherwise it goes (the chat let go of or deleted).
+   */
+  private dropBackground(entry: BackgroundChat, keep = false): void {
     const answered = entry.approvals.length > 0;
     for (const approval of entry.approvals) {
-      void this.withdrawPlanNote(approval, false);
+      void this.withdrawPlanNote(approval, keep);
       approval.resolve({ behavior: 'deny', message: 'Chat closed.' });
     }
     clearSettle(entry);
@@ -1812,6 +1868,7 @@ export class ChatView extends ItemView {
     this.resumeId = entry.chatId;
     this.setChatTitle(entry.title);
     this.mode = entry.mode;
+    this.modeBeforePlan = entry.modeBeforePlan;
     this.modelOverride = entry.modelOverride;
     this.effortOverride = entry.effortOverride;
     this.fastMode = entry.fastMode;
@@ -3227,7 +3284,7 @@ export class ChatView extends ItemView {
       const now = label.createSpan({ cls: 'vc-welcome-link', text: 'send now' });
       now.setAttr('aria-label', 'End the current step so this message is read now');
       now.addEventListener('click', () => this.interruptTurn());
-      this.pending.set(uuid, { bubble, running: false, id: uuid });
+      this.pending.set(uuid, { bubble, running: false, id: uuid, text });
       this.draw.group = null;
       this.scrollToBottom(true);
     }
@@ -3239,29 +3296,15 @@ export class ChatView extends ItemView {
     } catch (error) {
       // A mentioned note could not be read: nothing is sent, and the message goes back to the input.
       log('the message could not be prepared', error);
-      bubble.remove();
-      this.pending.delete(uuid);
-      const here = session === this.session;
-      if (here) {
-        this.restoreUnsent(text, attachments, pathOnly);
-        // A new chat's opening lines, taken away for the message, come back.
-        if (this.messagesEl.childElementCount === 0) this.renderWelcome();
-      }
-      new Notice(`The message was not sent: ${errorText(error)}.${here ? ' It is back in the input.' : ''}`);
+      const back = this.unsend({ uuid, bubble, session, draftKey, text, attachments, pathOnly });
+      new Notice(`The message was not sent: ${errorText(error)}.${unsentWhere(back, attachments.length > 0)}`);
       return;
     }
     const { content, notes } = built;
     if (session !== this.session) {
-      // Another chat was opened while the mentioned notes were read: not sent, nor waited for in
-      // the chat it was typed in (moved to the background with it), and back in that chat's input.
-      bubble.remove();
-      this.pending.delete(uuid);
-      for (const entry of this.background) if (entry.session === session) entry.pendingIds.delete(uuid);
-      if (text) {
-        const draft = this.readDraft(draftKey) ?? {};
-        this.writeDraft(draftKey, { ...draft, text: draft.text?.trim() ? `${text}\n${draft.text}` : text });
-      }
-      new Notice(`The chat changed before the message was sent, so it was not sent. It is back in that chat's input${attachments.length > 0 ? ', without its attachments' : ''}.`);
+      // Another chat was opened while the mentioned notes were read.
+      const back = this.unsend({ uuid, bubble, session, draftKey, text, attachments, pathOnly });
+      new Notice(`The chat changed before the message was sent, so it was not sent.${unsentWhere(back, attachments.length > 0)}`);
       return;
     }
     if (!this.chatName) this.setChatTitle(chatTitle(text || attachments[0]?.name || ''));
@@ -3274,6 +3317,34 @@ export class ChatView extends ItemView {
     // Claude Code queues it and folds it into the running reply at its next pause.
     session.send(content, undefined, uuid);
     this.linkSentNotes(notes);
+  }
+
+  /**
+   * A message not sent after all (see send): its bubble gone, and not waited for, here or in the
+   * chat it was typed in, gone to the background meanwhile (which closes if that was all it waited
+   * for); its text back in that chat's input, here or in its draft. Where it went back to.
+   */
+  private unsend(sent: { uuid: string; bubble: HTMLElement; session: ClaudeSession; draftKey: string; text: string; attachments: Attachment[]; pathOnly: ReadonlySet<string> }): 'input' | 'draft' | null {
+    sent.bubble.remove();
+    this.pending.delete(sent.uuid as MessageId);
+    for (const entry of this.background) {
+      if (entry.session !== sent.session || !entry.pendingIds.delete(sent.uuid)) continue;
+      if (entry.pendingIds.size === 0 && entry.waitedForQueue) {
+        entry.waitedForQueue = false;
+        if (isIdle(entry)) this.settleBackground(entry);
+      }
+    }
+    // The chat on screen, or one that is its like (a new chat after a new chat): its input.
+    if (sent.session === this.session || sent.draftKey === this.draftKey()) {
+      this.restoreUnsent(sent.text, sent.attachments, sent.pathOnly);
+      // A new chat's opening lines, taken away for the message, come back.
+      if (this.messagesEl.childElementCount === 0) this.renderWelcome();
+      return 'input';
+    }
+    if (!sent.text) return null;
+    const draft = this.readDraft(sent.draftKey) ?? {};
+    this.writeDraft(sent.draftKey, { ...draft, text: draft.text?.trim() ? `${sent.text}\n${draft.text}` : sent.text });
+    return 'draft';
   }
 
   /** Puts a message that was not sent back in the input, before anything typed since, with its attachments and path-only mentions. */
@@ -3805,6 +3876,8 @@ export class ChatView extends ItemView {
       this.mode = 'default';
       this.session?.setPermissionMode('default').catch((error) => log('setPermissionMode failed', error));
     }
+    // Nor does an approved plan return to it.
+    if (!(this.modeBeforePlan in modes)) this.modeBeforePlan = 'default';
     this.modeMenu.clear();
     for (const [value, label] of Object.entries(modes)) this.modeMenu.add(value, label, modeShort(value));
     this.showMode();
@@ -3835,7 +3908,12 @@ export class ChatView extends ItemView {
       this.renderModeLine(previous, mode);
     } catch (error) {
       log('setPermissionMode failed', error);
-      if (session !== this.session) return;
+      // In the background meanwhile: its entry keeps the mode that runs.
+      if (session !== this.session) {
+        const entry = this.entryOf(session);
+        if (entry) entry.mode = previous;
+        return;
+      }
       new Notice(
         mode === 'bypassPermissions'
           ? 'This chat started before bypass was allowed. Start a new chat to use it.'
@@ -4074,7 +4152,11 @@ export class ChatView extends ItemView {
         this.syncEffort();
       } catch (error) {
         log('setEffort failed', error);
-        if (session !== this.session) return;
+        if (session !== this.session) {
+          const entry = this.entryOf(session);
+          if (entry) entry.effortOverride = previous;
+          return;
+        }
         new Notice('Could not change the effort.');
         // The menu goes back to the effort that runs.
         this.effortOverride = previous;
@@ -4099,6 +4181,11 @@ export class ChatView extends ItemView {
         this.syncEffort();
       } catch (error) {
         log('setModel failed', error);
+        if (session !== this.session) {
+          const entry = this.entryOf(session);
+          if (entry) entry.modelOverride = previous;
+          return;
+        }
         new Notice('Could not switch the model.');
         // The menu stays on the model that runs (currentModel, which this left alone, still names it).
         this.modelOverride = previous;
@@ -4150,7 +4237,11 @@ export class ChatView extends ItemView {
       await session?.setFastMode(this.fastMode);
     } catch (error) {
       log('setFastMode failed', error);
-      if (session !== this.session) return;
+      if (session !== this.session) {
+        const entry = session && this.entryOf(session);
+        if (entry) entry.fastMode = previous;
+        return;
+      }
       new Notice('Could not switch fast mode.');
       // The button goes back to what runs.
       this.fastMode = previous;
@@ -4468,7 +4559,6 @@ export class ChatView extends ItemView {
     this.turnPrompts = prompts;
     this.interrupted = false;
     this.draw.turnHadText = turn?.querySelector('.vc-text') != null;
-    this.pendingApprovals = 0;
     this.draw.turn = turn ?? this.messagesEl.createDiv({ cls: 'vc-turn' });
     this.dropLive();
     this.draw.liveText = null;
@@ -4869,7 +4959,6 @@ export class ChatView extends ItemView {
     approval.shown = true;
     this.openApprovals.push(approval);
     this.draw.group = null;
-    this.pendingApprovals += 1;
     this.tickStatus();
 
     // `label`: what the card says once decided, before the tool and what it was for; a question's
@@ -4880,7 +4969,6 @@ export class ChatView extends ItemView {
       const onScreen = this.openApprovals.includes(approval);
       this.openApprovals = this.openApprovals.filter((open) => open !== approval);
       if (onScreen) {
-        this.pendingApprovals = Math.max(0, this.pendingApprovals - 1);
         if (this.busy) this.tickStatus();
         card.empty();
         card.removeClass('vc-question-card', 'vc-plan-card');
@@ -5021,7 +5109,9 @@ export class ChatView extends ItemView {
       const edited = await takeNote();
       // The chat goes back to the mode it had before Plan mode, which Claude Code is told with the
       // approval (left to itself, it would return to Ask first).
-      const back = this.mode === 'plan' ? this.modeBeforePlan : null;
+      // Never to a mode the settings no longer offer (bypass switched off since).
+      const offered = permissionModes(this.plugin.settings.allowBypass);
+      const back = this.mode === 'plan' ? (this.modeBeforePlan in offered ? this.modeBeforePlan : 'default') : null;
       const returning = back && back !== 'default' ? { updatedPermissions: [{ type: 'setMode', mode: back, destination: 'session' }] as PermissionUpdate[] } : {};
       if (edited) finish({ behavior: 'allow', updatedInput: { ...input, plan: edited }, ...returning }, 'Approved', 'Plan approved, with your edits');
       else finish({ behavior: 'allow', updatedInput: input, ...returning }, 'Approved', 'Plan approved');
@@ -5029,13 +5119,22 @@ export class ChatView extends ItemView {
     const approveButton = buttons.createEl('button', { cls: 'mod-cta', text: 'Approve' });
     approveButton.addEventListener('click', () => decide(approve));
     const editButton = buttons.createEl('button', { text: noteFile() ? 'Open the plan note' : 'Edit in a note' });
+    // One note at a time: a second click while it is made waits for it.
+    let making = false;
     editButton.addEventListener('click', () => {
+      if (making) return;
       void (async () => {
         try {
           let file = noteFile();
           if (!file) {
+            making = true;
             const path = await this.savedNotePath(formatDate(Date.now()).slice(0, 10), `Plan — ${this.chatName ?? 'New chat'}`, '', 'Plans');
             file = await this.app.vault.create(path, plan);
+            // Answered or withdrawn while it was made: no plan to edit any more.
+            if (deciding || card.hasClass('is-decided') || approval.request.signal.aborted) {
+              await this.discardNote(file);
+              return;
+            }
             approval.notePath = file.path;
             if (chatKey) this.plugin.setPlanNote(chatKey, file.path, plan);
             editButton.setText('Open the plan note');
@@ -5045,6 +5144,8 @@ export class ChatView extends ItemView {
         } catch (error) {
           log('opening a plan note failed', error);
           new Notice(`Could not open the plan in a note: ${errorText(error)}`);
+        } finally {
+          making = false;
         }
       })();
     });
@@ -5652,7 +5753,7 @@ export class ChatView extends ItemView {
   private memoTitleProblem(title: string): string | null {
     const name = memoNoteName(title);
     if (!name) return 'Give the memo a title with letters or numbers in it.';
-    return this.noteNameTaken(name) ? `A note named “${name}” already exists: add the passages to it, or give the memo another title.` : null;
+    return this.noteNameTaken(name) ? `A note named “${name}” already exists: give the memo another title.` : null;
   }
 
   /** Whether a note is called `name` anywhere in the vault: note names are unique, and a link to a memo must find it. */
@@ -5661,9 +5762,10 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * Writes the passages to a new memo note, or to the end of the one chosen with its tags added, and
-   * links the note to the chat. A new memo with no title is a bookmark: titled by the passages' first
-   * words, a name no note has. `quiet`: no notice (the caller says it was saved).
+   * Writes the passages to a new memo note and links it to the chat. A memo with no title is a
+   * bookmark, titled by the passages' first words. Its name is one no note has as it is written:
+   * taken since the form checked it, the date and time are added. `quiet`: no notice (the caller says
+   * it was saved).
    */
   saveMemo(choice: MemoChoice, sources: MemoSources, quiet = false): Promise<TFile | null> {
     // One at a time: two bookmarks of one passage saved together would otherwise take the same name.
@@ -5673,11 +5775,12 @@ export class ChatView extends ItemView {
   }
 
   private async writeMemo(choice: MemoChoice, sources: MemoSources, quiet: boolean): Promise<TFile | null> {
-    if (!choice.title.trim()) {
-      const stamp = formatDate(Date.now()).replace(':', '');
-      const title = freeMemoTitle(quickMemoTitle(sources.passages), stamp, (name) => this.noteNameTaken(name));
-      choice = { ...choice, title, tags: cleanTags([...choice.tags, BOOKMARK_TAG]) };
-    }
+    const bookmark = !choice.title.trim();
+    const wanted = bookmark ? quickMemoTitle(sources.passages) : choice.title.trim();
+    const stamp = formatDate(Date.now()).replace(':', '');
+    // A title with nothing a note name can hold (only dots, say) gives a plain one.
+    const title = freeMemoTitle(memoNoteName(wanted) ? wanted : 'Memo', stamp, (name) => this.noteNameTaken(name));
+    choice = { ...choice, title, tags: bookmark ? cleanTags([...choice.tags, BOOKMARK_TAG]) : choice.tags };
     try {
       const path = await this.plugin.memosPath(`${memoNoteName(choice.title)}.md`);
       const file = await this.app.vault.create(path, memoNoteMarkdown({ title: choice.title, description: choice.description, why: choice.why, tags: choice.tags, notes: choice.notes, sources }));
@@ -5757,8 +5860,12 @@ export class ChatView extends ItemView {
 
   /** Opens the side chat, with `quote` (or the text selected in the chat) quoted in its input. */
   openSideChat(quote?: string): void {
-    this.sideChat.open(quote ?? this.selectedInChat() ?? undefined);
+    const quoted = quote ?? this.selectedInChat() ?? undefined;
+    // Said when it goes into a side chat already open, whose input may hold a question being typed.
+    const adding = this.sideChat.isOpen() && !!quoted;
+    this.sideChat.open(quoted);
     this.hideSelectionButtons();
+    if (adding) this.flashHint('Selection added to the side chat');
   }
 
   /**
@@ -5879,6 +5986,7 @@ export class ChatView extends ItemView {
   private quoteText(text: string): void {
     const input = this.inputEl;
     input.value = withQuote(input.value, text);
+    this.flashHint('Selection added to your message');
     this.focusInput();
     input.setSelectionRange(input.value.length, input.value.length);
     this.suggest.update();
@@ -5963,10 +6071,10 @@ export class ChatView extends ItemView {
       el.append(...Array.from(holder.childNodes));
     };
     moveIn();
+    // Whatever was drawn goes in, the render failed or not.
     return rendering
+      .finally(moveIn)
       .then(() => {
-        moveIn();
-        sweepRemoteMedia(el);
         linkFileNames(el, (name) => this.vaultFileOf(name));
         if (chat) this.recordMentions(el, chat);
         if (component === this.chatComponent) this.countNotesSoon();

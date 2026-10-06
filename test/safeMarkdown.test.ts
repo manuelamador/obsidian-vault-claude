@@ -4,7 +4,7 @@ import { neutralizeRemoteMedia, openableHref } from '../src/safeMarkdown';
 
 // A real tag (not one escaped as text) with a loading attribute, a live <input>, or a remote image.
 const loads = (out: string) =>
-  /<[a-z][^<>]*[\s/](?:style|background|src|srcset|poster)\s*=/i.test(out) || /<(?:input|img)/i.test(out) || /!\[[^\]]*(?:\[[^\]]*\][^\]]*)*\]\((?!attachments\/)/i.test(out);
+  /<[a-z][^<>]*[\s/](?:style|background|src|srcset|poster)\s*=/i.test(out) || /<(?:input|img|style)/i.test(out) || /!\[[^\]]*(?:\[[^\]]*\][^\]]*)*\]\((?!attachments\/)/i.test(out);
 
 // The cases from the 2026-09-15 review.
 const unsafe = [
@@ -31,6 +31,9 @@ const unsafe = [
   '<a title=">" style="background:url(https://evil.test)">t</a>',
   // Dollar signs that are not math around a tag.
   'costs $5 <img src=https://evil.test/d.png> and $6',
+  // The 2026-10-06 audit: a `](<` with no link before it, and a code span across a blank line.
+  'x ](<img src=a.png srcset=https://evil.test/q 1x>) y',
+  'a `b\n\n<img src=a.png srcset="https://evil.test/q 1x">\n\nc` d',
 ];
 
 for (const input of unsafe) {
@@ -73,4 +76,17 @@ test('an image shows only when it is plainly a file of the vault', () => {
   const kept = '![f](attachments/fig.png) ![[Fig.png]] ![a](<my fig.png> "t") ![b](fig%20one.png)';
   assert.equal(neutralizeRemoteMedia(kept), kept);
   assert.equal(neutralizeRemoteMedia('![a](/abs/fig.png) ![b](file:///x.png)'), '[a](/abs/fig.png) [b](file:///x.png)');
+});
+
+test("a note's embed becomes a link; a media file's stays", () => {
+  assert.equal(neutralizeRemoteMedia('![[Private note]] and ![[fig.png|300]] and ![[Plan#Steps]]'), '[[Private note]] and ![[fig.png|300]] and [[Plan#Steps]]');
+});
+
+test("a real link's target in angle brackets is kept; an HTML comment goes", () => {
+  assert.equal(neutralizeRemoteMedia('[see](<my notes/a b.md>) x <!-- hidden --> y'), '[see](<my notes/a b.md>) x  y');
+});
+
+test('a code fence in a quote keeps what it shows', () => {
+  const text = '> ```ts\n> const a: Array<T> = [];\n> ```';
+  assert.equal(neutralizeRemoteMedia(text), text);
 });

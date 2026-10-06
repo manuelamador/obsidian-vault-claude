@@ -23,7 +23,7 @@ type MemoSuggester = (signal: AbortSignal) => Promise<{ title: string; descripti
 
 /** What the form needs from the panel besides the passages. */
 export interface MemoFormHost {
-  /** The memos offered to link first: this chat's and those about the note in front, then the rest by date; archived ones last. */
+  /** The memos offered to link first: those about the note in front, then this chat's, then the rest by date; archived ones last. */
   memos: TFile[];
   /** Whether a memo is archived: still offered, labelled so. */
   archived(memo: TFile): boolean;
@@ -215,17 +215,25 @@ class LinkPicker extends SuggestModal<TFile> {
     this.setPlaceholder('Link a memo or note: type to search');
   }
 
+  /** The memos, then the other notes: listed once, as the picker opens, not at each key typed. */
+  private all: TFile[] | null = null;
+
   getSuggestions(query: string): TFile[] {
     const needle = query.trim().toLowerCase();
-    const memos = new Set(this.host.memos.map((memo) => memo.path));
-    const all = [...this.host.memos, ...this.host.notes().filter((note) => !memos.has(note.path))];
-    const found = needle ? all.filter((file) => file.path.toLowerCase().includes(needle)) : all;
+    if (!this.all) {
+      const memos = new Set(this.host.memos.map((memo) => memo.path));
+      this.all = [...this.host.memos, ...this.host.notes().filter((note) => !memos.has(note.path))];
+    }
+    const found = needle ? this.all.filter((file) => file.path.toLowerCase().includes(needle)) : this.all;
     return found.slice(0, MAX_LINK_CHOICES);
   }
 
   renderSuggestion(file: TFile, el: HTMLElement): void {
     const line = el.createDiv({ cls: 'vc-memo-pick', text: file.basename });
     if (this.host.memos.includes(file)) line.createSpan({ cls: 'vc-memo-tag', text: this.host.archived(file) ? 'Archived memo' : 'Memo' });
+    // Its folder, so that notes of one name in two folders can be told apart.
+    const folder = file.parent?.path;
+    if (folder && folder !== '/') el.createDiv({ cls: 'vc-memo-pick-folder', text: folder });
   }
 
   onChooseSuggestion(file: TFile): void {

@@ -130,8 +130,7 @@ function sectionBounds(note: string, heading: string): { start: number; body: nu
 
 /**
  * The section recording passages saved from one chat: the chat and the day they were saved, then each
- * passage: its label if you gave one, who wrote it and when (the message's date, when known), links
- * back, the passage quoted, and your comment.
+ * passage: who wrote it and when (the message's date, when known), links back, and the passage quoted.
  */
 function memoSourcesMarkdown(sources: MemoSources): string {
   const lines = [`### ${headingText(sources.chatTitle)} · saved ${sources.date}`, ''];
@@ -172,6 +171,8 @@ export function memoNoteMarkdown(memo: { title: string; description: string; why
     'send: false',
     // A box in the Memos base: ticked, the memo is finished with, kept for reference in the Archived view only.
     'archived: false',
+    // Yours to fill in, in the Memos base or the note: exploring, incorporated, resolved, discarded, or your own.
+    'status:',
     `claude_chats: [${chatId}]`,
     '---',
   ];
@@ -190,8 +191,8 @@ export function memoSection(note: string, heading: string): string {
 }
 
 /**
- * A passage as a memo note holds it: its line (label, who, when) and its text, with your comment; and
- * the chat and message its link goes to.
+ * A passage as a memo note holds it: its line (who and when; a label first, in memos saved with
+ * 0.26.0) and its text, with a comment for those; and the chat and message its link goes to.
  */
 export interface SavedPassage {
   header: string;
@@ -257,7 +258,8 @@ export function continueDraft(memo: { name: string; why: string; next: string; p
  * is kept short.
  */
 export function memoNoteName(title: string): string {
-  return title.replace(/[\\/:*?"<>|#^[\]&%+]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  // No leading dot either: Obsidian does not see a file whose name starts with one.
+  return title.replace(/[\\/:*?"<>|#^[\]&%+]/g, ' ').replace(/\s+/g, ' ').replace(/^[.\s]+/, '').trim().slice(0, 100).trim();
 }
 
 /**
@@ -516,7 +518,29 @@ export function retargetMemoBase(base: unknown, chatId: string, chatTitle: strin
       typeof value === 'string' ? (picksChat(value) ? chatFilter(chatId) : value) : Array.isArray(value) ? value.map(retarget) : typeof value === 'object' && value !== null ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, retarget(inner)])) : value;
     views[at] = { ...view, name: chatMemosView(chatTitle), filters: retarget(view.filters) };
   }
-  return addStatusColumn(addArchivedBoxes(renameDoneToArchived({ ...record, formulas, properties, views })));
+  return upgradeMemoBase({ ...record, formulas, properties, views });
+}
+
+/**
+ * A Memos base (as parsed from its file) brought up to date, whatever chat it is on: Done renamed
+ * Archived, and the Archived and Status columns given once. Null when `base` is not a base.
+ */
+export function upgradeMemoBase(base: unknown): Record<string, unknown> | null {
+  if (typeof base !== 'object' || base === null || !Array.isArray((base as { views?: unknown }).views)) return null;
+  const record = base as Record<string, unknown>;
+  const properties = { ...(typeof record.properties === 'object' && record.properties !== null ? (record.properties as Record<string, unknown>) : {}) };
+  // Status first: the Archived view added after it has every column, Status among them.
+  return addArchivedBoxes(addStatusColumn(renameDoneToArchived({ ...record, properties })));
+}
+
+/** Whether a view of `base` has column `column`. */
+function hasColumn(base: Record<string, unknown>, column: string): boolean {
+  return (base.views as unknown[]).some((view) => typeof view === 'object' && view !== null && Array.isArray((view as { order?: unknown }).order) && ((view as { order: unknown[] }).order.includes(column)));
+}
+
+/** Whether `base` has a view named `name`. */
+function hasView(base: Record<string, unknown>, name: string): boolean {
+  return (base.views as unknown[]).some((view) => typeof view === 'object' && view !== null && (view as { name?: unknown }).name === name);
 }
 
 /**
@@ -527,6 +551,8 @@ export function retargetMemoBase(base: unknown, chatId: string, chatTitle: strin
 function addStatusColumn(base: Record<string, unknown>): Record<string, unknown> {
   const properties = base.properties as Record<string, unknown>;
   if (properties.status !== undefined) return base;
+  // Its display name taken out by hand, the column stays as it is.
+  if (hasColumn(base, 'status')) return { ...base, properties: { ...properties, status: { displayName: 'Status' } } };
   const views = (base.views as unknown[]).map((view) => {
     if (typeof view !== 'object' || view === null || !Array.isArray((view as { order?: unknown }).order)) return view;
     const and = ((view as { filters?: { and?: unknown } }).filters ?? {}).and;
@@ -545,6 +571,8 @@ function addStatusColumn(base: Record<string, unknown>): Record<string, unknown>
 function addArchivedBoxes(base: Record<string, unknown>): Record<string, unknown> {
   const properties = base.properties as Record<string, unknown>;
   if (properties.archived !== undefined) return base;
+  // Its display name taken out by hand, the Archived view there already stays the only one.
+  if (hasView(base, ARCHIVED_VIEW)) return { ...base, properties: { ...properties, archived: { displayName: 'Archived' } } };
   const views = (base.views as unknown[]).map((view) => {
     if (typeof view !== 'object' || view === null) return view;
     const record = view as Record<string, unknown>;

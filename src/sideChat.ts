@@ -4,7 +4,7 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'crypto';
 import { Component, setIcon } from 'obsidian';
-import { imageFromBlob, toImageBlock, type ImageAttachment } from './attachments';
+import { imageFromBlob, pastedFiles, toImageBlock, type ImageAttachment } from './attachments';
 import { textBlocks, withQuote } from './chatText';
 import { chipFor, renderChip } from './chip';
 import type { ClaudeSession, PermissionRequest, SessionHandlers, UserContent } from './session';
@@ -48,6 +48,10 @@ interface Run {
 export class SideChat {
   readonly el: HTMLElement;
   private readonly messages: HTMLElement;
+  /** In the header: the last question asked, shown while minimised. */
+  private readonly lastQuestion: HTMLElement;
+  /** Minimise, or open again from a bar. */
+  private readonly sizeButton: HTMLElement;
   private readonly input: HTMLTextAreaElement;
   private readonly status: HTMLElement;
   /** The images to go with the next question (see attach), shown above the input. */
@@ -72,14 +76,25 @@ export class SideChat {
     this.el = parent.createDiv({ cls: 'vc-side-chat' });
     this.el.hide();
     const header = this.el.createDiv({ cls: 'vc-side-chat-header' });
-    header.createSpan({ cls: 'vc-side-chat-title', text: 'Side chat' });
+    const title = header.createDiv({ cls: 'vc-side-chat-title' });
+    title.createSpan({ text: 'Side chat' });
+    // Minimised, the bar shows the last question, and a click on it opens the side chat again.
+    this.lastQuestion = title.createSpan({ cls: 'vc-side-chat-last' });
+    title.addEventListener('click', () => {
+      if (this.isMinimised()) this.restore();
+    });
     const button = (icon: string, label: string, onClick: () => void) => {
       const el = header.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': label } });
       setIcon(el, icon);
-      el.addEventListener('click', onClick);
+      el.addEventListener('click', (evt) => {
+        evt.stopPropagation();
+        onClick();
+      });
+      return el;
     };
-    button('trash-2', 'Start over', () => this.startOver());
-    button('copy-plus', 'Keep as a chat, in a new tab', () => this.keep());
+    button('trash-2', 'Start over', () => this.startOver()).addClass('vc-side-chat-full-only');
+    button('copy-plus', 'Keep as a chat, in a new tab', () => this.keep()).addClass('vc-side-chat-full-only');
+    this.sizeButton = button('minus', 'Minimise: keep it, out of the way', () => (this.isMinimised() ? this.restore() : this.minimise()));
     button('x', 'Close (Esc)', () => this.close());
     this.messages = this.el.createDiv({ cls: 'vc-side-chat-messages' });
     this.status = this.el.createDiv({ cls: 'vc-side-chat-status vc-muted' });
@@ -89,7 +104,7 @@ export class SideChat {
     this.el.addEventListener('keydown', (evt) => this.onKey(evt));
     // Pasted images go with the question; pasted text is left to the input.
     this.input.addEventListener('paste', (evt) => {
-      const files = Array.from(evt.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'));
+      const files = pastedFiles(evt.clipboardData).filter((file) => file.type.startsWith('image/'));
       if (files.length === 0) return;
       evt.preventDefault();
       void Promise.all(files.map((file) => imageFromBlob(file, file.name || 'Pasted image'))).then((images) =>
@@ -103,9 +118,31 @@ export class SideChat {
     return this.el.isShown();
   }
 
-  /** Opens the side chat, with `quote` (text selected in the chat) quoted in its input to ask about. */
+  /** Whether it is open but minimised to a bar, the chat under it free to read and use. */
+  isMinimised(): boolean {
+    return this.isOpen() && this.el.hasClass('is-minimised');
+  }
+
+  /** Minimised to a bar at the bottom of the chat: its conversation is kept, and goes on answering. */
+  minimise(): void {
+    this.el.addClass('is-minimised');
+    this.sizeButton.setAttr('aria-label', 'Open the side chat again');
+    setIcon(this.sizeButton, 'maximize-2');
+  }
+
+  /** Back to its full size, from a bar. */
+  restore(): void {
+    this.el.removeClass('is-minimised');
+    this.sizeButton.setAttr('aria-label', 'Minimise: keep it, out of the way');
+    setIcon(this.sizeButton, 'minus');
+    this.input.focus();
+    this.scrollToEnd();
+  }
+
+  /** Opens the side chat (at full size), with `quote` (text selected in the chat) quoted in its input to ask about. */
   open(quote?: string): void {
     this.el.show();
+    if (this.isMinimised()) this.restore();
     // Whole: a side chat given only what is asked knows no more of the selection than this.
     if (quote) this.input.value = withQuote(this.input.value, quote, Infinity);
     this.input.focus();
@@ -118,6 +155,8 @@ export class SideChat {
     this.clear();
     this.input.value = '';
     this.setImages([]);
+    if (this.isMinimised()) this.restore();
+    this.lastQuestion.setText('');
     this.el.hide();
   }
 
@@ -197,6 +236,7 @@ export class SideChat {
       this.close();
       return;
     }
+    if (this.isMinimised()) return;
     if (evt.target !== this.input || evt.key !== 'Enter' || evt.shiftKey) return;
     const modifier = evt.metaKey || evt.ctrlKey;
     if (this.host.sendWithModifier() !== modifier) return;
@@ -210,6 +250,7 @@ export class SideChat {
     // Busy from here on, so a second question waits for this one's session.
     if ((!text && images.length === 0) || this.busy) return;
     const bubble = this.messages.createDiv({ cls: 'vc-side-chat-question' });
+    this.lastQuestion.setText(text ? text.replace(/\s+/g, ' ') : 'Image');
     if (text) this.host.renderMarkdown(text, bubble, this.component);
     if (images.length > 0) {
       const row = bubble.createDiv({ cls: 'vc-user-attachments' });

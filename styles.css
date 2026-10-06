@@ -1807,9 +1807,49 @@ button.vc-continue-button:hover span:last-child {
 
 .vc-side-chat-title {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: baseline;
   font-size: var(--font-ui-small);
   font-weight: var(--font-semibold);
   color: var(--text-muted);
+}
+
+/* The last question, shown only on the bar a minimised side chat becomes. */
+.vc-side-chat-last {
+  display: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: normal;
+  color: var(--text-faint);
+}
+
+/* Minimised: a bar at the bottom of the chat, which stays readable and usable above it. */
+.vc-side-chat.is-minimised {
+  top: auto;
+}
+
+.vc-side-chat.is-minimised .vc-side-chat-header {
+  border-bottom: none;
+}
+
+.vc-side-chat.is-minimised .vc-side-chat-title {
+  cursor: pointer;
+}
+
+.vc-side-chat.is-minimised .vc-side-chat-last {
+  display: inline;
+}
+
+.vc-side-chat.is-minimised :is(.vc-side-chat-messages, .vc-side-chat-status, .vc-side-chat-tray, .vc-side-chat-input, .vc-side-chat-full-only) {
+  display: none;
+}
+
+/* Answering while minimised: the bar's title in the accent colour. */
+.vc-side-chat.is-minimised.is-busy .vc-side-chat-title > span:first-child {
+  color: var(--text-accent);
 }
 
 .vc-side-chat-messages {
@@ -1984,6 +2024,12 @@ button.vc-continue-button:hover span:last-child {
   transition: box-shadow 400ms ease;
 }
 
+/* The link picker: a note's folder under its name. */
+.vc-memo-pick-folder {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
 /* A memo in the link picker, labelled as one (and as archived); notes are not. */
 .vc-memo-pick .vc-memo-tag {
   margin-left: var(--size-4-2);
@@ -1992,4 +2038,35 @@ button.vc-continue-button:hover span:last-child {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
+}
+
+/* A pasted image's chip opens the image full size (see showImage). */
+.vc-chip.is-image {
+  cursor: zoom-in;
+}
+
+.vc-image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-modal);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-4-2);
+  background: rgba(0, 0, 0, 0.75);
+  cursor: zoom-out;
+}
+
+.vc-image-preview img {
+  max-width: 90vw;
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: var(--radius-s);
+  box-shadow: var(--shadow-l);
+}
+
+.vc-image-preview-label {
+  color: #fff;
+  font-size: var(--font-ui-small);
 }
