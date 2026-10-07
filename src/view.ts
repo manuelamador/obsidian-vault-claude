@@ -3709,7 +3709,7 @@ export class ChatView extends ItemView {
     let project: Awaited<ReturnType<ChatView['projectContext']>> = { block: '', paths: [], hashes: {} };
     try {
       if (!slash) project = await this.projectContext();
-      built = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly, project.block);
+      built = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly);
     } catch (error) {
       // A mentioned note could not be read: nothing is sent, and the message goes back to the input.
       log('the message could not be prepared', error);
@@ -3735,6 +3735,8 @@ export class ChatView extends ItemView {
     session.send(content, undefined, uuid);
     this.linkSentNotes(notes);
     this.linkSentChats(linkedChatIds(text));
+    // The project's context and linked chats' digests go outside the message's text (see ClaudeSession.addContext).
+    if (project.block) session.addContext(project.block);
     if (project.paths.length > 0) {
       const state = this.projectStateNow();
       this.setProjectStateNow({ ...state, sent: [...new Set([...(state.sent ?? []), ...project.paths])], sentHash: { ...state.sentHash, ...project.hashes } });
@@ -3827,14 +3829,11 @@ export class ChatView extends ItemView {
 
   /** The message for Claude Code, and the vault notes it carries. */
   /** `pathOnly`: mentioned notes sent by their path only, not with their text (see renderTray). */
-  /** `project`: what the chat's projects send with it (see projectContext), before the rest. */
-  private async buildContent(text: string, attachments: Attachment[], pathOnly: ReadonlySet<string> = new Set(), project = ''): Promise<{ content: UserContent; notes: string[] }> {
+  private async buildContent(text: string, attachments: Attachment[], pathOnly: ReadonlySet<string> = new Set()): Promise<{ content: UserContent; notes: string[] }> {
     const files = attachments.filter((attachment): attachment is FileAttachment => attachment.kind === 'file');
     const images = attachments.filter((attachment): attachment is ImageAttachment => attachment.kind === 'image');
     const selections = attachments.filter((attachment): attachment is SelectionAttachment => attachment.kind === 'selection');
-    const built = await this.buildPrompt(text, files, selections, pathOnly);
-    const notes = built.notes;
-    const prompt = project ? `${project}\n\n${built.prompt}` : built.prompt;
+    const { prompt, notes } = await this.buildPrompt(text, files, selections, pathOnly);
     if (images.length === 0) return { content: prompt, notes };
     const blocks: Exclude<UserContent, string> = images.map(toImageBlock);
     if (prompt) blocks.push({ type: 'text', text: prompt });

@@ -213,6 +213,8 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
 }
 
 export class ClaudeSession {
+  /** Context waiting for the next message (see addContext). */
+  private pendingContext: string[] = [];
   sessionId: string | null = null;
   /**
    * Resolves once the session has ended: its process gone (at once for one never started). Claude
@@ -241,6 +243,15 @@ export class ClaudeSession {
   /** Routes this session's messages and permission requests elsewhere, e.g. while it runs in the background. */
   setHandlers(handlers: SessionHandlers): void {
     this.handlers = handlers;
+  }
+
+  /**
+   * Context for Claude to go with the next message, outside its text: given to Claude Code by the
+   * UserPromptSubmit hook when that message is taken up (see start), and stored in the chat as the
+   * hook's context. Several given before then go together.
+   */
+  addContext(text: string): void {
+    if (text.trim()) this.pendingContext.push(text);
   }
 
   /**
@@ -391,6 +402,19 @@ export class ClaudeSession {
         resumeSessionAt: config.resume ? config.resumeSessionAt : undefined,
         includePartialMessages: true,
         abortController: this.abortController,
+        // The context waiting for the message Claude Code is taking up (see addContext).
+        hooks: {
+          UserPromptSubmit: [
+            {
+              hooks: [
+                async () => {
+                  const context = this.pendingContext.splice(0);
+                  return context.length > 0 ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: context.join('\n\n') } } : {};
+                },
+              ],
+            },
+          ],
+        },
         // Without a way to answer multiple-choice questions, Claude asks in plain text instead.
         disallowedTools: [...(config.askQuestions ? [] : ['AskUserQuestion']), ...(config.denyRules ?? [])],
         canUseTool: (toolName, input, options) =>

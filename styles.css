@@ -3189,3 +3189,12 @@ body:has(.vc-map-modal) .popover.hover-popover {
   border-radius: 50%;
   background: rgba(var(--color-purple-rgb), 0.22);
 }
+
+/* The map centred on another chat: the way back. */
+.vc-map-trail a {
+  cursor: pointer;
+}
+
+.vc-map-trail .vc-project-size {
+  flex-basis: 100%;
+}

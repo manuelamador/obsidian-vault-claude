@@ -1670,7 +1670,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** What chat `id`'s map shows, read now, and what it does. */
-  private async chatMapHost(view: ChatView, id: string, all = false): Promise<ChatMapHost> {
+  private async chatMapHost(view: ChatView, baseline: string, all = false, id = baseline): Promise<ChatMapHost> {
     await this.listChats().catch(() => []);
     const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
     const listed = new Set((this.lastListing ?? []).filter((item) => !item.scratch).map((item) => item.id));
@@ -1678,7 +1678,11 @@ export default class VaultClaudePlugin extends Plugin {
     const map = chatMap(id, weighted, this.linkedChats(id).filter((other) => listed.has(other)), recent, all, this.hubNotes());
     const home = this.homeProject(id);
     return {
-      ...this.mapActions(id, view),
+      // Links and mentions act for the chat on screen, wherever the map is centred.
+      ...this.mapActions(baseline, view),
+      baseline: { id: baseline, title: this.chatTitleOf(baseline) },
+      centre: id,
+      recentre: (centre) => this.chatMapHost(view, baseline, false, centre),
       title: this.chatTitleOf(id),
       ...map,
       hubs: this.hubNotes(),
@@ -1698,10 +1702,10 @@ export default class VaultClaudePlugin extends Plugin {
           void this.setProjectFolder(file, folder).then(changed);
         }).open();
       },
-      search: (query) => this.mapSearch(query, id),
+      search: (query) => this.mapSearch(query, baseline),
       setHome: async (path) => {
         const file = path === null ? null : this.app.vault.getAbstractFileByPath(path);
-        await this.setHomeProject(id, file instanceof TFile ? file : null);
+        await this.setHomeProject(baseline, file instanceof TFile ? file : null);
         new Notice(file instanceof TFile ? `This chat is now in “${file.basename}”.` : 'This chat is out of its project; its notes no longer place it in one.');
       },
       projectHolding: (folder) => {
@@ -1709,7 +1713,7 @@ export default class VaultClaudePlugin extends Plugin {
         return file && { path: file.path, name: file.basename, folder: this.projectFolder(file) };
       },
       all,
-      reload: (more) => this.chatMapHost(view, id, more),
+      reload: (more) => this.chatMapHost(view, baseline, more, id),
       linkedProject: home ? null : (() => {
         for (const other of this.linkedChats(id)) {
           const file = this.homeProject(other);
@@ -1719,7 +1723,7 @@ export default class VaultClaudePlugin extends Plugin {
       })(),
       folderSuggestion: home ? null : this.folderSuggestionFor(id),
       declined: this.projectState(id).declined === true,
-      makeProject: (folder, created) => void this.openCreateProject({ folder, chatId: home ? null : id, created }),
+      makeProject: (folder, created) => void this.openCreateProject({ folder, chatId: this.homeProject(baseline) ? null : baseline, created }),
     };
   }
 

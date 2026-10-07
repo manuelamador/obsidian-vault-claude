@@ -81,6 +81,12 @@ export interface ChatMapHost extends MapActions {
   projectHolding(folder: string): { path: string; name: string; folder: string } | null;
   /** The map's data again, after something it shows changed; with `all`, every note and chat (see chatMap). */
   reload(all: boolean): Promise<ChatMapHost>;
+  /** The map centred on another chat (`centre`), its actions still the chat on screen's (`baseline`). */
+  recentre(centre: string): Promise<ChatMapHost>;
+  /** The chat on screen, which links, mentions and its project bar act for. */
+  baseline: { id: string; title: string };
+  /** The chat the map is centred on: the chat on screen, unless moved to another. */
+  centre: string;
   /** Whether it shows every note and chat. */
   all: boolean;
   /** For a chat without a project: the project of a chat it is linked with, and the folder its notes suggest. */
@@ -324,12 +330,13 @@ function noteNode(group: SVGGElement, path: string, actions: MapActions, parent:
  * Makes a chat offer, on a click or a right-click: open it, mention it in the message being typed, or
  * link (unlink) it from the chat the map is from; `changed` runs after a link changes.
  */
-function chatNode(group: SVGGElement, id: string, actions: MapActions, changed: () => void): void {
+function chatNode(group: SVGGElement, id: string, actions: MapActions, changed: () => void, centre?: () => void): void {
   const offer = (evt: MouseEvent) => {
     evt.preventDefault();
     const linked = actions.linked(id);
     const menu = new Menu();
     const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
+    if (centre) add('Centre the map here', 'locate-fixed', centre);
     add('Open chat', 'message-square', () => actions.openChat(id));
     add('Mention in your message', 'at-sign', () => actions.mentionChat(id));
     if (linked !== null) {
@@ -443,16 +450,59 @@ export class ChatMapModal extends Pane {
     this.draw();
   }
 
+  /** The chats the map was centred on before, to go back to (the first: the chat on screen). */
+  private trail: { id: string; title: string }[] = [];
+
+  /** Centres the map on chat `id`, the one shown before going on the trail. */
+  private async moveTo(id: string): Promise<void> {
+    this.trail.push({ id: this.host.centre, title: this.host.centre === this.host.baseline.id ? this.host.baseline.title : this.host.title });
+    this.host = await this.host.recentre(id);
+    this.contentEl.empty();
+    this.draw();
+  }
+
+  /** Back along the trail to its `index`th chat (0: the chat on screen). */
+  private async back(index: number): Promise<void> {
+    const target = this.trail[index];
+    this.trail = this.trail.slice(0, index);
+    this.host = await this.host.recentre(target.id);
+    this.contentEl.empty();
+    this.draw();
+  }
+
+  /** Centred on another chat: where the map is, the way back, and that links and mentions still act for the chat on screen. */
+  private drawTrail(): void {
+    const { host, contentEl } = this;
+    const bar = contentEl.createDiv({ cls: 'vc-map-bar vc-map-trail' });
+    setIcon(bar.createSpan({ cls: 'vc-project-group-icon' }), 'locate');
+    this.trail.forEach((step, i) => {
+      const crumb = bar.createEl('a', { text: shortLabel(step.title, 30) });
+      crumb.addEventListener('click', () => void this.back(i));
+      bar.appendText(' › ');
+    });
+    bar.createSpan({ cls: 'vc-map-bar-name', text: shortLabel(host.title, 40) });
+    bar.createDiv({ cls: 'vc-project-size', text: `Links and mentions still act for “${shortLabel(host.baseline.title, 40)}”, the chat on screen.` });
+  }
+
   private draw(): void {
     const { host, contentEl } = this;
+    // Centred on another chat: the way back in place of the project bar and search, which are the chat on screen's.
+    const away = host.centre !== host.baseline.id;
+    if (away) this.drawTrail();
     if (host.notes.length === 0 && host.chats.length === 0) {
+      if (away) {
+        contentEl.createDiv({ cls: 'vc-project-empty', text: 'This chat has worked on no notes yet, and links to no chats.' });
+        return;
+      }
       this.drawProjectBar();
       this.drawSearch();
       contentEl.createDiv({ cls: 'vc-project-empty', text: 'This chat has worked on no notes yet, and links to no chats. Find a project, chat or note above to add it to, link or mention.' });
       return;
     }
-    this.drawProjectBar();
-    this.drawSearch();
+    if (!away) {
+      this.drawProjectBar();
+      this.drawSearch();
+    }
     const ring = noteRing(host.notes.length);
     const scale = ring / BASE_RING;
     const drawing = new MapDrawing(contentEl, 820 * scale, 620 * scale);
@@ -511,7 +561,7 @@ export class ChatMapModal extends Pane {
       if (label) drawing.label(group, label.at, label.side, label.text, 14, host.titleOf(chat.id));
       const shared = `${chat.shared.length} shared note${chat.shared.length === 1 ? '' : 's'}`;
       tooltip(group, `${host.titleOf(chat.id)}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : ''}\nClick to open, mention or ${host.linked(chat.id) ? 'unlink' : 'link'} it`);
-      chatNode(group, chat.id, host, () => void this.redraw());
+      chatNode(group, chat.id, host, () => void this.redraw(), () => void this.moveTo(chat.id));
     }
     const centreNode = drawing.chat('chat', centre, 18, 'is-centre');
     const title = svg(centreNode, 'text', { x: 0, y: 34, 'text-anchor': 'middle' });
