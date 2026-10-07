@@ -3107,3 +3107,10 @@ body:has(.vc-map-modal) .popover.hover-popover {
 .vc-note-chats-offer::before {
   content: '← ';
 }
+
+/* The chat's links, under its map: set apart from the map's legend. */
+.vc-map-links {
+  margin-top: var(--size-4-4);
+  padding-top: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
+}
