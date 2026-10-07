@@ -1,11 +1,10 @@
-// The dialogs of projects (see projects.ts): making one of a folder, what a chat's projects send with
-// it, and adding to a project's Guide from its chats after reviewing what Claude proposes.
+// The dialogs of projects (see projects.ts): making one of a folder, what a chat's project sends with
+// it, managing the projects, and writing a project's Context anew beside the one it has.
 import { Component, FuzzySuggestModal, Modal, Notice, setIcon, type App } from 'obsidian';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { estimateTokens, formatTokens } from './contextSize';
 import { errorText } from './log';
 import { folderOf, type FolderSuggestion } from './chatFolders';
-import type { GuideProposal } from './projects';
 
 /** A project as the dialogs show it. */
 export interface ProjectRef {
@@ -31,41 +30,6 @@ export class ProjectPicker extends FuzzySuggestModal<ProjectRef> {
   onChooseItem(project: ProjectRef): void {
     this.chosen(project);
   }
-}
-
-/** A chat offered in a list of chats. */
-export interface ChatChoice {
-  id: string;
-  title: string;
-  /** When it was last active, as shown. */
-  when: string;
-  ticked: boolean;
-}
-
-/** A list of chats with a box each, and a filter above it when long. The ids ticked, in the list's order. */
-function chatChecklist(el: HTMLElement, chats: ChatChoice[], changed: () => void): () => string[] {
-  const ticked = new Set(chats.filter((chat) => chat.ticked).map((chat) => chat.id));
-  const filter = chats.length > 8 ? el.createEl('input', { type: 'search', cls: 'vc-project-filter', attr: { placeholder: 'Filter chats' } }) : null;
-  const list = el.createDiv({ cls: 'vc-project-chats' });
-  const rows = chats.map((chat) => {
-    const row = list.createEl('label', { cls: 'vc-project-chat' });
-    const box = row.createEl('input', { type: 'checkbox' });
-    box.checked = ticked.has(chat.id);
-    box.addEventListener('change', () => {
-      if (box.checked) ticked.add(chat.id);
-      else ticked.delete(chat.id);
-      changed();
-    });
-    const text = row.createDiv({ cls: 'vc-project-chat-text' });
-    text.createDiv({ cls: 'vc-project-chat-title', text: chat.title });
-    text.createDiv({ cls: 'vc-project-chat-when', text: chat.when });
-    return { row, title: chat.title.toLowerCase() };
-  });
-  filter?.addEventListener('input', () => {
-    const words = filter.value.toLowerCase().split(/\s+/).filter(Boolean);
-    for (const { row, title } of rows) row.toggle(words.every((word) => title.includes(word)));
-  });
-  return () => chats.map((chat) => chat.id).filter((id) => ticked.has(id));
 }
 
 export interface CreateProjectHost extends FolderSource {
@@ -139,7 +103,7 @@ export class CreateProjectModal extends Modal {
     this.modalEl.addClass('vc-project-modal');
     this.setTitle('Create project');
     const { contentEl, host } = this;
-    contentEl.createDiv({ cls: 'vc-project-label', text: 'A project is a folder: chats that work on its notes are its chats, and its Instructions and Guide go with them.' });
+    contentEl.createDiv({ cls: 'vc-project-label', text: 'A project is a folder: chats that work on its notes are its chats, and its Context, a summary written from its notes and chats when it is made, goes with them.' });
     let chosen = '';
     // The name follows the folder until it is typed in.
     let named = false;
@@ -210,12 +174,12 @@ export class CreateProjectModal extends Modal {
 export interface ChatProjectHost {
   home(): ProjectRef | null;
   projects(): ProjectRef[];
-  parts(path: string): Promise<{ instructions: string; guide: string }>;
-  /** Whether the project's Guide goes; whether its context went already. */
-  includeGuide(): boolean;
-  setIncludeGuide(on: boolean): void;
+  parts(path: string): Promise<{ context: string; instructions: string }>;
+  /** Whether its context went already. */
   sent(path: string): boolean;
-  /** Whether a project's Instructions or Guide changed since they went with the chat. */
+  /** Writes the project's Context anew, to save or not (see ContextModal); `saved` runs once saved. */
+  refreshContext(path: string, saved: () => void): void;
+  /** Whether a project's Context or Instructions changed since they went with the chat. */
   updated(path: string): boolean;
   sendAgain(path: string): void;
   setHome(path: string | null): Promise<void>;
@@ -288,22 +252,21 @@ export class ChatProjectModal extends Modal {
       await host.setHome(null);
       await this.draw();
     });
-    const { instructions, guide } = await host.parts(home.path);
+    const { context, instructions } = await host.parts(home.path);
     if (parts !== this.parts) return;
     contentEl.createDiv({ cls: 'vc-project-suggest', text: host.homeWhy() });
     const parents = host.parents(home.path);
     if (parents.length > 0) contentEl.createDiv({ cls: 'vc-project-suggest', text: `The Instructions of ${parents.map((name) => `“${name}”`).join(' and ')}, whose folder holds this one, go too.` });
-    const withGuide = host.includeGuide() && guide !== '';
-    const chars = instructions.length + (withGuide ? guide.length : 0);
+    const chars = context.length + instructions.length;
     const status = contentEl.createDiv({ cls: 'vc-project-status' });
     if (host.sent(home.path)) {
-      status.appendText(host.updated(home.path) ? 'Went with this chat already; the Instructions or Guide changed since. ' : 'Went with this chat already. ');
+      status.appendText(host.updated(home.path) ? 'Went with this chat already; the Context or Instructions changed since. ' : 'Went with this chat already. ');
       const again = status.createEl('a', { text: 'Send again with the next message' });
       again.addEventListener('click', async () => {
         host.sendAgain(home.path);
         await this.draw();
       });
-    } else if (chars === 0) status.setText('Nothing to send yet: the project has no Instructions or Guide.');
+    } else if (chars === 0) status.setText('Nothing to send yet: the project has no Context or Instructions.');
     else status.setText(`Goes with your next message: about ${formatTokens(estimateTokens(chars))} tokens.`);
     const section = (title: string, markdown: string, empty: string) => {
       const box = contentEl.createDiv({ cls: 'vc-project-section' });
@@ -315,18 +278,11 @@ export class ChatProjectModal extends Modal {
       else body.createDiv({ cls: 'vc-project-empty', text: empty });
       return top;
     };
-    section('Instructions', instructions, 'None written. Open the project note to write them.');
-    const guideHead = section('Guide', guide, 'Empty. Run “Update project guide” to propose additions from its chats.');
-    if (guide) {
-      const toggle = guideHead.createEl('label', { cls: 'vc-project-toggle' });
-      const box = toggle.createEl('input', { type: 'checkbox' });
-      box.checked = host.includeGuide();
-      toggle.appendText('Include');
-      box.addEventListener('change', async () => {
-        host.setIncludeGuide(box.checked);
-        await this.draw();
-      });
-    }
+    const contextHead = section('Context', context, 'Not written yet. Refresh context writes it from the project’s notes and chats.');
+    const refresh = contextHead.createEl('button', { cls: 'vc-map-action vc-project-section-action', text: context ? 'Refresh…' : 'Write…' });
+    refresh.setAttr('aria-label', 'Write the Context anew from the project’s notes and chats, and compare it with this one before saving');
+    refresh.addEventListener('click', () => host.refreshContext(home.path, () => void this.draw()));
+    section('Instructions', instructions, 'None: optional. Anything you write in the project note’s Instructions goes with each chat too.');
     manageLink(contentEl.createDiv({ cls: 'vc-project-foot' }));
   }
 
@@ -345,132 +301,23 @@ export class ChatProjectModal extends Modal {
   }
 }
 
-export interface GuideHost {
-  project: ProjectRef;
-  /** Its chats. */
-  chats: ChatChoice[];
-  propose(chats: string[], signal: AbortSignal): Promise<GuideProposal[]>;
-  /** Adds the accepted proposals to the Guide. */
-  apply(accepted: GuideProposal[]): Promise<void>;
-  titleOf(chat: string): string;
-  openChat(chat: string): void;
-}
-
-/** Proposes additions to a project's Guide from the chats chosen, and adds those accepted after review. */
-export class GuideModal extends Modal {
-  private abort: AbortController | null = null;
-
-  constructor(app: App, private readonly host: GuideHost) {
-    super(app);
-  }
-
-  onOpen(): void {
-    this.modalEl.addClass('vc-project-modal');
-    this.setTitle(`Update Guide: ${this.host.project.name}`);
-    this.chooseChats();
-  }
-
-  private chooseChats(): void {
-    const { contentEl, host } = this;
-    contentEl.empty();
-    contentEl.createDiv({ cls: 'vc-project-label', text: 'Claude reads the chats ticked and proposes additions, each linked to its chat. Nothing is added until you accept it.' });
-    if (host.chats.length === 0) {
-      contentEl.createDiv({ cls: 'vc-project-empty', text: 'This project has no chats.' });
-      return;
-    }
-    const own = chatChecklist(contentEl, host.chats, () => update());
-    const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
-    const status = foot.createDiv({ cls: 'vc-project-status' });
-    const button = foot.createEl('button', { cls: 'mod-cta', text: 'Propose additions' });
-    const update = () => {
-      button.disabled = own().length === 0;
-    };
-    update();
-    button.addEventListener('click', async () => {
-      const chosen = own();
-      button.disabled = true;
-      status.empty();
-      setIcon(status.createSpan({ cls: 'vc-pick-up-wheel' }), 'loader-2');
-      status.appendText(` Claude is reading ${chosen.length} chat${chosen.length === 1 ? '' : 's'}…`);
-      this.abort = new AbortController();
-      try {
-        const proposals = await this.host.propose(chosen, this.abort.signal);
-        if (!this.abort.signal.aborted) this.review(proposals);
-      } catch (error) {
-        if (this.abort?.signal.aborted) return;
-        status.setText(`No proposals: ${errorText(error)}.`);
-        update();
-      }
-    });
-  }
-
-  private review(proposals: GuideProposal[]): void {
-    const { contentEl, host } = this;
-    contentEl.empty();
-    if (proposals.length === 0) {
-      contentEl.createDiv({ cls: 'vc-project-status', text: 'Nothing new to add from these chats.' });
-      contentEl.createDiv({ cls: 'vc-project-foot' }).createEl('button', { text: 'Back' }).addEventListener('click', () => this.chooseChats());
-      return;
-    }
-    // A proposal that contradicts the Guide starts unticked: it is added only when chosen.
-    const rows = proposals.map((proposal) => {
-      const row = contentEl.createDiv({ cls: 'vc-project-proposal' });
-      const top = row.createDiv({ cls: 'vc-project-proposal-head' });
-      const box = top.createEl('input', { type: 'checkbox' });
-      box.checked = !proposal.conflicts;
-      top.createSpan({ cls: 'vc-project-kind', text: proposal.kind === 'question' ? 'Open question' : proposal.kind === 'example' ? 'Example' : 'Finding' });
-      const source = top.createEl('a', { cls: 'vc-project-source', text: host.titleOf(proposal.source), attr: { 'aria-label': 'Open the chat it comes from' } });
-      source.addEventListener('click', () => host.openChat(proposal.source));
-      const text = row.createEl('textarea', { cls: 'vc-project-text' });
-      text.value = proposal.text;
-      text.rows = Math.min(6, Math.max(2, Math.ceil(proposal.text.length / 80)));
-      if (proposal.conflicts) {
-        const conflict = row.createDiv({ cls: 'vc-project-conflict' });
-        conflict.createSpan({ cls: 'vc-project-kind', text: 'Conflicts with the Guide: ' });
-        conflict.appendText(proposal.conflicts);
-      }
-      box.addEventListener('change', () => count());
-      return { proposal, box, text };
-    });
-    const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
-    foot.createEl('button', { text: 'Back' }).addEventListener('click', () => this.chooseChats());
-    const add = foot.createEl('button', { cls: 'mod-cta' });
-    const count = () => {
-      const n = rows.filter((row) => row.box.checked && row.text.value.trim()).length;
-      add.setText(n === 0 ? 'Add to Guide' : `Add ${n} to Guide`);
-      add.disabled = n === 0;
-    };
-    for (const row of rows) row.text.addEventListener('input', count);
-    count();
-    add.addEventListener('click', async () => {
-      add.disabled = true;
-      const accepted = rows.filter((row) => row.box.checked && row.text.value.trim()).map((row) => ({ ...row.proposal, text: row.text.value.trim() }));
-      await host.apply(accepted);
-      this.close();
-    });
-  }
-
-  onClose(): void {
-    this.abort?.abort();
-    this.contentEl.empty();
-  }
-}
-
 /** A project as Manage projects lists it. */
 export interface ManagedProject {
   path: string;
   name: string;
   folder: string;
-  /** How many chats are in it, and when its Guide was last updated ('' for never). */
+  /** How many chats are in it, and when its Context was last written ('' for never). */
   chats: number;
-  guideUpdated: string;
+  contextUpdated: string;
 }
 
 export interface ManageProjectsHost extends FolderSource {
   projects(): ManagedProject[];
   open(path: string): void;
   map(path: string): void;
-  updateGuide(path: string): void;
+  refreshContext(path: string, saved: () => void): void;
+  /** Writes a project's Context anew straight into its note; false when it could not be (logged). */
+  writeContext(path: string): Promise<boolean>;
   setFolder(path: string, folder: string): Promise<boolean>;
   /** Renames a project's note; false when it could not be (said in a notice). */
   rename(path: string, name: string): Promise<boolean>;
@@ -480,7 +327,7 @@ export interface ManageProjectsHost extends FolderSource {
   create(): void;
 }
 
-/** The vault's projects, each with its folder, chats and Guide, and what can be done to it: open, map, update its Guide, change its folder, rename, delete. */
+/** The vault's projects, each with its folder, chats and Context, and what can be done to it: open, map, refresh its Context, change its folder, rename, delete. */
 export class ManageProjectsModal extends Modal {
   constructor(app: App, private readonly host: ManageProjectsHost) {
     super(app);
@@ -496,7 +343,7 @@ export class ManageProjectsModal extends Modal {
     const { contentEl, host } = this;
     contentEl.empty();
     const projects = host.projects();
-    if (projects.length === 0) contentEl.createDiv({ cls: 'vc-project-empty', text: 'No projects yet. A project is a folder: chats that work on its notes share its Instructions and Guide.' });
+    if (projects.length === 0) contentEl.createDiv({ cls: 'vc-project-empty', text: 'No projects yet. A project is a folder: chats that work on its notes share its Context.' });
     for (const project of projects) {
       const box = contentEl.createDiv({ cls: 'vc-project-section' });
       const top = box.createDiv({ cls: 'vc-project-section-head' });
@@ -508,7 +355,7 @@ export class ManageProjectsModal extends Modal {
       });
       const facts = box.createDiv({ cls: 'vc-project-size' });
       facts.setText(
-        `${project.folder || 'No folder'} · ${project.chats} chat${project.chats === 1 ? '' : 's'} · ${project.guideUpdated ? `Guide updated ${project.guideUpdated}` : 'Guide never updated'}`,
+        `${project.folder || 'No folder'} · ${project.chats} chat${project.chats === 1 ? '' : 's'} · ${project.contextUpdated ? `Context written ${project.contextUpdated}` : 'Context not written yet'}`,
       );
       const actions = box.createDiv({ cls: 'vc-project-manage-actions' });
       const action = (label: string, icon: string, run: () => void, warning = false) => {
@@ -521,10 +368,7 @@ export class ManageProjectsModal extends Modal {
         this.close();
         host.map(project.path);
       });
-      action('Update Guide…', 'list-plus', () => {
-        this.close();
-        host.updateGuide(project.path);
-      });
+      action(project.contextUpdated ? 'Refresh context…' : 'Write context…', 'refresh-cw', () => host.refreshContext(project.path, () => this.draw()));
       action('Change folder…', 'folder-input', () =>
         new ChooseFolderModal(this.app, host, project.folder, project.name, async (folder) => {
           if (await host.setFolder(project.path, folder)) this.draw();
@@ -549,7 +393,7 @@ export class ManageProjectsModal extends Modal {
           new ConfirmModal(
             this.app,
             'Delete project',
-            `The project note “${project.name}” goes to the trash, with its Instructions and Guide. Its ${project.chats} chat${project.chats === 1 ? '' : 's'} and the notes in ${project.folder || 'its folder'} stay as they are; the chats no longer get the project's context.`,
+            `The project note “${project.name}” goes to the trash, with its Context and Instructions. Its ${project.chats} chat${project.chats === 1 ? '' : 's'} and the notes in ${project.folder || 'its folder'} stay as they are; the chats no longer get the project's context.`,
             'Delete',
             () => void host.remove(project.path).then(() => this.draw()),
           ).open(),
@@ -557,6 +401,23 @@ export class ManageProjectsModal extends Modal {
       );
     }
     const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
+    const status = foot.createDiv({ cls: 'vc-project-status' });
+    if (projects.length > 0) {
+      const all = foot.createEl('button', { text: 'Write context for all…' });
+      all.setAttr('aria-label', 'Write every project’s Context anew from its notes and chats, straight into its note: one request each, on the model for small jobs');
+      all.addEventListener('click', async () => {
+        all.disabled = true;
+        let done = 0;
+        for (const project of projects) {
+          status.empty();
+          setIcon(status.createSpan({ cls: 'vc-pick-up-wheel' }), 'loader-2');
+          status.appendText(` Writing ${done + 1} of ${projects.length}: ${project.name}…`);
+          if (await host.writeContext(project.path)) done += 1;
+        }
+        new Notice(`Context written for ${done} of ${projects.length} project${projects.length === 1 ? '' : 's'}.`);
+        this.draw();
+      });
+    }
     foot.createEl('button', { cls: 'mod-cta', text: 'New project…' }).addEventListener('click', () => {
       this.close();
       host.create();
@@ -594,6 +455,61 @@ export class ChooseFolderModal extends Modal {
   }
 
   onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+export interface ContextHost {
+  name: string;
+  current: string;
+  write(signal: AbortSignal): Promise<string>;
+  save(context: string): Promise<void>;
+}
+
+/** Writes a project's Context anew from its notes and chats, and shows it beside the one it has, editable, to save or not. */
+export class ContextModal extends Modal {
+  private abort = new AbortController();
+
+  constructor(app: App, private readonly host: ContextHost) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl, host } = this;
+    this.modalEl.addClass('vc-project-modal');
+    this.setTitle(`Context: ${host.name}`);
+    const status = contentEl.createDiv({ cls: 'vc-project-status' });
+    setIcon(status.createSpan({ cls: 'vc-pick-up-wheel' }), 'loader-2');
+    status.appendText(' Claude is reading the project’s notes and chats…');
+    void host.write(this.abort.signal).then(
+      (context) => {
+        if (this.abort.signal.aborted) return;
+        contentEl.empty();
+        const sides = contentEl.createDiv({ cls: 'vc-context-sides' });
+        const was = sides.createDiv({ cls: 'vc-project-section' });
+        was.createDiv({ cls: 'vc-project-section-head', text: 'Now' });
+        was.createEl('pre', { cls: 'vc-link-digest', text: host.current || '(none)' });
+        const next = sides.createDiv({ cls: 'vc-project-section' });
+        next.createDiv({ cls: 'vc-project-section-head', text: 'Written now (edit before saving if you like)' });
+        const text = next.createEl('textarea', { cls: 'vc-project-text vc-context-text' });
+        text.value = context;
+        const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
+        foot.createEl('button', { text: 'Keep the one it has' }).addEventListener('click', () => this.close());
+        const save = foot.createEl('button', { cls: 'mod-cta', text: 'Save' });
+        save.addEventListener('click', async () => {
+          save.disabled = true;
+          await host.save(text.value.trim());
+          this.close();
+        });
+      },
+      (error: unknown) => {
+        if (!this.abort.signal.aborted) status.setText(`No context written: ${errorText(error)}.`);
+      },
+    );
+  }
+
+  onClose(): void {
+    this.abort.abort();
     this.contentEl.empty();
   }
 }

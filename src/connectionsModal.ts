@@ -10,9 +10,9 @@ import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type 
 
 const SVG = 'http://www.w3.org/2000/svg';
 /** What Link does, said where it is offered. */
-const LINK_TIP = 'Link: both chats list each other. Nothing is sent unless you tick Include on the links chip; then a digest of it goes once.';
+const LINK_TIP = 'Link: connects the two chats so you can jump between them; both show it. Nothing is sent unless you tick Include on the links chip, which sends a short digest of it once.';
 /** What putting a chat in a project does, said where it is offered. A chat has at most one project. */
-const HOME_TIP = "This project's Instructions and Guide then go with this chat's next message. A chat is in one project at most.";
+const HOME_TIP = "This project's Context then goes with this chat's next message. A chat is in one project at most.";
 /** How a note is linked, by weight (see LINK_WEIGHTS). */
 const LINK_KINDS: Record<number, string> = { 3: 'edited', 2: 'sent', 1: 'mentioned' };
 /** The rings: notes (see noteRing), their labels and the arcs behind them; the other chats CHAT_GAP beyond the notes. */
@@ -65,6 +65,10 @@ export interface ChatMapHost extends MapActions {
   openProjectNote(path: string): void;
   /** Chooses another folder for project `path`; `changed` runs once it is set. */
   changeFolder(path: string, changed: () => void): void;
+  /** The project's map, its Context written anew (see ContextModal), and Manage projects. */
+  openProjectMap(path: string): void;
+  refreshContext(path: string, saved: () => void): void;
+  manageProjects(): void;
   search(query: string): SearchHit[];
   /** Makes project `path` the chat's home (null: takes it out). */
   setHome(path: string | null): Promise<void>;
@@ -497,7 +501,8 @@ export class ChatMapModal extends Modal {
   }
 
   /**
-   * The chat's project, at the top: its name, its note, Change folder…, Move… (to the search) and Take chat out; or,
+   * The chat's project, at the top: its name and a Project menu (its note, map, Context, folder, all
+   * projects), then what concerns the chat: Move… (to the search) and Take chat out; or,
    * with none, the project holding most of its notes, the project of a chat it is linked with and the
    * folder its notes suggest, each in one click.
    */
@@ -512,13 +517,27 @@ export class ChatMapModal extends Modal {
     if (host.project) {
       const { project } = host;
       bar.createSpan({ cls: 'vc-map-bar-name', text: `In “${project.name}”` });
-      act('Open note', () => host.openProjectNote(project.path));
-      act('Change folder…', () => host.changeFolder(project.path, () => void this.redraw()));
-      act('Move…', () => this.focusSearch());
+      const menuButton = bar.createEl('button', { cls: 'vc-map-action' });
+      menuButton.appendText('Project');
+      setIcon(menuButton.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
+      menuButton.addEventListener('click', (evt) => {
+        const menu = new Menu();
+        const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
+        add('Open project note', 'file-text', () => host.openProjectNote(project.path));
+        add('Project map', 'waypoints', () => host.openProjectMap(project.path));
+        add('Refresh context…', 'refresh-cw', () => host.refreshContext(project.path, () => void this.redraw()));
+        add('Change folder…', 'folder-input', () => host.changeFolder(project.path, () => void this.redraw()));
+        menu.addSeparator();
+        add('Manage projects…', 'folder-kanban', () => host.manageProjects());
+        menu.showAtMouseEvent(evt);
+      });
+      act('Move chat…', () => this.focusSearch());
       act('Take chat out', () => void host.setHome(null).then(() => this.redraw()));
       return;
     }
-    bar.createSpan({ cls: 'vc-map-bar-name', text: host.declined ? 'No project (taken out by hand)' : 'No project' });
+    const none = bar.createSpan({ cls: 'vc-map-bar-name', text: 'No project' });
+    // Taken out of its project: its notes no longer put it back in one by themselves.
+    if (host.declined) none.createSpan({ cls: 'vc-project-size', text: ' · you took it out of one, so its notes no longer place it' });
     const byNotes = this.projectOfMostNotes();
     if (byNotes) act(`Put chat in “${byNotes.name}”`, () => void host.setHome(byNotes.path).then(() => this.redraw()), true);
     if (host.linkedProject && host.linkedProject.path !== byNotes?.path) {

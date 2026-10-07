@@ -3096,3 +3096,18 @@ body:has(.vc-map-modal) .popover.hover-popover {
 .vc-map-show-all {
   margin-left: var(--size-4-2);
 }
+
+/* Refresh context: the one a project has, beside the one just written. */
+.vc-context-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--size-4-3);
+}
+
+.vc-context-text {
+  min-height: 40vh;
+}
+
+.vc-project-section-action {
+  margin-left: auto;
+}

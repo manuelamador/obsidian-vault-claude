@@ -1556,8 +1556,8 @@ export class ChatView extends ItemView {
     }
     if (home && !sent.has(home.path)) {
       const read = await this.plugin.projectParts(home);
-      if (read.instructions || (read.guide && !state.noGuide)) {
-        parts.push({ name: home.basename, note: home.path, instructions: read.instructions, guide: state.noGuide ? '' : read.guide, role: 'home' });
+      if (read.context || read.instructions) {
+        parts.push({ name: home.basename, note: home.path, context: read.context, instructions: read.instructions, role: 'home' });
         paths.push(home.path);
         hashes[home.path] = contextHash(read);
       }
@@ -1574,7 +1574,7 @@ export class ChatView extends ItemView {
     return { block: [projectContextBlock(parts), linkedChatsBlock(chats)].filter(Boolean).join('\n\n'), paths, hashes };
   }
 
-  /** Whether what went under `key` (see projectContext) changed since: a project's Instructions or Guide, or a linked chat. */
+  /** Whether what went under `key` (see projectContext) changed since: a project's Context or Instructions, or a linked chat. */
   private sentChanged(key: string): boolean {
     const state = this.projectStateNow();
     const was = state.sentHash?.[key];
@@ -1828,7 +1828,7 @@ export class ChatView extends ItemView {
     void this.plugin.openChatMap(this, id);
   }
 
-  /** Projects changed (a chat joined or left one, its Guide grew): the chip shows it. */
+  /** Projects changed (a chat joined or left one, its Context changed): the chip shows it. */
   projectsChanged(): void {
     this.contextKey = '';
     this.updateContextChip();
@@ -1857,10 +1857,12 @@ export class ChatView extends ItemView {
       projects: () => this.plugin.projectNotes().map(ref),
       parts: async (path) => {
         const file = fileAt(path);
-        return file ? this.plugin.projectParts(file) : { instructions: '', guide: '' };
+        return file ? this.plugin.projectParts(file) : { context: '', instructions: '' };
       },
-      includeGuide: () => !this.projectStateNow().noGuide,
-      setIncludeGuide: (on) => update((state) => ({ ...state, noGuide: !on })),
+      refreshContext: (path, saved) => {
+        const file = fileAt(path);
+        if (file) void this.plugin.refreshContext(file, saved);
+      },
       sent: (path) => this.projectStateNow().sent?.includes(path) ?? false,
       updated: (path) => this.projectUpdated(path),
       // Its own context, and its enclosing projects' Instructions, go again.
@@ -4050,7 +4052,7 @@ export class ChatView extends ItemView {
       chip.toggleClass('is-updated', updated);
       chip.setAttr(
         'aria-label',
-        `${this.projectWhy()} ${updated ? 'Its Instructions or Guide changed since they went with this chat: click to send them again.' : sent ? 'Its context went with this chat.' : 'Its Instructions and Guide go with your next message.'} Click to see what goes.`,
+        `${this.projectWhy()} ${updated ? 'Its Context or Instructions changed since they went with this chat: click to send them again.' : sent ? 'Its context went with this chat.' : 'Its Context goes with your next message.'} Click to see what goes.`,
       );
     } else if (this.offersProject()) {
       // One chip says there is none; a second offers the likeliest project in one click.
@@ -4062,14 +4064,14 @@ export class ChatView extends ItemView {
         'aria-label',
         declined
           ? 'This chat was taken out of its project, so its notes no longer place it in one. Click to choose a project, or make one.'
-          : 'A project’s Instructions and Guide go with every chat in it. Click to choose a project, or make one.',
+          : 'A project’s Context, a summary of its notes and chats, goes with every chat in it. Click to choose a project, or make one.',
       );
       const suggested = this.projectSuggestion();
       if (suggested) {
         const chip = this.contextRow.createDiv({ cls: 'vc-context-chip vc-project-suggestion' });
         setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'plus');
         chip.createSpan({ cls: 'vc-context-name', text: `Add to ${suggested.basename}` });
-        chip.setAttr('aria-label', `Put this chat in “${suggested.basename}”: its Instructions and Guide then go with your next message`);
+        chip.setAttr('aria-label', `Put this chat in “${suggested.basename}”: its Context then goes with your next message`);
       }
     }
     this.drawLinksChip();

@@ -76,7 +76,7 @@ export class LinksModal extends Modal {
     contentEl.empty();
     contentEl.createDiv({
       cls: 'vc-project-label',
-      text: 'A link is for finding your way: both chats list it. Tick Include to send a digest of a chat this one links to, once, with your next message. Chats that link here send nothing to this one.',
+      text: 'A link connects this chat to one other chat, so you can jump between them; both show it. It sends nothing unless you tick Include, which sends a short digest of that chat once, with your next message.',
     });
     const rows = host.rows();
     const to = rows.filter((row) => row.direction === 'to');

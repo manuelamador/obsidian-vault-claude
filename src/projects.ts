@@ -1,8 +1,8 @@
-// Projects: a folder of the vault, with a note holding Instructions (yours), a Guide (findings you
-// accepted, each with its source chat), and generated lists of its chats and key notes. A chat's home
-// project follows from its notes (see homeOf), or is chosen by hand; its Instructions and Guide go
-// with the chat's first message. A chat has at most one project. Kept free of `obsidian` imports so
-// the tests can use it.
+// Projects: a folder of the vault, with a note holding its Context (a summary written when the project
+// is made, and again on Refresh context), Instructions (yours, optional), and generated lists of its
+// chats and key notes. A chat's home project follows from its notes (see homeOf), or is chosen by hand;
+// its Context and Instructions go with the chat's first message. A chat has at most one project. Kept
+// free of `obsidian` imports so the tests can use it.
 import { inFolder } from './chatFolders';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import { bubbleOf, textBlocks, type ContentBlock } from './chatText';
@@ -20,24 +20,32 @@ function yamlList(values: string[]): string {
   return `[${values.map((value) => JSON.stringify(value)).join(', ')}]`;
 }
 
-/** A new project note: its folder, the chats added to it by hand, empty Instructions and Guide, and the generated lists. */
-export function projectNoteMarkdown(project: { name: string; folder: string; added: string[]; date: string }): string {
+/** The placeholder a new project's Instructions hold, left out of what is sent. */
+const INSTRUCTIONS_PLACEHOLDER = 'Optional: anything every chat in this project should follow. Left empty, nothing is sent from here.';
+
+/** A new project note: its folder, the chats added to it by hand, its Context (as written, or empty), empty Instructions, and the generated lists. */
+export function projectNoteMarkdown(project: { name: string; folder: string; added: string[]; date: string; context?: string }): string {
   return [
     '---',
     `type: ${PROJECT_TYPE}`,
     'tags: [project]',
     `folder: ${JSON.stringify(project.folder)}`,
     `added: ${yamlList(project.added)}`,
+    ...(project.context ? [`context_updated: ${project.date}`] : []),
     `updated: ${project.date}`,
     '---',
     '',
     `# ${project.name}`,
     '',
+    '## Context',
+    '',
+    BEGIN,
+    ...(project.context ? [project.context.trim()] : []),
+    END,
+    '',
     '## Instructions',
     '',
-    'Standing instructions for every chat in this project: yours to write. Nothing generated changes this section.',
-    '',
-    '## Guide',
+    INSTRUCTIONS_PLACEHOLDER,
     '',
     '## Chats',
     '',
@@ -106,34 +114,44 @@ export function withGenerated(note: string, heading: string, body: string): stri
   return `${note.slice(0, from + BEGIN.length)}\n${body.trim()}\n${note.slice(to)}`;
 }
 
-/** `note` with `lines` added at the end of its Guide section (made when it has none). */
-export function withGuideLines(note: string, lines: string[]): string {
-  if (lines.length === 0) return note;
-  const added = lines.join('\n');
-  const start = /^## Guide[ \t]*$/m.exec(note);
-  if (!start) return `${note.trimEnd()}\n\n## Guide\n\n${added}\n`;
-  const after = start.index + start[0].length;
-  const next = /^## /m.exec(note.slice(after));
-  const at = next ? after + next.index : note.length;
-  return `${note.slice(0, at).trimEnd()}\n\n${added}\n${next ? `\n${note.slice(at)}` : ''}`;
+/**
+ * A project's sections as they go with a chat: its Context (between its markers, or the whole section
+ * in a note edited by hand) and its Instructions (their placeholder left out). A note written before
+ * Context replaced the Guide gives its Guide as its Context.
+ */
+export function projectParts(note: string): { context: string; instructions: string } {
+  const strip = (text: string) => text.replace(BEGIN, '').replace(END, '').trim();
+  const context = strip(memoSection(note, 'Context')) || memoSection(note, 'Guide').trim();
+  const instructions = memoSection(note, 'Instructions')
+    .replace(INSTRUCTIONS_PLACEHOLDER, '')
+    .replace(/^Standing instructions for every chat in this project: yours to write\. Nothing generated changes this section\.\s*/, '')
+    .trim();
+  return { context, instructions };
 }
 
-/** A project's sections as they go with a chat: its Instructions and Guide (the Instructions' placeholder left out). */
-export function projectParts(note: string): { instructions: string; guide: string } {
-  const instructions = memoSection(note, 'Instructions').replace(/^Standing instructions for every chat in this project: yours to write\. Nothing generated changes this section\.\s*/, '');
-  return { instructions: instructions.trim(), guide: memoSection(note, 'Guide').trim() };
+/** `note` with its Context set to `context`: between the section's markers, the section (and its markers) made when the note has none. */
+export function withContext(note: string, context: string): string {
+  if (/^## Context[ \t]*$/m.test(note)) {
+    const replaced = withGenerated(note, 'Context', context);
+    if (replaced !== note || projectParts(note).context === context.trim()) return replaced;
+    // A Context section without markers: its text replaced, markers added.
+    return note.replace(/^## Context[ \t]*\n[\s\S]*?(?=^## |(?![\s\S]))/m, `## Context\n\n${BEGIN}\n${context.trim()}\n${END}\n\n`);
+  }
+  const heading = /^# .*$/m.exec(note);
+  const at = heading ? heading.index + heading[0].length : note.length;
+  return `${note.slice(0, at)}\n\n## Context\n\n${BEGIN}\n${context.trim()}\n${END}\n${note.slice(at)}`;
 }
 
 /**
  * What goes with a chat's message from its project: the Instructions of the projects holding its
- * project's folder (`parent`), and its project's Instructions and (if chosen) Guide (`home`); each
- * with its project note's path (`note`), which Claude may open when asked to change the project.
+ * project's folder (`parent`), and its project's Context and Instructions (`home`); each with its
+ * project note's path (`note`), which Claude may open when asked to change the project.
  */
-export function projectContextBlock(parts: { name: string; note: string; instructions?: string; guide?: string; role: 'home' | 'parent' }[]): string {
+export function projectContextBlock(parts: { name: string; note: string; context?: string; instructions?: string; role: 'home' | 'parent' }[]): string {
   const sections = parts.flatMap((part) => {
     const lines: string[] = [];
-    if (part.instructions) lines.push(`Instructions:\n${part.instructions}`);
-    if (part.guide) lines.push(`Guide (findings from earlier chats, accepted by the user):\n${part.guide}`);
+    if (part.context) lines.push(`Context (a summary of the project, from its notes and chats):\n${part.context}`);
+    if (part.instructions) lines.push(`Instructions (the user's own):\n${part.instructions}`);
     return lines.length > 0 ? [`<project name=${JSON.stringify(part.name)} role="${part.role}" note=${JSON.stringify(part.note)}>\n${lines.join('\n\n')}\n</project>`] : [];
   });
   return sections.length > 0 ? `<project_context>\n${sections.join('\n\n')}\n</project_context>` : '';
@@ -149,18 +167,17 @@ export function linkedChatsBlock(chats: { id: string; title: string; digest: str
   return `<linked_chats>\nEarlier conversations the user linked to this one, as context:\n\n${each.join('\n\n')}\n</linked_chats>`;
 }
 
-/** A short fingerprint of a project's Instructions and Guide, to tell whether they changed since they were sent. */
-export function contextHash(parts: { instructions: string; guide: string }): string {
+/** A short fingerprint of a project's Context and Instructions, to tell whether they changed since they were sent. */
+export function contextHash(parts: { context: string; instructions: string }): string {
   let hash = 5381;
-  for (const char of `${parts.instructions}\u0000${parts.guide}`) hash = ((hash * 33) ^ char.charCodeAt(0)) >>> 0;
+  for (const char of `${parts.context}\u0000${parts.instructions}`) hash = ((hash * 33) ^ char.charCodeAt(0)) >>> 0;
   return hash.toString(36);
 }
 
-/** How much of a chat's conversation and edits a guide update reads, at most. */
+/** How much of a chat's conversation a digest keeps, at most. */
 const DIGEST_CHARS = 8000;
-const EDIT_CHARS = 4000;
 
-/** A chat as a guide update reads it: your prompts and Claude's replies, the latest kept when long. */
+/** A chat as a digest reads it: your prompts and Claude's replies, the latest kept when long. */
 export function chatDigest(messages: SessionMessage[]): string {
   const lines: string[] = [];
   for (const message of messages) {
@@ -178,88 +195,43 @@ export function chatDigest(messages: SessionMessage[]): string {
   return all.length <= DIGEST_CHARS ? all : `[… earlier part left out …]\n\n${all.slice(-DIGEST_CHARS)}`;
 }
 
-/** The edits a chat made to files, as before and after, from its Edit, MultiEdit and Write calls; the latest kept when long. */
-export function chatEdits(messages: SessionMessage[]): string {
-  const edits: string[] = [];
-  for (const message of messages) {
-    if (message.type !== 'assistant' || message.parent_tool_use_id !== null) continue;
-    const content = (message.message as { content?: unknown } | null)?.content;
-    for (const block of Array.isArray(content) ? (content as ContentBlock[]) : []) {
-      if (block.type !== 'tool_use') continue;
-      const input = (block.input ?? {}) as Record<string, unknown>;
-      const file = typeof input.file_path === 'string' ? input.file_path.split('/').pop() : '';
-      const pair = (before: unknown, after: unknown) => `In ${file}:\nBefore: ${String(before ?? '').slice(0, 600)}\nAfter: ${String(after ?? '').slice(0, 600)}`;
-      if (block.name === 'Edit') edits.push(pair(input.old_string, input.new_string));
-      else if (block.name === 'MultiEdit' && Array.isArray(input.edits)) for (const edit of input.edits as Record<string, unknown>[]) edits.push(pair(edit.old_string, edit.new_string));
-      else if (block.name === 'Write') edits.push(`Wrote ${file}:\n${String(input.content ?? '').slice(0, 600)}`);
-    }
-  }
-  const all = edits.join('\n\n');
-  return all.length <= EDIT_CHARS ? all : `[… earlier edits left out …]\n\n${all.slice(-EDIT_CHARS)}`;
-}
-
-/** One finding proposed for a project's Guide. */
-export interface GuideProposal {
-  text: string;
-  kind: 'finding' | 'example' | 'question';
-  /** The chat it comes from (its id). */
-  source: string;
-  /** The Guide's line it contradicts, if any: shown as a conflict, never applied silently. */
-  conflicts: string;
-}
-
-/** The instructions for proposing additions to a project's Guide. */
-export const GUIDE_SYSTEM = [
-  "You propose additions to a project's Guide: a short record of what was learned across the user's conversations with an AI assistant in that project, which goes with every new conversation in it.",
-  'Propose only what the given conversations show: patterns in what the user asked for and accepted, decisions and their reasons, conventions followed, and questions left open. Each item is one or two sentences, general enough to apply to the next piece of work.',
-  'Each item names the conversation it comes from by its id. Do not restate the project\'s Instructions or anything already in its Guide. When an item contradicts a Guide line, still propose it, and quote that line under "conflicts".',
-  'Use kind "example" only for a before/after pair taken from the edits given, quoting them briefly; "question" for something left open; otherwise "finding". Never decide for the user: an observation stays an observation.',
-  'Propose few items, the most useful first; none when nothing new was learned. Reply with JSON only: {"items": [{"text": "…", "kind": "finding", "source": "…", "conflicts": ""}]}.',
+/** The instructions for writing a project's Context. */
+export const CONTEXT_SYSTEM = [
+  "You write the Context of a project in the user's Obsidian vault: a short summary that goes with every new conversation with an AI assistant about the project, so that it starts knowing what the project is.",
+  'You are given the project folder\'s notes (path, properties, opening lines) and the conversations that worked on them (title, date, last exchanges).',
+  'Write at most 300 words of Markdown, without a heading: what the project is, where it stands (with dates), its key notes as [[wikilinks]] by note name, and the questions left open. State only what the notes and conversations show; no advice, no praise, no guesses.',
+  'Reply with the Context only.',
 ].join('\n');
 
-/** The request: the project's Instructions and Guide, then each conversation with its id, title, digest and edits. */
-export function guidePrompt(project: { name: string; instructions: string; guide: string }, chats: { id: string; title: string; digest: string; edits: string }[]): string {
+/** How much of each note the request carries. */
+const PROPERTIES_CHARS = 400;
+const OPENING_CHARS = 500;
+
+/** A note's opening lines, without its frontmatter: at most OPENING_CHARS. */
+export function noteOpening(text: string): string {
+  const body = text.replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
+  return body.length <= OPENING_CHARS ? body : `${body.slice(0, OPENING_CHARS)}…`;
+}
+
+/** The request for a project's Context: its name and folder, its notes, and its chats. */
+export function contextPrompt(project: { name: string; folder: string }, notes: { path: string; properties: Record<string, unknown>; opening: string }[], chats: { title: string; date: string; digest: string }[]): string {
+  const cap = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max)}…`);
   return [
-    `Project: ${project.name}`,
+    `Project: ${project.name} (folder ${project.folder})`,
     '',
-    'Instructions (the user\'s own; not to be restated):',
-    project.instructions || '(none)',
+    notes.length > 0 ? 'Notes in the folder:' : 'The folder has no notes yet.',
+    ...notes.flatMap((note) => [`<note path=${JSON.stringify(note.path)}>`, `Properties: ${cap(JSON.stringify(note.properties), PROPERTIES_CHARS)}`, note.opening, '</note>']),
     '',
-    'Guide so far:',
-    project.guide || '(empty)',
-    '',
-    ...chats.flatMap((chat) => [
-      `<conversation id=${JSON.stringify(chat.id)} title=${JSON.stringify(chat.title)}>`,
-      chat.digest || '(no text)',
-      ...(chat.edits ? ['', 'Edits made:', chat.edits] : []),
-      '</conversation>',
-      '',
-    ]),
+    chats.length > 0 ? 'Conversations that worked on these notes, most recent first:' : 'No conversations have worked on these notes yet.',
+    ...chats.flatMap((chat) => [`<conversation title=${JSON.stringify(chat.title)} date="${chat.date}">`, chat.digest || '(no text)', '</conversation>']),
   ].join('\n');
 }
 
-/** The proposals in the model's reply: only from chats it was given, with text; null when it is not the JSON asked for. */
-export function readGuideProposals(reply: string, chatIds: string[]): GuideProposal[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(reply.slice(reply.indexOf('{'), reply.lastIndexOf('}') + 1));
-  } catch {
-    return null;
-  }
-  const items = (parsed as { items?: unknown } | null)?.items;
-  if (!Array.isArray(items)) return null;
-  const given = new Set(chatIds);
-  return items.flatMap((item) => {
-    if (typeof item !== 'object' || item === null) return [];
-    const { text, kind, source, conflicts } = item as Record<string, unknown>;
-    if (typeof text !== 'string' || !text.trim() || typeof source !== 'string' || !given.has(source)) return [];
-    const sort = kind === 'example' || kind === 'question' ? kind : 'finding';
-    return [{ text: text.trim(), kind: sort, source, conflicts: typeof conflicts === 'string' ? conflicts.trim() : '' }];
-  });
-}
-
-/** A Guide line for an accepted proposal: its kind when not a plain finding, its text, and a link to its source chat. */
-export function guideLine(proposal: { text: string; kind: GuideProposal['kind'] }, source: { title: string; link: string }, date: string): string {
-  const label = proposal.kind === 'example' ? '**Example:** ' : proposal.kind === 'question' ? '**Open question:** ' : '';
-  return `- ${label}${proposal.text.replace(/\s*\n\s*/g, ' ')} ([${source.title.replace(/[[\]]/g, '')}](${source.link}), ${date})`;
+/** The Context in the model's reply: without a heading or a fence it may have added. */
+export function readContext(reply: string): string {
+  return reply
+    .trim()
+    .replace(/^```(?:markdown)?\n([\s\S]*?)\n```$/, '$1')
+    .replace(/^#{1,3} .*\n+/, '')
+    .trim();
 }

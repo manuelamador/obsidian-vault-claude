@@ -19,8 +19,8 @@ import { DAY_MS, OLDER_LOOKED_AT, PICK_UP_SYSTEM, SKIP_DAYS, candidateOf, leftOu
 import { PickUpModal, type ChatDetails } from './pickUpModal';
 import { renderSafely } from './safeRender';
 import { inFolder, notesByChat, suggestFolder, weightedNotes, type FolderSuggestion } from './chatFolders';
-import { GUIDE_SYSTEM, PROJECT_TYPE, contextHash, homeOf, chatDigest, chatEdits, guideLine, guidePrompt, projectNoteMarkdown, projectParts, readGuideProposals, withGenerated, withGuideLines, type GuideProposal, type HomeReason } from './projects';
-import { ChooseFolderModal, CreateProjectModal, GuideModal, ManageProjectsModal, ProjectPicker, type FolderSource, type ProjectRef } from './projectModals';
+import { CONTEXT_SYSTEM, PROJECT_TYPE, contextHash, contextPrompt, homeOf, chatDigest, noteOpening, projectNoteMarkdown, projectParts, readContext, withContext, withGenerated, type HomeReason } from './projects';
+import { ChooseFolderModal, ContextModal, CreateProjectModal, ManageProjectsModal, ProjectPicker, type FolderSource, type ProjectRef } from './projectModals';
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
 import { chatMap, projectMap } from './connections';
@@ -83,6 +83,11 @@ const LINKED_SUMMARY_SYSTEM =
 /** The most notes beside a note, and chats, that Suggest frontmatter updates reads. */
 const FRONTMATTER_NEIGHBOURS = 40;
 const FRONTMATTER_CHATS = 12;
+/** What a project's Context is written from: its notes, its chats, and of each chat its last messages, kept to a few thousand characters. */
+const CONTEXT_NOTES = 25;
+const CONTEXT_CHATS = 8;
+const CONTEXT_MESSAGES = 10;
+const CONTEXT_DIGEST_CHARS = 2500;
 /** The most key notes a project lists. */
 const PROJECT_KEY_NOTES = 12;
 
@@ -103,8 +108,7 @@ function projectRef(file: TFile): ProjectRef {
 
 /**
  * What a chat's projects sent with it and what it chose to send: `sent`, the projects whose context
- * went with a message (it goes once, until sent again by hand); `noGuide`, its home project's Guide
- * left out; `declined`, its project removed by
+ * went with a message (it goes once, until sent again by hand); `declined`, its project removed by
  * hand, after which its notes do not give it one and none is offered; `start`, the note attached when
  * it started, whose folder decides its project first (see homeOf).
  */
@@ -112,7 +116,6 @@ export interface ChatProjectState {
   sent?: string[];
   /** Per project sent, a fingerprint of what went (see contextHash), to tell when it changed since. */
   sentHash?: Record<string, string>;
-  noGuide?: boolean;
   declined?: boolean;
   start?: string;
   /** The chats it links to whose digests go with it (see ChatView.openLinks). */
@@ -279,7 +282,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.addCommand({ id: 'manage-projects', name: 'Manage projects', callback: () => void this.openManageProjects() });
     this.addCommand({ id: 'rebuild-connections', name: 'Rebuild connections from chat files', callback: () => this.confirmRebuildConnections() });
     this.addCommand({ id: 'create-project', name: 'Create project…', callback: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId() }) });
-    this.addCommand({ id: 'update-project-guide', name: 'Update project guide…', callback: () => void this.openUpdateGuide(this.frontChatView()?.currentChatId()) });
+    this.addCommand({ id: 'refresh-project-context', name: 'Refresh project context…', callback: () => void this.openRefreshContext(this.frontChatView()?.currentChatId()) });
     this.addCommand({
       id: 'chat-connections',
       name: "Show this chat's connections",
@@ -1455,7 +1458,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * A fingerprint of project `path`'s Instructions and Guide (see contextHash); null until read, when
+   * A fingerprint of project `path`'s Context and Instructions (see contextHash); null until read, when
    * the panels are told. Read again when the note changes.
    */
   projectHashNow(path: string): string | null {
@@ -1672,6 +1675,15 @@ export default class VaultClaudePlugin extends Plugin {
       ...map,
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
+      openProjectMap: (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) void this.openProjectMap(file, view);
+      },
+      refreshContext: (path, saved) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) void this.refreshContext(file, saved);
+      },
+      manageProjects: () => void this.openManageProjects(),
       changeFolder: (path, changed) => {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (!(file instanceof TFile)) return;
@@ -1798,7 +1810,6 @@ export default class VaultClaudePlugin extends Plugin {
     const kept: ChatProjectState = {};
     if (state.sent?.length) kept.sent = state.sent;
     if (state.sent?.length && state.sentHash) kept.sentHash = Object.fromEntries(Object.entries(state.sentHash).filter(([path]) => state.sent?.includes(path)));
-    if (state.noGuide) kept.noGuide = true;
     if (state.declined) kept.declined = true;
     if (state.start) kept.start = state.start;
     if (state.includeChats?.length) kept.includeChats = state.includeChats;
@@ -2030,7 +2041,18 @@ export default class VaultClaudePlugin extends Plugin {
       await this.refreshProjectLists(file);
       this.projectsChanged();
       await this.app.workspace.getLeaf('tab').openFile(file);
-      new Notice(`Project “${clean}” created. Write its Instructions in the note.`);
+      // Its Context, written straight into the note (which can then be edited); without it, the project still stands.
+      const writing = new Notice(`Project “${clean}” created. Writing its context from its notes and chats…`, 0);
+      void this.writeProjectContext(file)
+        .then(async (context) => {
+          await this.saveProjectContext(file, context);
+          new Notice(`The context of “${clean}” is written: edit it in the note, or Refresh context later.`);
+        })
+        .catch((error: unknown) => {
+          log('writing a project context failed', error);
+          new Notice(`The context of “${clean}” could not be written: ${errorText(error)}. Use Refresh context to try again.`);
+        })
+        .finally(() => writing.hide());
       return true;
     } catch (error) {
       log('creating a project failed', error);
@@ -2068,7 +2090,7 @@ export default class VaultClaudePlugin extends Plugin {
     return true;
   }
 
-  /** Manage projects (see ManageProjectsModal): every project, with its folder, chats and Guide, and what can be done to it. */
+  /** Manage projects (see ManageProjectsModal): every project, with its folder, chats and Context, and what can be done to it. */
   async openManageProjects(): Promise<void> {
     await this.listChats().catch(() => []);
     const notes = this.chatNotes();
@@ -2086,7 +2108,7 @@ export default class VaultClaudePlugin extends Plugin {
             name: file.basename,
             folder: this.projectFolder(file),
             chats: this.projectMembers(file).length,
-            guideUpdated: String(this.app.metadataCache.getFileCache(file)?.frontmatter?.guide_updated ?? ''),
+            contextUpdated: String(this.app.metadataCache.getFileCache(file)?.frontmatter?.context_updated ?? ''),
           }))
           .sort((a, b) => a.name.localeCompare(b.name)),
       open: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
@@ -2094,9 +2116,20 @@ export default class VaultClaudePlugin extends Plugin {
         const file = fileAt(path);
         if (file) void this.openProjectMap(file, this.frontChatView());
       },
-      updateGuide: (path) => {
+      refreshContext: (path, saved) => {
         const file = fileAt(path);
-        if (file) void this.updateGuide(file);
+        if (file) void this.refreshContext(file, saved);
+      },
+      writeContext: async (path) => {
+        const file = fileAt(path);
+        if (!file) return false;
+        try {
+          await this.saveProjectContext(file, await this.writeProjectContext(file));
+          return true;
+        } catch (error) {
+          log('writing a project context failed', file.path, error);
+          return false;
+        }
       },
       setFolder: async (path, folder) => {
         const file = fileAt(path);
@@ -2131,77 +2164,88 @@ export default class VaultClaudePlugin extends Plugin {
     }).open();
   }
 
-  /** A project's Instructions and Guide as they go with a chat. */
-  async projectParts(file: TFile): Promise<{ instructions: string; guide: string }> {
+  /** A project's Context and Instructions as they go with a chat. */
+  async projectParts(file: TFile): Promise<{ context: string; instructions: string }> {
     return projectParts(await this.app.vault.cachedRead(file));
   }
 
-  /** Update project guide: the project of the note in front, else of the chat on screen, else one chosen. */
-  async openUpdateGuide(chatId?: string | null): Promise<void> {
+  /** Refresh project context: the project of the note in front, else of the chat on screen, else one chosen. */
+  async openRefreshContext(chatId?: string | null): Promise<void> {
     const active = this.app.workspace.getActiveFile();
-    const project = active && this.app.metadataCache.getFileCache(active)?.frontmatter?.type === PROJECT_TYPE ? active : chatId ? this.homeProject(chatId) : null;
-    if (project) return this.updateGuide(project);
+    const project = active && this.isProjectNote(active) ? active : chatId ? this.homeProject(chatId) : null;
+    if (project) return this.refreshContext(project);
     const projects = this.projectNotes();
     if (projects.length === 0) {
       new Notice('There are no projects yet: create one first.');
       return;
     }
-    new ProjectPicker(this.app, projects.map(projectRef), 'Update the Guide of…', (chosen) => {
+    new ProjectPicker(this.app, projects.map(projectRef), 'Refresh the context of…', (chosen) => {
       const file = this.app.vault.getAbstractFileByPath(chosen.path);
-      if (file instanceof TFile) void this.updateGuide(file);
+      if (file instanceof TFile) void this.refreshContext(file);
     }).open();
   }
 
-  async updateGuide(file: TFile): Promise<void> {
-    await this.refreshProjectLists(file);
-    const since = String(this.app.metadataCache.getFileCache(file)?.frontmatter?.guide_updated ?? '');
-    const choice = (id: string, tick: boolean) => {
-      const item = this.lastListing?.find((each) => each.id === id);
-      // Ticked: those active since the Guide was last updated, all when it never was.
-      return { id, title: this.chatTitleOf(id), when: item ? formatDate(item.updatedAt) : 'not found', ticked: tick && !!item && (!since || formatDate(item.updatedAt).slice(0, 10) >= since), item };
-    };
-    const own = this.projectMembers(file).map((item) => choice(item.id, true));
-    new GuideModal(this.app, {
-      project: projectRef(file),
-      chats: own,
-      propose: (ids, signal) => this.proposeGuide(file, ids, signal),
-      apply: (accepted) => this.applyGuide(file, accepted),
-      titleOf: (id) => this.chatTitleOf(id),
-      openChat: (id) => void this.openChatById(id, this.chatTitleOf(id)),
+  /** Writes a project's Context anew and shows it beside the one it has, to save or not (see ContextModal). */
+  async refreshContext(file: TFile, saved?: () => void): Promise<void> {
+    const current = (await this.projectParts(file)).context;
+    new ContextModal(this.app, {
+      name: file.basename,
+      current,
+      write: (signal) => this.writeProjectContext(file, signal),
+      save: async (context) => {
+        await this.saveProjectContext(file, context);
+        new Notice(`The context of “${file.basename}” is updated: it goes with the next message of each of its chats.`);
+        saved?.();
+      },
     }).open();
   }
 
-  /** Claude's proposals for a project's Guide from chats `ids`, read locally from their session files (see chatDigest, chatEdits). */
-  private async proposeGuide(file: TFile, ids: string[], signal: AbortSignal): Promise<GuideProposal[]> {
+  /** Puts `context` in a project's note, and stamps when. */
+  private async saveProjectContext(file: TFile, context: string): Promise<void> {
+    await this.app.vault.process(file, (text) => withContext(text, context));
+    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
+      front.context_updated = today();
+      front.updated = today();
+    });
+    this.projectsChanged();
+  }
+
+  /**
+   * A project's Context, written on the model for small jobs from its folder's notes (their
+   * properties and opening lines, the most recently changed first) and the chats that worked on them
+   * (their last exchanges): read locally, one request.
+   */
+  async writeProjectContext(file: TFile, signal?: AbortSignal): Promise<string> {
     const launch = this.claudeLaunch();
     const dir = this.vaultRoot();
     if (typeof launch === 'string') throw new Error(launch);
-    if (!dir) throw new Error('the vault is not a folder on this computer');
-    const chats = [];
-    for (const id of ids) {
-      const messages = await loadTranscript(id, dir).catch(() => []);
-      chats.push({ id, title: this.chatTitleOf(id), digest: chatDigest(messages), edits: chatEdits(messages) });
-    }
-    const parts = await this.projectParts(file);
-    const reply = await runOneShot(launch, { system: GUIDE_SYSTEM, prompt: guidePrompt({ name: file.basename, ...parts }, chats), model: this.smallJobModel(), effort: 'low' }, () => undefined, signal);
-    const proposals = readGuideProposals(reply, ids);
-    if (!proposals) throw new Error('Claude did not reply in the form asked for');
-    return proposals;
-  }
-
-  /** Adds the accepted proposals to a project's Guide, each linked to its chat, and stamps when. */
-  private async applyGuide(file: TFile, accepted: GuideProposal[]): Promise<void> {
-    if (accepted.length === 0) return;
-    const date = today();
-    const vault = this.app.vault.getName();
-    const lines = accepted.map((proposal) => guideLine(proposal, { title: this.chatTitleOf(proposal.source), link: chatLink({ vault, chat: proposal.source }) }, date));
-    await this.app.vault.process(file, (text) => withGuideLines(text, lines));
-    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
-      front.guide_updated = date;
-      front.updated = date;
-    });
-    new Notice(`${accepted.length} addition${accepted.length === 1 ? '' : 's'} to the Guide of “${file.basename}”.`);
-    this.projectsChanged();
+    await this.listChats().catch(() => []);
+    const folder = this.projectFolder(file);
+    const files = this.app.vault
+      .getMarkdownFiles()
+      .filter((note) => note !== file && folder !== '' && inFolder(note.path, folder) && !this.isHiddenPath(note.path))
+      // The folder's own notes (its hub, by its name) first, then the most recently changed.
+      .sort((a, b) => Number(b.parent?.path === folder) - Number(a.parent?.path === folder) || b.stat.mtime - a.stat.mtime)
+      .slice(0, CONTEXT_NOTES);
+    const notes = await Promise.all(
+      files.map(async (note) => {
+        const { position: _position, ...properties } = this.app.metadataCache.getFileCache(note)?.frontmatter ?? {};
+        return { path: note.path, properties, opening: noteOpening(await this.app.vault.cachedRead(note)) };
+      }),
+    );
+    const chats = await Promise.all(
+      this.projectMembers(file)
+        .slice(0, CONTEXT_CHATS)
+        .map(async (item) => ({
+          title: item.title,
+          date: formatDate(item.updatedAt).slice(0, 10),
+          digest: dir ? chatDigest(await lastMessages(item.id, dir, ownMessage, CONTEXT_MESSAGES, PICK_UP_BYTES).catch(() => [])).slice(-CONTEXT_DIGEST_CHARS) : '',
+        })),
+    );
+    const reply = await runOneShot(launch, { system: CONTEXT_SYSTEM, prompt: contextPrompt({ name: file.basename, folder }, notes, chats), model: this.smallJobModel(), effort: 'low' }, () => undefined, signal ?? new AbortController().signal);
+    const context = readContext(reply);
+    if (!context) throw new Error('Claude did not write one');
+    return context;
   }
 
   /**
