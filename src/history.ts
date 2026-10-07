@@ -413,8 +413,9 @@ const QUEUED_TAIL_BYTES = 256 * 1024;
  * the end of its file (no further than QUEUED_TAIL_BYTES): it writes one as an attachment the moment
  * it folds it into the turn running, before any result says so.
  */
-export async function queuedTaken(id: string, dir: string): Promise<string[]> {
-  const taken: string[] = [];
+export async function queuedTaken(id: string, dir: string): Promise<{ texts: string[]; uuids: Set<string> }> {
+  const texts: string[] = [];
+  const uuids = new Set<string>();
   await eachRowFromEnd(
     id,
     dir,
@@ -422,14 +423,18 @@ export async function queuedTaken(id: string, dir: string): Promise<string[]> {
       if (row.type === 'attachment' && row.attachment?.type === 'queued_command') {
         const prompt = row.attachment.prompt;
         const text = typeof prompt === 'string' ? prompt : Array.isArray(prompt) ? textBlocksOf(prompt) : '';
-        if (text) taken.push(text);
+        if (text) texts.push(text);
+        if (row.attachment.source_uuid) uuids.add(row.attachment.source_uuid);
       }
+      // The small row that says it was taken up, by the uuid it was sent with: found even when the
+      // message's own row (an image in it) is too large for the end of the file read here.
+      if (row.type === 'queue-operation' && row.operation === 'remove' && row.reason === 'absorbed_mid_turn' && row.commandUuid) uuids.add(row.commandUuid);
       return false;
     },
     QUEUED_TAIL_BYTES,
     QUEUED_TAIL_BYTES,
   ).catch((error: unknown) => log(`reading the queued messages of session ${id} failed`, error));
-  return taken;
+  return { texts, uuids };
 }
 
 /** The text of content blocks, as a queued message's prompt may be given. */
@@ -520,7 +525,11 @@ interface SessionRow {
   isMeta?: boolean;
   isCompactSummary?: boolean;
   /** What Claude Code attached to the chat: a queued message taken up mid-turn is one (`queued_command`). */
-  attachment?: { type?: string; prompt?: unknown };
+  attachment?: { type?: string; prompt?: unknown; source_uuid?: string };
+  /** A queue operation's: what it did, why, and to which message (by the uuid it was sent with). */
+  operation?: string;
+  reason?: string;
+  commandUuid?: string;
   isVisibleInTranscriptOnly?: boolean;
 }
 
@@ -543,6 +552,19 @@ function rowMessage(row: SessionRow, id: string): SessionMessage | null {
       parent_tool_use_id: null,
       parent_agent_id: null,
       message: { subtype: 'compact_boundary', trigger: row.compactMetadata?.trigger, preTokens: row.compactMetadata?.preTokens },
+    } as unknown as SessionMessage;
+  }
+  // A message sent while Claude worked and taken up mid-turn is kept only as this attachment: drawn as the message it was.
+  if (row.type === 'attachment' && row.attachment?.type === 'queued_command' && !row.isSidechain) {
+    const { prompt, source_uuid: uuid } = row.attachment;
+    if (typeof prompt !== 'string' && !Array.isArray(prompt)) return null;
+    return {
+      type: 'user',
+      uuid: uuid ?? row.uuid,
+      session_id: row.sessionId ?? id,
+      parent_tool_use_id: null,
+      parent_agent_id: null,
+      message: { role: 'user', content: prompt },
     } as unknown as SessionMessage;
   }
   if ((row.type !== 'user' && row.type !== 'assistant') || row.isSidechain || row.isMeta || !row.message) return null;
@@ -568,15 +590,23 @@ async function readSession(id: string, dir: string, withEdits: boolean): Promise
   }
   const messages: SessionMessage[] = [];
   const edits = new Map<string, unknown>();
+  // Queued messages taken up mid-turn (see rowMessage), and the uuids of the messages of their own.
+  const queued = new Set<SessionMessage>();
+  const own = new Set<string>();
   for (const line of text.split('\n')) {
     const row = line ? parseRow(line) : null;
     if (!row) continue;
     const edit = withEdits ? rowToolResult(row, true) : null;
     if (edit) edits.set(...edit);
     const message = rowMessage(row, id);
-    if (message) messages.push(message);
+    if (!message) continue;
+    messages.push(message);
+    if (row.type === 'attachment') queued.add(message);
+    else if (message.uuid) own.add(message.uuid);
   }
-  const transcript = messages.some((message) => message.type !== 'system') ? messages : await getSessionMessages(id, { dir });
+  // A queued message that also became a message of its own is drawn once, as that message.
+  const once = messages.filter((message) => !queued.has(message) || !message.uuid || !own.has(message.uuid));
+  const transcript = once.some((message) => message.type !== 'system') ? once : await getSessionMessages(id, { dir });
   return { transcript, edits };
 }
 

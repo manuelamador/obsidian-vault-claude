@@ -4869,8 +4869,8 @@ export class ChatView extends ItemView {
       if (id !== this.chatId) return;
       for (const [key, sent] of queued) {
         const text = sent.text?.trim() ?? '';
-        // Its prompt holds what was typed, after any notes that went with it.
-        if (text && taken.some((prompt) => prompt.includes(text))) this.markDelivered(key, false);
+        // By the uuid it was sent with; else its prompt, which holds what was typed after any notes that went with it.
+        if (taken.uuids.has(key) || (text && taken.texts.some((prompt) => prompt.includes(text)))) this.markDelivered(key, false);
       }
     });
   }
