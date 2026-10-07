@@ -3198,3 +3198,28 @@ body:has(.vc-map-modal) .popover.hover-popover {
 .vc-map-trail .vc-project-size {
   flex-basis: 100%;
 }
+
+/* The project in the middle of its map: its note. */
+.vc-map-node.is-project-node rect {
+  fill: var(--interactive-accent);
+  stroke: var(--background-primary);
+  stroke-width: 2;
+}
+
+.vc-map-node.is-project-node .vc-map-bubble {
+  fill: var(--text-on-accent);
+}
+
+.vc-map-node.is-project-node text {
+  fill: var(--text-normal);
+  font-weight: var(--font-semibold);
+  font-size: 12px;
+}
+
+/* Back to the tab a map came from. */
+.vc-connections-back {
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  margin-bottom: var(--size-4-2);
+  display: inline-block;
+}

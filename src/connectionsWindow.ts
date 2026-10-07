@@ -84,15 +84,21 @@ export class ConnectionsWindow extends Modal {
     void this.show(this.tab);
   }
 
-  /** Shows tab `tab`, its panes drawn anew. */
-  async show(tab: ConnectionsTab): Promise<void> {
+  /** Shows tab `tab`, its panes drawn anew; `back`: with a way back to the tab shown before (come from a map, not the tab's button). */
+  async show(tab: ConnectionsTab, back = false): Promise<void> {
     const turn = ++this.showing;
+    const from = this.tab;
     this.tab = tab;
     for (const [each, button] of this.tabButtons) button.toggleClass('is-active', each === tab);
     const panes = await this.build(tab);
     if (turn !== this.showing) return;
     this.unmount();
     this.body.empty();
+    if (back && from !== tab) {
+      const label = TABS.find(([each]) => each === from)?.[1] ?? '';
+      const way = this.body.createEl('a', { cls: 'vc-connections-back', text: `← Back to ${label}` });
+      way.addEventListener('click', () => void this.show(from));
+    }
     if (!Array.isArray(panes)) {
       this.body.createDiv({ cls: 'vc-project-empty', text: panes.empty });
       const { action } = panes;

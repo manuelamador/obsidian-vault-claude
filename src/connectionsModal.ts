@@ -589,7 +589,8 @@ export class ChatMapModal extends Pane {
     };
     if (host.project) {
       const { project } = host;
-      bar.createSpan({ cls: 'vc-map-bar-name', text: `In “${project.name}”` });
+      const name = bar.createEl('a', { cls: 'vc-map-bar-name', text: `In “${project.name}”`, attr: { 'aria-label': 'Show the project: its map, and what it sends' } });
+      name.addEventListener('click', () => host.openProjectMap(project.path));
       const menuButton = bar.createEl('button', { cls: 'vc-map-action' });
       menuButton.appendText('Project');
       setIcon(menuButton.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
@@ -701,9 +702,11 @@ export class ChatMapModal extends Pane {
     const { host } = this;
     const project = host.projectHolding(folder);
     if (project && project.folder !== folder) return [];
-    if (project && project.path === host.project?.path) return [{ label: 'Open project note', run: () => host.openProjectNote(project.path) }];
+    const show = (path: string) => ({ label: 'Show the project', run: () => host.openProjectMap(path) });
+    if (project && project.path === host.project?.path) return [show(project.path), { label: 'Open project note', run: () => host.openProjectNote(project.path) }];
     if (project)
       return [
+        show(project.path),
         { label: host.project ? 'Move chat here' : 'Put chat here', tip: HOME_TIP, run: () => void host.setHome(project.path).then(() => this.redraw()) },
         { label: 'Open project note', run: () => host.openProjectNote(project.path) },
       ];
@@ -728,6 +731,9 @@ export class ChatMapModal extends Pane {
 
 export interface ProjectMapHost extends MapActions {
   name: string;
+  /** The project note: the node in the middle, previewed on ⌘-hover, opened beside on a click. */
+  path: string;
+  openBeside(path: string): void;
   /** The project's folder: its notes are grouped by the folders in it. */
   folder: string;
   chats: string[];
@@ -785,8 +791,8 @@ export class ProjectMapModal extends Pane {
       tip: outer === null ? sub : sub ? `${host.folder}/${sub}` : host.folder,
       cls: outer === '' || sub === '' ? 'is-home' : 'is-plain',
     }));
-    // The chats on a small ring in the middle, wider when there are many.
-    const inner = host.chats.length === 1 ? 0 : Math.max(60, host.chats.length * 6);
+    // The chats on a small ring round the project, wider when there are many.
+    const inner = Math.max(70, host.chats.length * 7);
     const chatAt = new Map(host.chats.map((id, i) => [id, polar((2 * Math.PI * i) / host.chats.length, inner)]));
     const noteAt = (path: string) => polar(angles.get(path) ?? 0, ring);
     for (const [id, path, weight] of host.links) {
@@ -807,6 +813,15 @@ export class ProjectMapModal extends Pane {
       tooltip(group, `${host.titleOf(id)} · ${touched} note${touched === 1 ? '' : 's'} here\nClick to open or mention it${host.linked(id) === null ? '' : ', or link it'}`);
       chatNode(group, id, host, () => undefined);
     }
+    // The project in the middle: its note, previewed on ⌘-hover, opened beside the panel on a click.
+    const project = drawing.node('project', 'is-project-node');
+    svg(project, 'rect', { x: -16, y: -16, width: 32, height: 32, rx: 7 });
+    svg(project, 'path', { d: 'M -8 -6 h 6 l 2 3 h 8 v 9 h -16 z', class: 'vc-map-bubble' });
+    const title = svg(project, 'text', { x: 0, y: 32, 'text-anchor': 'middle' });
+    title.textContent = shortLabel(host.name, 40);
+    tooltip(project, `${host.name}: its note\nClick to open it beside the panel`);
+    project.addEventListener('click', () => host.openBeside(host.path));
+    project.addEventListener('mouseover', (evt) => host.previewNote(host.path, evt, project, this));
     legend(contentEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned'].includes(kind)));
     const more = [host.moreChats > 0 ? `${host.moreChats} older chat${host.moreChats === 1 ? '' : 's'}` : '', host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : ''].filter(Boolean);
     showAll(contentEl, `Point at a chat to see its notes.${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, host.all, (all) => void this.redraw(all), () => host.rebuild(() => void this.redraw(host.all)));

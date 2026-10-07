@@ -1649,6 +1649,8 @@ export default class VaultClaudePlugin extends Plugin {
         return [new ChatMapModal(this.app, await this.chatMapHost(view, id)), view.linksPane()];
       }
       const project = this.connectionsProject ?? (id ? this.homeProject(id) : null);
+      // Shown once, when there is a chat: the tab's own button shows the chat's project again.
+      if (id) this.connectionsProject = null;
       if (!project) return { empty: 'This chat has no project. Put it in one from the Chat tab: the bar at its top, or the search.', action: { label: 'Chat', tab: 'chat' } };
       const map = new ProjectMapModal(this.app, await this.projectMapHost(project, view));
       // The chat's own project: what goes with it first; another project, its map only.
@@ -1663,10 +1665,13 @@ export default class VaultClaudePlugin extends Plugin {
     window.open();
   }
 
-  /** In the Connections window, if open: tab `tab`; with `project`, the Project tab shows that project. */
-  showConnectionsTab(tab: ConnectionsTab, project?: TFile): void {
+  /**
+   * In the Connections window, if open: tab `tab`; with `project`, the Project tab shows that project;
+   * `back`: a way back to the tab it came from is offered (from a map, not a tab's own button).
+   */
+  showConnectionsTab(tab: ConnectionsTab, project?: TFile, back = false): void {
     if (project) this.connectionsProject = project;
-    void this.connections?.show(tab);
+    void this.connections?.show(tab, back);
   }
 
   /** What chat `id`'s map shows, read now, and what it does. */
@@ -1688,7 +1693,10 @@ export default class VaultClaudePlugin extends Plugin {
       hubs: this.hubNotes(),
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
-      openProjectMap: () => this.showConnectionsTab('project'),
+      openProjectMap: (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) this.showConnectionsTab('project', file, true);
+      },
       refreshContext: (path, saved) => {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (file instanceof TFile) void this.refreshContext(file, saved);
@@ -1759,6 +1767,11 @@ export default class VaultClaudePlugin extends Plugin {
     return {
       ...this.mapActions(view?.currentChatId() ?? null, view),
       name: file.basename,
+      path: file.path,
+      openBeside: (path) => {
+        const note = this.app.vault.getAbstractFileByPath(path);
+        if (note instanceof TFile) void this.app.workspace.getLeaf('split', 'vertical').openFile(note);
+      },
       folder: this.projectFolder(file),
       ...map,
       moreChats: Math.max(0, members.length - map.chats.length),
