@@ -567,7 +567,12 @@ export class ConnectionsMap extends Modal {
     button('arrow-left', this.at > 0 ? `Back to “${titled(this.at - 1)}”` : 'Back', this.at > 0, () => void this.go(this.at - 1));
     button('arrow-right', this.at < this.places.length - 1 ? `Forward to “${titled(this.at + 1)}”` : 'Forward', this.at < this.places.length - 1, () => void this.go(this.at + 1));
     button('locate', `To “${shortLabel(host.baseline.title, 50)}”, the chat on screen`, away, () => this.home());
-    bar.createSpan({ cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 50) });
+    // Centred on another chat: its name opens it in the panel, where it becomes the chat on screen, the map its own.
+    if (!this.project && host.centre !== host.baseline.id) {
+      const centre = host.centre;
+      const name = bar.createEl('a', { cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 50), attr: { 'aria-label': 'Open this chat in the panel: links and mentions then act for it' } });
+      name.addEventListener('click', () => host.openChat(centre));
+    } else bar.createSpan({ cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 50) });
     extra?.(bar);
     // On a project's map its buttons name the chat they act for.
     if (away && !this.project) bar.createDiv({ cls: 'vc-project-size', text: `Links and mentions still act for “${shortLabel(host.baseline.title, 40)}”, the chat on screen.` });
