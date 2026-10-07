@@ -822,6 +822,7 @@ export class ConnectionsMap extends Modal {
         if (hit.detail) text.createDiv({ cls: 'vc-project-chat-when', text: hit.detail });
         const buttons = row.createDiv({ cls: 'vc-map-hit-actions' });
         if (hit.kind === 'chat') {
+          act(buttons, 'Show', () => void this.moveTo(hit.key)).setAttr('aria-label', 'Centre the map on this chat');
           const linked = host.linked(hit.key);
           if (linked !== null)
             act(buttons, linked ? 'Unlink' : 'Link', () => {
@@ -829,7 +830,7 @@ export class ConnectionsMap extends Modal {
               void this.redraw();
             }).setAttr('aria-label', LINK_TIP);
           act(buttons, 'Mention', () => host.mentionChat(hit.key)).setAttr('aria-label', 'Mention: puts a link to it in your message; the chats are linked when you send it.');
-          act(buttons, 'Open', () => host.openChat(hit.key));
+          act(buttons, 'Open in panel', () => host.openChat(hit.key)).setAttr('aria-label', 'Opens it in the panel; the map then centres on it, as its home');
         } else if (hit.kind === 'project') {
           act(buttons, 'Show', () => void this.moveToProject(hit.key)).setAttr('aria-label', 'Centre the map on the project');
           if (hit.key !== host.ownProject?.path) {
