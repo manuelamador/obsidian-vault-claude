@@ -581,8 +581,11 @@ export class ConnectionsMap extends Modal {
     // Centred on another chat: its name opens it in the panel, where it becomes the chat on screen, the map its own.
     if (!this.project && host.centre !== host.baseline.id) {
       const centre = host.centre;
-      const name = bar.createEl('a', { cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 50), attr: { 'aria-label': 'Open this chat in the panel: links and mentions then act for it' } });
+      const tip = 'Open this chat in the panel: it becomes the map’s home (◎), which links and mentions act for';
+      const name = bar.createEl('a', { cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 50), attr: { 'aria-label': tip } });
       name.addEventListener('click', () => host.openChat(centre));
+      const button = bar.createEl('button', { cls: 'vc-map-action mod-cta', text: 'Open in panel', attr: { 'aria-label': tip } });
+      button.addEventListener('click', () => host.openChat(centre));
     } else bar.createSpan({ cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 50) });
     extra?.(bar);
     // On a project's map its buttons name the chat they act for.
