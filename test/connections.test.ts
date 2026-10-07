@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MAP_NOTES, chatAngles, chatMap, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
+import { HUB_CHATS, HUB_WEIGHT, MAP_NOTES, chatAngles, chatMap, hubNotes, withoutHubs, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
 import { chatLink, linkedChatIds, removeChatLinks } from '../src/memos';
 
 const weighted = new Map([
@@ -89,4 +89,15 @@ test('ringLayout keeps an enclosing folder together and spans its subfolders', (
   const held = arcs.filter((arc) => arc.outer === 'P');
   assert.ok(spans[0].start < Math.min(...held.map((arc) => arc.start)));
   assert.ok(spans[0].end > Math.max(...held.map((arc) => arc.end)));
+});
+
+test('hubs: notes linked to many chats join no chats on the map, and weigh little toward a project', () => {
+  const many = new Map(Array.from({ length: HUB_CHATS }, (_, i) => [`c${i}`, new Map([['Hub.md', 3], [`own${i}.md`, 3]])] as [string, Map<string, number>]));
+  many.set('c0', new Map([['Hub.md', 3], ['Shared.md', 2]]));
+  many.set('c1', new Map([['Hub.md', 3], ['Shared.md', 2]]));
+  const hubs = hubNotes(many);
+  assert.deepEqual([...hubs], ['Hub.md']);
+  const map = chatMap('c0', many, [], () => 0, false, hubs);
+  assert.deepEqual(map.chats.map((chat) => [chat.id, chat.shared]), [['c1', ['Shared.md']]]);
+  assert.deepEqual([...(withoutHubs(new Map([['Hub.md', 3], ['A.md', 2]]), hubs) ?? [])], [['Hub.md', 3 * HUB_WEIGHT], ['A.md', 2]]);
 });

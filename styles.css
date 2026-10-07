@@ -3124,3 +3124,13 @@ body:has(.vc-map-modal) .popover.hover-popover {
 .modal.vc-map-modal.is-full .vc-map {
   max-height: calc(100vh - 260px);
 }
+
+/* A project's map: its lines faint until a chat or note is pointed at, then that one's in full. */
+.vc-map.is-quiet:not(.is-pointing) .vc-map-line {
+  opacity: 0.18;
+}
+
+/* A hub note (linked to many chats): drawn dashed, joining no chats. */
+.vc-map-node.is-hub .vc-map-page {
+  stroke-dasharray: 2 2;
+}

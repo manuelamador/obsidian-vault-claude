@@ -23,7 +23,7 @@ import { CONTEXT_SYSTEM, PROJECT_TYPE, contextHash, contextPrompt, homeOf, chatD
 import { ChooseFolderModal, ContextModal, CreateProjectModal, ManageProjectsModal, ProjectPicker, type FolderSource, type ProjectRef } from './projectModals';
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
-import { chatMap, projectMap } from './connections';
+import { chatMap, hubNotes, projectMap, withoutHubs } from './connections';
 import { ChatMapModal, ProjectMapModal, type ChatMapHost, type ProjectMapHost, type SearchHit } from './connectionsModal';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
@@ -180,6 +180,7 @@ export default class VaultClaudePlugin extends Plugin {
   private homeCache = new Map<string, HomeReason | null>();
   private notesCache: Map<string, Set<string>> | null = null;
   private weightsCache: Map<string, Map<string, number>> | null = null;
+  private hubsCache: Set<string> | null = null;
   /** Projects' fingerprints, by path, once read (see projectHashNow). */
   private readonly projectHashes = new Map<string, string | null>();
   /** Models reported by Claude Code, cached so a new chat can list them before its session starts. */
@@ -1450,7 +1451,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (!this.homeCache.has(id)) {
       const projects = this.projectNotes().map((file) => ({ key: file.path, folder: this.projectFolder(file), added: this.projectChatIds(file, 'added') }));
       const state = this.projectState(id);
-      this.homeCache.set(id, homeOf(id, { notes: this.weightedNotes().get(id), start: state.start, declined: state.declined }, projects));
+      this.homeCache.set(id, homeOf(id, { notes: withoutHubs(this.weightedNotes().get(id), this.hubNotes()), start: state.start, declined: state.declined }, projects));
     }
     const reason = this.homeCache.get(id);
     const file = reason ? this.app.vault.getAbstractFileByPath(reason.key) : null;
@@ -1667,12 +1668,13 @@ export default class VaultClaudePlugin extends Plugin {
     const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
     const listed = new Set((this.lastListing ?? []).filter((item) => !item.scratch).map((item) => item.id));
     const weighted = new Map([...this.weightedNotes()].filter(([other]) => other === id || listed.has(other)));
-    const map = chatMap(id, weighted, this.linkedChats(id).filter((other) => listed.has(other)), recent, all);
+    const map = chatMap(id, weighted, this.linkedChats(id).filter((other) => listed.has(other)), recent, all, this.hubNotes());
     const home = this.homeProject(id);
     return {
       ...this.mapActions(id, view),
       title: this.chatTitleOf(id),
       ...map,
+      hubs: this.hubNotes(),
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
       openProjectMap: (path) => {
@@ -1772,6 +1774,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.homeCache.clear();
     this.notesCache = null;
     this.weightsCache = null;
+    this.hubsCache = null;
   }
 
   /** The listed chats whose home project is `file`, newest first. */
@@ -1977,6 +1980,12 @@ export default class VaultClaudePlugin extends Plugin {
   weightedNotes(): Map<string, Map<string, number>> {
     this.weightsCache ??= weightedNotes(this.noteChats, this.noteRefs, this.noteMentions);
     return this.weightsCache;
+  }
+
+  /** The notes linked to many chats (see hubNotes). Kept until the indexes change. */
+  hubNotes(): Set<string> {
+    this.hubsCache ??= hubNotes(this.weightedNotes());
+    return this.hubsCache;
   }
 
   /** Folders not offered for a project: the plugin's own (saved chats, memos, projects) and those hidden. */
@@ -2207,6 +2216,8 @@ export default class VaultClaudePlugin extends Plugin {
       front.context_updated = today();
       front.updated = today();
     });
+    // Read again by Obsidian before anything shows it: its properties are missing while it is.
+    await this.indexed(file);
     this.projectsChanged();
   }
 

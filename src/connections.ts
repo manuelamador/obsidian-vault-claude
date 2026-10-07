@@ -38,6 +38,7 @@ export function chatMap(
   linked: string[],
   recent: (id: string) => number,
   all = false,
+  hubs: ReadonlySet<string> = new Set(),
 ): { notes: MapNote[]; chats: MapChat[]; moreNotes: number; moreChats: number; folders: { folder: string; count: number }[] } {
   const own = [...(weighted.get(id) ?? new Map<string, number>())].filter(([path]) => onMap(path)).map(([path, weight]) => ({ path, weight }));
   own.sort((a, b) => b.weight - a.weight || a.path.localeCompare(b.path));
@@ -47,7 +48,8 @@ export function chatMap(
   const links = new Set(linked);
   for (const [other, paths] of weighted) {
     if (other === id) continue;
-    const shared = [...paths.keys()].filter((path) => shown.has(path));
+    // Hubs (see hubNotes) join no chats: one touched by many says little about any two of them.
+    const shared = [...paths.keys()].filter((path) => shown.has(path) && !hubs.has(path));
     if (shared.length > 0 || links.has(other)) others.push({ id: other, shared, linked: links.has(other) });
   }
   for (const other of links) if (!weighted.has(other) && other !== id) others.push({ id: other, shared: [], linked: true });
@@ -57,6 +59,23 @@ export function chatMap(
   const folders = [...counts].map(([folder, count]) => ({ folder, count })).sort((a, b) => b.count - a.count || a.folder.localeCompare(b.folder));
   const chats = all ? others : others.slice(0, MAP_CHATS);
   return { notes, chats, moreNotes: own.length - notes.length, moreChats: others.length - chats.length, folders };
+}
+
+/** How many chats a note must be linked to to be a hub (a project's hub note, an index, a to-do list). */
+export const HUB_CHATS = 8;
+/** How much a hub weighs toward a chat's project, as a share of its link's weight (see homeOf). */
+export const HUB_WEIGHT = 0.25;
+
+/** The notes linked to at least HUB_CHATS of the chats given: shown on the maps, but joining no chats, and weighing little toward a project. */
+export function hubNotes(weighted: Map<string, Map<string, number>>): Set<string> {
+  const counts = new Map<string, number>();
+  for (const paths of weighted.values()) for (const path of paths.keys()) counts.set(path, (counts.get(path) ?? 0) + 1);
+  return new Set([...counts].filter(([, count]) => count >= HUB_CHATS).map(([path]) => path));
+}
+
+/** A chat's notes with each hub's weight cut to HUB_WEIGHT of it (see hubNotes): what places it in a project. */
+export function withoutHubs(notes: ReadonlyMap<string, number> | undefined, hubs: ReadonlySet<string>): Map<string, number> | undefined {
+  return notes && new Map([...notes].map(([path, weight]) => [path, hubs.has(path) ? weight * HUB_WEIGHT : weight]));
 }
 
 /** A point on a map, in its own units (the centre is 0, 0). */

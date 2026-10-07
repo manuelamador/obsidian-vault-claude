@@ -52,6 +52,8 @@ export interface SearchHit {
 
 export interface ChatMapHost extends MapActions {
   title: string;
+  /** Notes linked to many chats (see hubNotes): drawn, joining no chats. */
+  hubs: ReadonlySet<string>;
   notes: MapNote[];
   chats: MapChat[];
   moreNotes: number;
@@ -310,8 +312,9 @@ class MapDrawing {
 }
 
 /** Makes a note open in a new tab on a click and show Obsidian's preview on ⌘-hover, its path in its tooltip. */
-function noteNode(group: SVGGElement, path: string, actions: MapActions, parent: unknown): void {
-  tooltip(group, path);
+function noteNode(group: SVGGElement, path: string, actions: MapActions, parent: unknown, hub = false): void {
+  tooltip(group, hub ? `${path}\nA hub: linked to many chats, so it joins none of them on the map, and counts little toward a chat's project` : path);
+  group.toggleClass('is-hub', hub);
   group.addEventListener('click', () => actions.openNote(path, true));
   group.addEventListener('mouseover', (evt) => actions.previewNote(path, evt, group, parent));
 }
@@ -487,7 +490,7 @@ export class ChatMapModal extends Modal {
       const group = drawing.note(note.path, at, LINK_KINDS[note.weight] ?? 'mentioned');
       const label = noteLabels.get(note.path);
       if (label) drawing.label(group, label.at, label.side, label.text, 2, noteName(note.path));
-      noteNode(group, note.path, host, this);
+      noteNode(group, note.path, host, this, host.hubs.has(note.path));
     }
     const chatLabels = new Map(placeLabels(host.chats.map((chat) => ({ key: chat.id, angle: placesOfChats.get(chat.id) ?? 0, text: host.titleOf(chat.id) })), ring + CHAT_GAP, 26).map((label) => [label.key, label]));
     for (const chat of host.chats) {
@@ -550,9 +553,7 @@ export class ChatMapModal extends Modal {
       act('Take chat out', () => void host.setHome(null).then(() => this.redraw()));
       return;
     }
-    const none = bar.createSpan({ cls: 'vc-map-bar-name', text: 'No project' });
-    // Taken out of its project: its notes no longer put it back in one by themselves.
-    if (host.declined) none.createSpan({ cls: 'vc-project-size', text: ' · you took it out of one, so its notes no longer place it' });
+    bar.createSpan({ cls: 'vc-map-bar-name', text: 'No project' });
     const byNotes = this.projectOfMostNotes();
     if (byNotes) act(`Put chat in “${byNotes.name}”`, () => void host.setHome(byNotes.path).then(() => this.redraw()), true);
     if (host.linkedProject && host.linkedProject.path !== byNotes?.path) {
@@ -715,6 +716,8 @@ export class ProjectMapModal extends Modal {
     const ring = noteRing(host.notes.length);
     const scale = ring / BASE_RING;
     const drawing = new MapDrawing(contentEl, 820 * scale, 560 * scale);
+    // Many chats and notes make many lines: faint until a chat or note is pointed at.
+    drawing.root.addClass('is-quiet');
     // Grouped by the folder within the project; notes outside it by their own folder.
     const within = (path: string) => {
       const folder = folderOf(path);
