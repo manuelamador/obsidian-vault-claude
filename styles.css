@@ -2761,6 +2761,17 @@ body:has(.vc-pick-up) .popover.hover-popover {
   font-size: 11px;
 }
 
+/* A pointed-at node's full label, drawn above the map with a halo so it reads over lines and arcs. */
+.vc-map-label-full {
+  fill: var(--text-normal);
+  font-size: 11px;
+  paint-order: stroke;
+  stroke: var(--background-primary);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
 .vc-map-page {
   fill: var(--background-primary);
   stroke: var(--text-muted);

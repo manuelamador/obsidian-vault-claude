@@ -103,6 +103,10 @@ class MapDrawing {
   readonly arcs: SVGGElement;
   private readonly lines: SVGGElement;
   private readonly nodes: SVGGElement;
+  /** Above everything: a pointed-at node's full label, when its own is shortened. */
+  private readonly top: SVGGElement;
+  /** Each node's shortened label and the full text it stands for. */
+  private readonly fullLabels = new Map<SVGGElement, { label: SVGTextElement; full: string }>();
   private readonly ties: { line: SVGLineElement; ends: [string, string] }[] = [];
   private readonly groups = new Map<string, SVGGElement>();
   /** The kinds drawn, for the legend to list only those. */
@@ -113,6 +117,7 @@ class MapDrawing {
     this.arcs = svg(this.root, 'g');
     this.lines = svg(this.root, 'g');
     this.nodes = svg(this.root, 'g');
+    this.top = svg(this.root, 'g', { class: 'vc-map-top' });
   }
 
   line(from: Point, to: Point, ends: [string, string], kind: string): void {
@@ -123,8 +128,14 @@ class MapDrawing {
   /** A node's group, lit with its lines when pointed at. */
   node(key: string, cls: string): SVGGElement {
     const group = svg(this.nodes, 'g', { class: `vc-map-node ${cls}`, tabindex: 0 });
-    group.addEventListener('mouseenter', () => this.light(key));
-    group.addEventListener('mouseleave', () => this.light(null));
+    group.addEventListener('mouseenter', () => {
+      this.light(key);
+      this.showFull(group);
+    });
+    group.addEventListener('mouseleave', () => {
+      this.light(null);
+      this.showFull(null);
+    });
     this.groups.set(key, group);
     return group;
   }
@@ -147,10 +158,23 @@ class MapDrawing {
     return group;
   }
 
-  /** A label beside a node, on its outer side. */
-  label(group: Element, at: Point, side: 'right' | 'left', text: string, gap = 10): void {
+  /** A label beside a node, on its outer side; `full`, the text it shortens, shown whole while the node is pointed at. */
+  label(group: SVGGElement, at: Point, side: 'right' | 'left', text: string, gap = 10, full = text): void {
     const label = svg(group, 'text', { x: at.x + (side === 'right' ? gap : -gap), y: at.y + 4, 'text-anchor': side === 'right' ? 'start' : 'end' });
     label.textContent = text;
+    if (full !== text) this.fullLabels.set(group, { label, full });
+  }
+
+  /** Shows `group`'s full label above the map in place of its shortened one; null puts every label back. */
+  private showFull(group: SVGGElement | null): void {
+    this.top.empty();
+    for (const { label } of this.fullLabels.values()) label.style.removeProperty('visibility');
+    const entry = group && this.fullLabels.get(group);
+    if (!entry) return;
+    const whole = this.top.appendChild(entry.label.cloneNode() as SVGTextElement);
+    whole.textContent = entry.full;
+    whole.setAttr('class', 'vc-map-label-full');
+    entry.label.style.visibility = 'hidden';
   }
 
   private light(key: string | null): void {
@@ -314,7 +338,7 @@ export class ChatMapModal extends Modal {
       const at = noteAt(note.path);
       const group = drawing.note(note.path, at, LINK_KINDS[note.weight] ?? 'mentioned');
       const label = noteLabels.get(note.path);
-      if (label) drawing.label(group, label.at, label.side, label.text, 2);
+      if (label) drawing.label(group, label.at, label.side, label.text, 2, noteName(note.path));
       noteNode(group, note.path, host, this);
     }
     const chatLabels = new Map(placeLabels(host.chats.map((chat) => ({ key: chat.id, angle: placesOfChats.get(chat.id) ?? 0, text: host.titleOf(chat.id) })), CHAT_RING, 26).map((label) => [label.key, label]));
@@ -328,7 +352,7 @@ export class ChatMapModal extends Modal {
         drawing.drawn.add('badge');
       }
       const label = chatLabels.get(chat.id);
-      if (label) drawing.label(group, label.at, label.side, label.text, 14);
+      if (label) drawing.label(group, label.at, label.side, label.text, 14, host.titleOf(chat.id));
       const shared = `${chat.shared.length} shared note${chat.shared.length === 1 ? '' : 's'}`;
       tooltip(group, `${host.titleOf(chat.id)}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : ''}\nClick to open, mention or ${host.linked(chat.id) ? 'unlink' : 'link'} it`);
       chatNode(group, chat.id, host, () => void this.redraw());
@@ -530,7 +554,7 @@ export class ProjectMapModal extends Modal {
     for (const path of host.notes) {
       const group = drawing.note(path, noteAt(path), 'project');
       const label = labels.get(path);
-      if (label) drawing.label(group, label.at, label.side, label.text, 2);
+      if (label) drawing.label(group, label.at, label.side, label.text, 2, noteName(path));
       noteNode(group, path, host, this);
     }
     for (const [id, at] of chatAt) {
