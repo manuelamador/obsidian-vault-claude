@@ -92,7 +92,7 @@ export class LinksList {
       const box = contentEl.createDiv({ cls: 'vc-project-section' });
       this.head(box, row);
     }
-    if (rows.length === 0) contentEl.createDiv({ cls: 'vc-project-empty', text: 'No links yet. Type @ in the input to link a chat, or link one from the connections map or the history.' });
+    if (rows.length === 0) contentEl.createDiv({ cls: 'vc-project-empty', text: 'No links yet. Click a chat on the map above and choose Link, or use Link a chat… below.' });
     const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
     foot.createEl('button', { text: 'Link a chat…' }).addEventListener('click', () => {
       const taken = new Set(to.map((row) => row.id));
