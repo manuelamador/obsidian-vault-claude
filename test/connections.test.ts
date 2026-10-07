@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MAP_NOTES, chatAngles, chatMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
+import { MAP_NOTES, chatAngles, chatMap, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
 import { chatLink, linkedChatIds, removeChatLinks } from '../src/memos';
 
 const weighted = new Map([
@@ -63,4 +63,18 @@ test("a chat's links are taken out of a message, the others kept", () => {
   const a = chatLink({ vault: 'V', chat: 'a' });
   const b = chatLink({ vault: 'V', chat: 'b' });
   assert.equal(removeChatLinks(`see [A](${a}) and [B](${b}) now`, 'a'), `see and [B](${b}) now`);
+});
+
+test('CLAUDE.md files stay off both maps and tie no chats together', () => {
+  assert.equal(onMap('CLAUDE.md'), false);
+  assert.equal(onMap('Apps/CLAUDE.local.md'), false);
+  assert.equal(onMap('Notes/About CLAUDE.md files.md'), true);
+  const both = new Map([
+    ['me', new Map([['CLAUDE.md', 3], ['A/one.md', 2]])],
+    ['w', new Map([['CLAUDE.md', 3]])],
+  ]);
+  const map = chatMap('me', both, [], () => 0);
+  assert.deepEqual(map.notes.map((note) => note.path), ['A/one.md']);
+  assert.deepEqual(map.chats, []);
+  assert.deepEqual(projectMap(['me', 'w'], both).notes, ['A/one.md']);
 });

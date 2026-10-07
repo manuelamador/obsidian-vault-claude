@@ -168,13 +168,15 @@ class MapDrawing {
   /** Shows `group`'s full label above the map in place of its shortened one; null puts every label back. */
   private showFull(group: SVGGElement | null): void {
     this.top.empty();
-    for (const { label } of this.fullLabels.values()) label.style.removeProperty('visibility');
+    // Made see-through rather than hidden: a hidden label stops catching the pointer, which leaves
+    // the node, which puts the label back, over and over.
+    for (const { label } of this.fullLabels.values()) label.style.removeProperty('opacity');
     const entry = group && this.fullLabels.get(group);
     if (!entry) return;
     const whole = this.top.appendChild(entry.label.cloneNode() as SVGTextElement);
     whole.textContent = entry.full;
     whole.setAttr('class', 'vc-map-label-full');
-    entry.label.style.visibility = 'hidden';
+    entry.label.style.opacity = '0';
   }
 
   private light(key: string | null): void {

@@ -8,6 +8,11 @@ import { folderOf } from './chatFolders';
 export const MAP_NOTES = 16;
 export const MAP_CHATS = 8;
 
+/** Whether a note goes on a map: not Claude Code's instruction files (CLAUDE.md, CLAUDE.local.md), which most chats touch and so tie together chats that share nothing else. */
+export function onMap(path: string): boolean {
+  return !/(^|\/)CLAUDE(\.local)?\.md$/i.test(path);
+}
+
 /** A note on a map: its path and the weight of the chat's link to it (see LINK_WEIGHTS). */
 export interface MapNote {
   path: string;
@@ -32,7 +37,7 @@ export function chatMap(
   linked: string[],
   recent: (id: string) => number,
 ): { notes: MapNote[]; chats: MapChat[]; moreNotes: number; moreChats: number; folders: { folder: string; count: number }[] } {
-  const own = [...(weighted.get(id) ?? new Map<string, number>())].map(([path, weight]) => ({ path, weight }));
+  const own = [...(weighted.get(id) ?? new Map<string, number>())].filter(([path]) => onMap(path)).map(([path, weight]) => ({ path, weight }));
   own.sort((a, b) => b.weight - a.weight || a.path.localeCompare(b.path));
   const notes = own.slice(0, MAP_NOTES);
   const shown = new Set(notes.map((note) => note.path));
@@ -155,7 +160,7 @@ export function placeLabels(labels: { key: string; angle: number; text: string }
 export function projectMap(chats: string[], weighted: Map<string, Map<string, number>>): { chats: string[]; notes: string[]; links: [string, string, number][] } {
   const shown = chats.slice(0, MAP_CHATS);
   const counts = new Map<string, number>();
-  for (const id of shown) for (const path of weighted.get(id)?.keys() ?? []) counts.set(path, (counts.get(path) ?? 0) + 1);
+  for (const id of shown) for (const path of weighted.get(id)?.keys() ?? []) if (onMap(path)) counts.set(path, (counts.get(path) ?? 0) + 1);
   const notes = [...counts]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, MAP_NOTES)
