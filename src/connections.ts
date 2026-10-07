@@ -30,16 +30,18 @@ export interface MapChat {
  * What a chat's map shows: its notes, the strongest links first (then by path), at most MAP_NOTES;
  * the chats that share the most of them, or that it linked to, at most MAP_CHATS, those linked first
  * (`recent` orders a tie, the most recent first); and the folders of all its notes, the busiest first.
+ * With `all`, every note and chat, uncapped.
  */
 export function chatMap(
   id: string,
   weighted: Map<string, Map<string, number>>,
   linked: string[],
   recent: (id: string) => number,
+  all = false,
 ): { notes: MapNote[]; chats: MapChat[]; moreNotes: number; moreChats: number; folders: { folder: string; count: number }[] } {
   const own = [...(weighted.get(id) ?? new Map<string, number>())].filter(([path]) => onMap(path)).map(([path, weight]) => ({ path, weight }));
   own.sort((a, b) => b.weight - a.weight || a.path.localeCompare(b.path));
-  const notes = own.slice(0, MAP_NOTES);
+  const notes = all ? own : own.slice(0, MAP_NOTES);
   const shown = new Set(notes.map((note) => note.path));
   const others: MapChat[] = [];
   const links = new Set(linked);
@@ -53,7 +55,8 @@ export function chatMap(
   const counts = new Map<string, number>();
   for (const note of own) counts.set(folderOf(note.path), (counts.get(folderOf(note.path)) ?? 0) + 1);
   const folders = [...counts].map(([folder, count]) => ({ folder, count })).sort((a, b) => b.count - a.count || a.folder.localeCompare(b.folder));
-  return { notes, chats: others.slice(0, MAP_CHATS), moreNotes: own.length - notes.length, moreChats: Math.max(0, others.length - MAP_CHATS), folders };
+  const chats = all ? others : others.slice(0, MAP_CHATS);
+  return { notes, chats, moreNotes: own.length - notes.length, moreChats: others.length - chats.length, folders };
 }
 
 /** A point on a map, in its own units (the centre is 0, 0). */
@@ -171,20 +174,31 @@ export function placeLabels(labels: { key: string; angle: number; text: string }
 
 /**
  * What a project's map shows: its chats, newest first, at most MAP_CHATS; and the notes they worked
- * on that the most of them share, at most MAP_NOTES; with which chat worked on which note.
+ * on that the most of them share, at most MAP_NOTES; with which chat worked on which note. With
+ * `all`, every chat and note, uncapped.
  */
-export function projectMap(chats: string[], weighted: Map<string, Map<string, number>>): { chats: string[]; notes: string[]; links: [string, string, number][] } {
-  const shown = chats.slice(0, MAP_CHATS);
+export function projectMap(
+  chats: string[],
+  weighted: Map<string, Map<string, number>>,
+  all = false,
+): { chats: string[]; notes: string[]; links: [string, string, number][]; moreNotes: number } {
+  const shown = all ? chats : chats.slice(0, MAP_CHATS);
   const counts = new Map<string, number>();
   for (const id of shown) for (const path of weighted.get(id)?.keys() ?? []) if (onMap(path)) counts.set(path, (counts.get(path) ?? 0) + 1);
-  const notes = [...counts]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, MAP_NOTES)
-    .map(([path]) => path);
+  const ranked = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([path]) => path);
+  const notes = all ? ranked : ranked.slice(0, MAP_NOTES);
   const kept = new Set(notes);
   const links: [string, string, number][] = [];
   for (const id of shown) for (const [path, weight] of weighted.get(id) ?? []) if (kept.has(path)) links.push([id, path, weight]);
-  return { chats: shown, notes, links };
+  return { chats: shown, notes, links, moreNotes: ranked.length - notes.length };
+}
+
+/**
+ * The radius of the notes' ring for `count` notes: 150 for up to 16, wider beyond so that their
+ * labels, in columns either side, stay about 14 units apart.
+ */
+export function noteRing(count: number): number {
+  return Math.max(150, Math.ceil(count * 9.5));
 }
 
 /** `text` cut to `max` characters, with an ellipsis when cut. */

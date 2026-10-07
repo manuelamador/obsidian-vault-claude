@@ -20,7 +20,7 @@ import { ChooseFolderModal, CreateProjectModal, GuideModal, ManageProjectsModal,
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
 import { chatMap, projectMap } from './connections';
-import { ChatMapModal, ProjectMapModal, type ChatMapHost, type SearchHit } from './connectionsModal';
+import { ChatMapModal, ProjectMapModal, type ChatMapHost, type ProjectMapHost, type SearchHit } from './connectionsModal';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -1573,12 +1573,12 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** What chat `id`'s map shows, read now, and what it does. */
-  private async chatMapHost(view: ChatView, id: string): Promise<ChatMapHost> {
+  private async chatMapHost(view: ChatView, id: string, all = false): Promise<ChatMapHost> {
     await this.listChats().catch(() => []);
     const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
     const listed = new Set((this.lastListing ?? []).filter((item) => !item.scratch).map((item) => item.id));
     const weighted = new Map([...this.weightedNotes()].filter(([other]) => other === id || listed.has(other)));
-    const map = chatMap(id, weighted, this.linkedChats(id).filter((other) => listed.has(other)), recent);
+    const map = chatMap(id, weighted, this.linkedChats(id).filter((other) => listed.has(other)), recent, all);
     const home = this.homeProject(id);
     return {
       ...this.mapActions(id, view),
@@ -1604,7 +1604,8 @@ export default class VaultClaudePlugin extends Plugin {
         const file = this.projectForPath(`${folder}/note.md`);
         return file && { path: file.path, name: file.basename, folder: this.projectFolder(file) };
       },
-      reload: () => this.chatMapHost(view, id),
+      all,
+      reload: (more) => this.chatMapHost(view, id, more),
       linkedProject: home ? null : (() => {
         for (const other of this.linkedChats(id)) {
           const file = this.homeProject(other);
@@ -1644,10 +1645,23 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** A project's map (see ProjectMapModal). */
   async openProjectMap(file: TFile, view: ChatView | null = null): Promise<void> {
+    new ProjectMapModal(this.app, await this.projectMapHost(file, view)).open();
+  }
+
+  /** What project `file`'s map shows, read now; with `all`, every chat and note (see projectMap). */
+  private async projectMapHost(file: TFile, view: ChatView | null, all = false): Promise<ProjectMapHost> {
     await this.listChats().catch(() => []);
     const members = this.projectMembers(file).map((item) => item.id);
-    const map = projectMap(members, this.weightedNotes());
-    new ProjectMapModal(this.app, { ...this.mapActions(view?.currentChatId() ?? null, view), name: file.basename, folder: this.projectFolder(file), ...map, moreChats: Math.max(0, members.length - map.chats.length) }).open();
+    const map = projectMap(members, this.weightedNotes(), all);
+    return {
+      ...this.mapActions(view?.currentChatId() ?? null, view),
+      name: file.basename,
+      folder: this.projectFolder(file),
+      ...map,
+      moreChats: Math.max(0, members.length - map.chats.length),
+      all,
+      reload: (more) => this.projectMapHost(file, view, more),
+    };
   }
 
   /** Chat `id`'s home project, if it has one. */

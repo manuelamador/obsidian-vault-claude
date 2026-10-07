@@ -6,7 +6,7 @@
 // drawn again when what it shows changed; Esc, its close button or a click outside closes it.
 import { Menu, Modal, setIcon, type App } from 'obsidian';
 import { folderOf } from './chatFolders';
-import { chatAngles, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
+import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 
 const SVG = 'http://www.w3.org/2000/svg';
 /** What Link does, said where it is offered. */
@@ -15,10 +15,11 @@ const LINK_TIP = 'Link: both chats list each other. Nothing is sent unless you t
 const HOME_TIP = "This project's Instructions and Guide then go with this chat's next message. A chat is in one project at most.";
 /** How a note is linked, by weight (see LINK_WEIGHTS). */
 const LINK_KINDS: Record<number, string> = { 3: 'edited', 2: 'sent', 1: 'mentioned' };
-/** The rings: notes, their labels, the arcs behind them, and the other chats. */
-const NOTE_RING = 150;
+/** The rings: notes (see noteRing), their labels and the arcs behind them; the other chats CHAT_GAP beyond the notes. */
 const ARC_WIDTH = 26;
-const CHAT_RING = 245;
+const CHAT_GAP = 95;
+/** The map's size for the smallest notes' ring; it grows with the ring. */
+const BASE_RING = 150;
 /** How much wider a folder holding others is drawn than the arcs inside it, either side. */
 const SPAN_EXTRA = 6;
 
@@ -69,8 +70,10 @@ export interface ChatMapHost extends MapActions {
   declined: boolean;
   /** The project whose folder holds `folder` (the deepest), if any: what its notes count toward. */
   projectHolding(folder: string): { path: string; name: string; folder: string } | null;
-  /** The map's data again, after something it shows changed. */
-  reload(): Promise<ChatMapHost>;
+  /** The map's data again, after something it shows changed; with `all`, every note and chat (see chatMap). */
+  reload(all: boolean): Promise<ChatMapHost>;
+  /** Whether it shows every note and chat. */
+  all: boolean;
   /** For a chat without a project: the project of a chat it is linked with, and the folder its notes suggest. */
   linkedProject: { path: string; name: string } | null;
   folderSuggestion: { folder: string; count: number; total: number } | null;
@@ -101,6 +104,14 @@ function noteName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '');
 }
 
+/** A box in a map's units: its top-left corner, width and height. */
+interface ViewBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /** Draws a map in layers: arcs, lines, nodes; pointing at a node lights it and its lines and dims the rest. */
 class MapDrawing {
   readonly root: SVGSVGElement;
@@ -116,12 +127,94 @@ class MapDrawing {
   /** The kinds drawn, for the legend to list only those. */
   readonly drawn = new Set<string>();
 
+  /** The whole map, and the part of it in view (zoomed in, a smaller box within it). */
+  private readonly whole: ViewBox;
+  private view: ViewBox;
+
   constructor(parent: HTMLElement, width: number, height: number) {
-    this.root = svg(parent, 'svg', { viewBox: `${-width / 2} ${-height / 2} ${width} ${height}`, class: 'vc-map' });
+    const frame = parent.createDiv({ cls: 'vc-map-frame' });
+    this.whole = { x: -width / 2, y: -height / 2, w: width, h: height };
+    this.view = { ...this.whole };
+    this.root = svg(frame, 'svg', { viewBox: `${-width / 2} ${-height / 2} ${width} ${height}`, class: 'vc-map' });
     this.arcs = svg(this.root, 'g');
     this.lines = svg(this.root, 'g');
     this.nodes = svg(this.root, 'g');
     this.top = svg(this.root, 'g', { class: 'vc-map-top' });
+    this.zoomable(frame);
+  }
+
+  /** Scrolling (or pinching) zooms about the pointer, dragging pans, and buttons zoom in, out and back to the whole map. */
+  private zoomable(frame: HTMLElement): void {
+    const controls = frame.createDiv({ cls: 'vc-map-zoom' });
+    const button = (icon: string, label: string, run: () => void) => {
+      const el = controls.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': label } });
+      setIcon(el, icon);
+      el.addEventListener('click', run);
+    };
+    const centre = () => ({ x: this.view.x + this.view.w / 2, y: this.view.y + this.view.h / 2 });
+    button('zoom-in', 'Zoom in', () => this.zoom(1 / 1.4, centre()));
+    button('zoom-out', 'Zoom out', () => this.zoom(1.4, centre()));
+    button('maximize', 'Whole map', () => this.show({ ...this.whole }));
+    this.root.addEventListener(
+      'wheel',
+      (evt) => {
+        evt.preventDefault();
+        this.zoom(Math.exp(evt.deltaY * (evt.ctrlKey ? 0.01 : 0.002)), this.at(evt));
+      },
+      { passive: false },
+    );
+    // A drag pans; a press that does not move stays a click on what is under it.
+    let drag: { x: number; y: number; view: ViewBox; moved: boolean; pointer: number } | null = null;
+    this.root.addEventListener('pointerdown', (evt) => {
+      if (evt.button === 0) drag = { x: evt.clientX, y: evt.clientY, view: { ...this.view }, moved: false, pointer: evt.pointerId };
+    });
+    this.root.addEventListener('pointermove', (evt) => {
+      if (!drag) return;
+      const [dx, dy] = [evt.clientX - drag.x, evt.clientY - drag.y];
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      if (!drag.moved) {
+        drag.moved = true;
+        this.root.setPointerCapture(drag.pointer);
+        this.root.addClass('is-panning');
+      }
+      const units = this.view.w / this.root.getBoundingClientRect().width;
+      this.show({ ...drag.view, x: drag.view.x - dx * units, y: drag.view.y - dy * units });
+    });
+    const end = () => {
+      if (drag?.moved) {
+        // The click that ends a drag is not a click on a node or arc.
+        this.root.addEventListener('click', (evt) => evt.stopPropagation(), { capture: true, once: true });
+        window.setTimeout(() => this.root.removeClass('is-panning'));
+      }
+      drag = null;
+    };
+    this.root.addEventListener('pointerup', end);
+    this.root.addEventListener('pointercancel', end);
+  }
+
+  /** The point in the map's units under the pointer. */
+  private at(evt: MouseEvent): Point {
+    const matrix = this.root.getScreenCTM();
+    if (!matrix) return { x: this.view.x + this.view.w / 2, y: this.view.y + this.view.h / 2 };
+    const point = new DOMPoint(evt.clientX, evt.clientY).matrixTransform(matrix.inverse());
+    return { x: point.x, y: point.y };
+  }
+
+  /** Zooms by `factor` (below 1, in) keeping `about` where it is; from the whole map to an eighth of it. */
+  private zoom(factor: number, about: Point): void {
+    const w = Math.min(this.whole.w, Math.max(this.whole.w / 8, this.view.w * factor));
+    const k = w / this.view.w;
+    this.show({ x: about.x - (about.x - this.view.x) * k, y: about.y - (about.y - this.view.y) * k, w, h: this.view.h * k });
+  }
+
+  /** Shows `view`, kept within the whole map. */
+  private show(view: ViewBox): void {
+    const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
+    view.x = clamp(view.x, this.whole.x, this.whole.x + this.whole.w - view.w);
+    view.y = clamp(view.y, this.whole.y, this.whole.y + this.whole.h - view.h);
+    this.view = view;
+    this.root.setAttr('viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
+    this.root.toggleClass('is-zoomed', view.w < this.whole.w);
   }
 
   line(from: Point, to: Point, ends: [string, string], kind: string): void {
@@ -240,6 +333,7 @@ function projectBadge(group: SVGGElement, at: Point, r: number): void {
  */
 function drawArcs(
   drawing: MapDrawing,
+  ring: number,
   arcs: RingArc[],
   spans: RingArc[],
   label: (folder: string, outer: string | null) => { text: string; tip: string; cls: string },
@@ -249,8 +343,8 @@ function drawArcs(
     const { text, tip, cls } = label(arc.folder, arc.outer);
     drawing.drawn.add(`arc-${cls}`);
     const group = svg(drawing.arcs, 'g', { class: `vc-map-arc ${cls}` });
-    const inner = NOTE_RING - ARC_WIDTH / 2 - extra;
-    svg(group, 'path', { d: arcPath(arc.start, arc.end, inner, NOTE_RING + ARC_WIDTH / 2 + extra) });
+    const inner = ring - ARC_WIDTH / 2 - extra;
+    svg(group, 'path', { d: arcPath(arc.start, arc.end, inner, ring + ARC_WIDTH / 2 + extra) });
     const at = polar((arc.start + arc.end) / 2, inner - labelGap);
     const name = svg(group, 'text', { x: at.x, y: at.y + 4, 'text-anchor': Math.abs(at.x) < 20 ? 'middle' : at.x > 0 ? 'end' : 'start' });
     name.textContent = text;
@@ -262,6 +356,15 @@ function drawArcs(
   };
   for (const span of spans) band(span, SPAN_EXTRA, 26);
   for (const arc of arcs) if (arc.folder !== arc.outer) band(arc, 0, arc.outer === null ? 12 : 12 - SPAN_EXTRA + 2);
+}
+
+/** The line under a map: `text`, and Show all when some are not shown, or Show fewer when all are. */
+function showAll(el: HTMLElement, text: string, all: boolean, set: (all: boolean) => void): void {
+  if (!text && !all) return;
+  const line = el.createDiv({ cls: 'vc-project-empty', text });
+  if (!all && !text.includes('Not shown')) return;
+  const link = line.createEl('a', { cls: 'vc-map-show-all', text: all ? 'Show fewer' : 'Show all' });
+  link.addEventListener('click', () => set(!all));
 }
 
 /** The legend: only the kinds drawn. */
@@ -305,8 +408,8 @@ export class ChatMapModal extends Modal {
   }
 
   /** Reads the map's data again and draws it in place: after a change to its project, links or connections. */
-  private async redraw(): Promise<void> {
-    this.host = await this.host.reload();
+  private async redraw(all = this.host.all): Promise<void> {
+    this.host = await this.host.reload(all);
     this.contentEl.empty();
     this.draw();
   }
@@ -321,16 +424,19 @@ export class ChatMapModal extends Modal {
     }
     this.drawProjectBar();
     this.drawSearch();
-    const drawing = new MapDrawing(contentEl, 820, 620);
+    const ring = noteRing(host.notes.length);
+    const scale = ring / BASE_RING;
+    const drawing = new MapDrawing(contentEl, 820 * scale, 620 * scale);
     // A project's folder holds its subfolders' arcs.
     const { angles, arcs, spans } = ringLayout(host.notes.map((note) => note.path), folderOf, 0.8, (path) => host.projectHolding(folderOf(path))?.folder ?? null);
     const placesOfChats = chatAngles(host.chats, angles);
     const centre = { x: 0, y: 0 };
-    const noteAt = (path: string) => polar(angles.get(path) ?? 0, NOTE_RING);
-    const chatAt = (id: string) => polar(placesOfChats.get(id) ?? 0, CHAT_RING);
+    const noteAt = (path: string) => polar(angles.get(path) ?? 0, ring);
+    const chatAt = (id: string) => polar(placesOfChats.get(id) ?? 0, ring + CHAT_GAP);
     const home = host.project?.folder ?? null;
     drawArcs(
       drawing,
+      ring,
       arcs,
       spans,
       (folder) => {
@@ -351,7 +457,7 @@ export class ChatMapModal extends Modal {
       for (const path of chat.shared) if (angles.has(path)) drawing.line(chatAt(chat.id), noteAt(path), [chat.id, path], 'shared');
       if (chat.linked) drawing.line(centre, chatAt(chat.id), ['chat', chat.id], 'linked');
     }
-    const noteLabels = new Map(placeLabels(host.notes.map((note) => ({ key: note.path, angle: angles.get(note.path) ?? 0, text: noteName(note.path) })), NOTE_RING + ARC_WIDTH / 2 + 2, 24).map((label) => [label.key, label]));
+    const noteLabels = new Map(placeLabels(host.notes.map((note) => ({ key: note.path, angle: angles.get(note.path) ?? 0, text: noteName(note.path) })), ring + ARC_WIDTH / 2 + 2, 24).map((label) => [label.key, label]));
     for (const note of host.notes) {
       const at = noteAt(note.path);
       const group = drawing.note(note.path, at, LINK_KINDS[note.weight] ?? 'mentioned');
@@ -359,7 +465,7 @@ export class ChatMapModal extends Modal {
       if (label) drawing.label(group, label.at, label.side, label.text, 2, noteName(note.path));
       noteNode(group, note.path, host, this);
     }
-    const chatLabels = new Map(placeLabels(host.chats.map((chat) => ({ key: chat.id, angle: placesOfChats.get(chat.id) ?? 0, text: host.titleOf(chat.id) })), CHAT_RING, 26).map((label) => [label.key, label]));
+    const chatLabels = new Map(placeLabels(host.chats.map((chat) => ({ key: chat.id, angle: placesOfChats.get(chat.id) ?? 0, text: host.titleOf(chat.id) })), ring + CHAT_GAP, 26).map((label) => [label.key, label]));
     for (const chat of host.chats) {
       const at = chatAt(chat.id);
       const project = host.projectOfChat(chat.id);
@@ -385,7 +491,7 @@ export class ChatMapModal extends Modal {
     tooltip(centreNode, host.project ? `${host.title} · in “${host.project.name}”` : host.title);
     legend(contentEl, drawing.drawn, LEGEND);
     const more = [host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : '', host.moreChats > 0 ? `${host.moreChats} more chat${host.moreChats === 1 ? '' : 's'}` : ''].filter(Boolean);
-    if (more.length > 0) contentEl.createDiv({ cls: 'vc-project-empty', text: `Not shown: ${more.join(' and ')}.` });
+    showAll(contentEl, more.length > 0 ? `Not shown: ${more.join(' and ')}.` : '', host.all, (all) => void this.redraw(all));
   }
 
   /**
@@ -538,23 +644,41 @@ export interface ProjectMapHost extends MapActions {
   links: [string, string, number][];
   /** Chats in the project not shown. */
   moreChats: number;
+  /** Notes not shown. */
+  moreNotes: number;
+  /** Whether it shows every chat and note. */
+  all: boolean;
+  /** The map's data again; with `all`, every chat and note (see projectMap). */
+  reload(all: boolean): Promise<ProjectMapHost>;
 }
 
 /** A project's map: its chats in the middle, the notes they worked on round them, grouped by folder within the project, a line where a chat worked on a note. */
 export class ProjectMapModal extends Modal {
-  constructor(app: App, private readonly host: ProjectMapHost) {
+  constructor(app: App, private host: ProjectMapHost) {
     super(app);
   }
 
   onOpen(): void {
-    const { host, contentEl } = this;
     this.modalEl.addClass('vc-map-modal');
-    this.setTitle(`Project map: ${host.name}`);
+    this.setTitle(`Project map: ${this.host.name}`);
+    this.draw();
+  }
+
+  private async redraw(all: boolean): Promise<void> {
+    this.host = await this.host.reload(all);
+    this.contentEl.empty();
+    this.draw();
+  }
+
+  private draw(): void {
+    const { host, contentEl } = this;
     if (host.chats.length === 0) {
       contentEl.createDiv({ cls: 'vc-project-empty', text: 'No chats have worked on notes in this project yet.' });
       return;
     }
-    const drawing = new MapDrawing(contentEl, 820, 560);
+    const ring = noteRing(host.notes.length);
+    const scale = ring / BASE_RING;
+    const drawing = new MapDrawing(contentEl, 820 * scale, 560 * scale);
     // Grouped by the folder within the project; notes outside it by their own folder.
     const within = (path: string) => {
       const folder = folderOf(path);
@@ -562,19 +686,20 @@ export class ProjectMapModal extends Modal {
     };
     const inside = (path: string) => folderOf(path) === host.folder || folderOf(path).startsWith(`${host.folder}/`);
     const { angles, arcs, spans } = ringLayout(host.notes, within, 0.8, (path) => (inside(path) ? '' : null));
-    drawArcs(drawing, arcs, spans, (sub, outer) => ({
+    drawArcs(drawing, ring, arcs, spans, (sub, outer) => ({
       text: shortLabel(sub || host.name, 22),
       tip: outer === null ? sub : sub ? `${host.folder}/${sub}` : host.folder,
       cls: outer === '' || sub === '' ? 'is-home' : 'is-plain',
     }));
-    const inner = host.chats.length === 1 ? 0 : 60;
+    // The chats on a small ring in the middle, wider when there are many.
+    const inner = host.chats.length === 1 ? 0 : Math.max(60, host.chats.length * 6);
     const chatAt = new Map(host.chats.map((id, i) => [id, polar((2 * Math.PI * i) / host.chats.length, inner)]));
-    const noteAt = (path: string) => polar(angles.get(path) ?? 0, NOTE_RING);
+    const noteAt = (path: string) => polar(angles.get(path) ?? 0, ring);
     for (const [id, path, weight] of host.links) {
       const from = chatAt.get(id);
       if (from && angles.has(path)) drawing.line(from, noteAt(path), [id, path], LINK_KINDS[weight] ?? 'mentioned');
     }
-    const labels = new Map(placeLabels(host.notes.map((path) => ({ key: path, angle: angles.get(path) ?? 0, text: noteName(path) })), NOTE_RING + ARC_WIDTH / 2 + 2, 26).map((label) => [label.key, label]));
+    const labels = new Map(placeLabels(host.notes.map((path) => ({ key: path, angle: angles.get(path) ?? 0, text: noteName(path) })), ring + ARC_WIDTH / 2 + 2, 26).map((label) => [label.key, label]));
     for (const path of host.notes) {
       const group = drawing.note(path, noteAt(path), 'project');
       const label = labels.get(path);
@@ -588,7 +713,8 @@ export class ProjectMapModal extends Modal {
       chatNode(group, id, host, () => undefined);
     }
     legend(contentEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned'].includes(kind)));
-    contentEl.createDiv({ cls: 'vc-project-empty', text: `Point at a chat to see its notes.${host.moreChats > 0 ? ` Not shown: ${host.moreChats} older chat${host.moreChats === 1 ? '' : 's'}.` : ''}` });
+    const more = [host.moreChats > 0 ? `${host.moreChats} older chat${host.moreChats === 1 ? '' : 's'}` : '', host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : ''].filter(Boolean);
+    showAll(contentEl, `Point at a chat to see its notes.${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, host.all, (all) => void this.redraw(all));
   }
 
   onClose(): void {

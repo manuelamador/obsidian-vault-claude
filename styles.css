@@ -3070,3 +3070,29 @@ body:has(.vc-map-modal) .popover.hover-popover {
 }
 
 /* A folder inside a project: listed under it, its notes counted toward it. */
+
+/* Connections maps: zoom and pan. */
+.vc-map-frame {
+  position: relative;
+}
+
+.vc-map-zoom {
+  position: absolute;
+  top: var(--size-4-1);
+  right: var(--size-4-1);
+  display: flex;
+  gap: var(--size-2-1);
+}
+
+.vc-map.is-zoomed {
+  cursor: grab;
+}
+
+.vc-map.is-panning,
+.vc-map.is-panning * {
+  cursor: grabbing;
+}
+
+.vc-map-show-all {
+  margin-left: var(--size-4-2);
+}
