@@ -1576,7 +1576,6 @@ export default class VaultClaudePlugin extends Plugin {
         new Notice(on ? `Linked to “${this.chatTitleOf(id)}”: tick Include in the links under the chat's map to send what it found.` : `No longer linked to “${this.chatTitleOf(id)}”.`);
       },
       projectOfChat: (other: string) => this.homeProject(other)?.basename ?? null,
-      rebuild: (done: () => void) => this.confirmRebuildConnections(done),
     };
   }
 

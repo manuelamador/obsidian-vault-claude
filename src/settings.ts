@@ -380,6 +380,13 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('Rebuild connections')
+      .setDesc(
+        "Reads every chat's session file again for the notes it changed, was sent and linked to, which the connections map and projects follow. Links removed by hand stay removed; chats put in a project by hand stay in it. Also in the command palette.",
+      )
+      .addButton((button) => button.setButtonText('Rebuild…').onClick(() => this.plugin.confirmRebuildConnections()));
+
+    new Setting(containerEl)
       .setName('Folder for saved chats')
       .setDesc('Where "Save chat as note" writes its notes, relative to the vault root; created if missing. Leave empty for the vault root.')
       .addText((text) =>

@@ -37,8 +37,6 @@ interface MapActions {
   /** Adds a link to chat `id`, or an @-mention of note `path`, to the message being typed in the panel. */
   mentionChat(id: string): void;
   mentionNote(path: string): void;
-  /** Rebuilds every chat's links to notes from its session file, after asking; `done` runs after. */
-  rebuild(done: () => void): void;
 }
 
 /** What the map's search finds: chats, projects and notes whose names hold the words typed. */
@@ -394,16 +392,11 @@ function drawArcs(
   for (const arc of arcs) if (arc.folder !== arc.outer) band(arc, 0, arc.outer === null ? 12 : 12 - SPAN_EXTRA + 2);
 }
 
-/** The line under a map: `text`; Show all when some are not shown, or Show fewer when all are; and Rebuild connections. */
-function showAll(el: HTMLElement, text: string, all: boolean, set: (all: boolean) => void, rebuild: () => void): void {
+/** The line under a map: `text`; Show all when some are not shown, or Show fewer when all are. */
+function showAll(el: HTMLElement, text: string, all: boolean, set: (all: boolean) => void): void {
+  if (!text && !all) return;
   const line = el.createDiv({ cls: 'vc-project-empty', text });
-  const action = (label: string, run: () => void, tip?: string) => {
-    const link = line.createEl('a', { cls: 'vc-map-show-all', text: label });
-    if (tip) link.setAttr('aria-label', tip);
-    link.addEventListener('click', run);
-  };
-  if (all || text.includes('Not shown')) action(all ? 'Show fewer' : 'Show all', () => set(!all));
-  action('Rebuild connections…', rebuild, "Reads every chat's session file again for the notes it changed, was sent and linked to; projects stay as they are");
+  if (all || text.includes('Not shown')) line.createEl('a', { cls: 'vc-map-show-all', text: all ? 'Show fewer' : 'Show all' }).addEventListener('click', () => set(!all));
 }
 
 /** The legend: only the kinds drawn. */
@@ -617,7 +610,7 @@ export class ConnectionsMap extends Modal {
     tooltip(centreNode, host.project ? `${host.title} · in “${host.project.name}”` : host.title);
     legend(contentEl, drawing.drawn, LEGEND);
     const more = [host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : '', host.moreChats > 0 ? `${host.moreChats} more chat${host.moreChats === 1 ? '' : 's'}` : ''].filter(Boolean);
-    showAll(contentEl, more.length > 0 ? `Not shown: ${more.join(' and ')}.` : '', host.all, (all) => void this.redraw(all), () => host.rebuild(() => void this.redraw(host.all)));
+    showAll(contentEl, more.length > 0 ? `Not shown: ${more.join(' and ')}.` : '', host.all, (all) => void this.redraw(all));
     if (!away) this.stopLinks = host.drawLinks(contentEl.createDiv({ cls: 'vc-map-links' }));
   }
 
@@ -870,7 +863,7 @@ export class ConnectionsMap extends Modal {
     project.addEventListener('mouseover', (evt) => host.previewNote(host.path, evt, project, this));
     legend(contentEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned'].includes(kind)));
     const more = [host.moreChats > 0 ? `${host.moreChats} older chat${host.moreChats === 1 ? '' : 's'}` : '', host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : ''].filter(Boolean);
-    showAll(contentEl, `Point at a chat to see its notes.${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, host.all, (all) => void this.redraw(all), () => host.rebuild(() => void this.redraw(host.all)));
+    showAll(contentEl, `Point at a chat to see its notes.${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, host.all, (all) => void this.redraw(all));
   }
 
   onClose(): void {
