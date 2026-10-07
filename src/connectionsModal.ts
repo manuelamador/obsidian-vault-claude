@@ -553,7 +553,7 @@ export class ConnectionsMap extends Modal {
    * Back, Forward and ◎ (the chat on screen), with where the map is; away from the chat on screen's
    * own map, that links and mentions still act for it. Not drawn on its own map with nowhere to go.
    */
-  private drawNav(): void {
+  private drawNav(extra?: (bar: HTMLElement) => void): void {
     const { host, contentEl } = this;
     const away = this.project !== null || host.centre !== host.baseline.id;
     if (!away && this.places.length < 2) return;
@@ -568,7 +568,9 @@ export class ConnectionsMap extends Modal {
     button('arrow-right', this.at < this.places.length - 1 ? `Forward to “${titled(this.at + 1)}”` : 'Forward', this.at < this.places.length - 1, () => void this.go(this.at + 1));
     button('locate', `To “${shortLabel(host.baseline.title, 50)}”, the chat on screen`, away, () => this.home());
     bar.createSpan({ cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 50) });
-    if (away) bar.createDiv({ cls: 'vc-project-size', text: `Links and mentions still act for “${shortLabel(host.baseline.title, 40)}”, the chat on screen.` });
+    extra?.(bar);
+    // On a project's map its buttons name the chat they act for.
+    if (away && !this.project) bar.createDiv({ cls: 'vc-project-size', text: `Links and mentions still act for “${shortLabel(host.baseline.title, 40)}”, the chat on screen.` });
   }
 
   /** Stops what the links drawn under the map still run (see ChatMapHost.drawLinks). */
@@ -844,21 +846,24 @@ export class ConnectionsMap extends Modal {
    */
   private drawProjectCentre(host: ProjectMapHost): void {
     const { contentEl } = this;
-    this.drawNav();
-    const bar = contentEl.createDiv({ cls: 'vc-map-bar' });
-    setIcon(bar.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
-    bar.createSpan({ cls: 'vc-map-bar-name', text: host.name });
-    const menuButton = bar.createEl('button', { cls: 'vc-map-action' });
-    menuButton.appendText('Project');
-    setIcon(menuButton.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
-    menuButton.addEventListener('click', (evt) => this.projectMenu(host.path, evt));
-    const own = this.host.ownProject?.path === host.path;
-    const chatAction = bar.createEl('button', { cls: `vc-map-action${own ? '' : ' mod-cta'}`, text: own ? 'Take chat out' : this.host.ownProject ? 'Move chat here' : 'Put chat here' });
-    if (!own) chatAction.setAttr('aria-label', HOME_TIP);
-    chatAction.addEventListener('click', () => void this.host.setHome(own ? null : host.path).then(async () => {
-      this.host = await this.host.reload(this.host.all);
-      await this.redraw();
-    }));
+    // One bar: Back, Forward, ◎, the project's name, its menu, and the chat on screen, named, put in or taken out.
+    this.drawNav((bar) => {
+      const menuButton = bar.createEl('button', { cls: 'vc-map-action' });
+      menuButton.appendText('Project');
+      setIcon(menuButton.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
+      menuButton.addEventListener('click', (evt) => this.projectMenu(host.path, evt));
+      const own = this.host.ownProject?.path === host.path;
+      const chat = `“${shortLabel(this.host.baseline.title, 28)}”`;
+      const chatAction = bar.createEl('button', {
+        cls: `vc-map-action${own ? '' : ' mod-cta'}`,
+        text: own ? `Take ${chat} out` : this.host.ownProject ? `Move ${chat} here` : `Put ${chat} here`,
+      });
+      chatAction.setAttr('aria-label', own ? `Takes “${this.host.baseline.title}”, the chat on screen, out of this project.` : `“${this.host.baseline.title}”, the chat on screen. ${HOME_TIP}`);
+      chatAction.addEventListener('click', () => void this.host.setHome(own ? null : host.path).then(async () => {
+        this.host = await this.host.reload(this.host.all);
+        await this.redraw();
+      }));
+    });
     if (host.chats.length === 0) {
       contentEl.createDiv({ cls: 'vc-project-empty', text: 'No chats have worked on notes in this project yet.' });
       return;
