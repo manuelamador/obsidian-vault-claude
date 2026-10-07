@@ -1685,8 +1685,14 @@ export default class VaultClaudePlugin extends Plugin {
   chatShown(view: ChatView): void {
     if (!this.connections || this.connectionsView !== view || view.currentChatId() === this.connectionsChat) return;
     // A new chat, not started yet, has no map: the one open was for the chat before.
-    if (!view.currentChatId()) return void this.connections.close();
-    void this.openConnections(view);
+    const id = view.currentChatId();
+    if (!id) return void this.connections.close();
+    // The map stays open, its home moved to the chat now on screen.
+    const map = this.connections;
+    this.connectionsChat = id;
+    void this.chatMapHost(view, id).then((host) => {
+      if (this.connections === map && this.connectionsChat === id) map.rehome(host);
+    });
   }
 
   /** What chat `id`'s map shows, read now, and what it does. */

@@ -475,6 +475,17 @@ export class ConnectionsMap extends Modal {
     else this.draw();
   }
 
+  /**
+   * The panel shows another chat: it becomes the map's home (◎), centred on, the places visited kept,
+   * so Back returns to where the map was.
+   */
+  rehome(host: ChatMapHost): void {
+    this.host = host;
+    this.project = null;
+    this.setTitle(`Connections: ${shortLabel(host.baseline.title, 60)}`);
+    this.visit();
+  }
+
   /** Reads the map's data again and draws it in place: after a change to its project, links or connections. */
   private async redraw(all?: boolean): Promise<void> {
     if (this.project) this.project = await this.project.reload(all ?? this.project.all);
