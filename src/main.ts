@@ -4,9 +4,13 @@ import { join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
-import { deleteSessionIfAny, deleteSessions, formatDate, lastMessages, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem } from './history';
+import { deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem } from './history';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
+import { savedChangedFiles } from './editDiff';
+import { ConfirmModal } from './historyModal';
+import { transcriptNotes } from './rebuildLinks';
+import { vaultRelative } from './toolSummary';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
 import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatLink, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, upgradeMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
@@ -273,6 +277,7 @@ export default class VaultClaudePlugin extends Plugin {
       },
     });
     this.addCommand({ id: 'manage-projects', name: 'Manage projects', callback: () => void this.openManageProjects() });
+    this.addCommand({ id: 'rebuild-connections', name: 'Rebuild connections from chat files', callback: () => this.confirmRebuildConnections() });
     this.addCommand({ id: 'create-project', name: 'Create project…', callback: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId() }) });
     this.addCommand({ id: 'update-project-guide', name: 'Update project guide…', callback: () => void this.openUpdateGuide(this.frontChatView()?.currentChatId()) });
     this.addCommand({
@@ -1564,7 +1569,88 @@ export default class VaultClaudePlugin extends Plugin {
         new Notice(on ? `Linked to “${this.chatTitleOf(id)}”: tick Include on the links chip to send what it found.` : `No longer linked to “${this.chatTitleOf(id)}”.`);
       },
       projectOfChat: (other: string) => this.homeProject(other)?.basename ?? null,
+      rebuild: (done: () => void) => this.confirmRebuildConnections(done),
     };
+  }
+
+  /** Asks before rebuilding the links between chats and notes (see rebuildConnections); `done` runs after. */
+  confirmRebuildConnections(done?: () => void): void {
+    new ConfirmModal(
+      this.app,
+      'Rebuild connections',
+      "Reads every chat's session file again and rebuilds its links to notes: the notes it changed, was sent and linked to in its replies. Links you removed by hand stay removed, and every chat stays in the project it is in now.",
+      'Rebuild',
+      () =>
+        void this.rebuildConnections().then((result) => {
+          if (result) new Notice(`Connections rebuilt from ${result.chats} chat${result.chats === 1 ? '' : 's'}: ${result.notes} note${result.notes === 1 ? '' : 's'} linked.`);
+          done?.();
+        }),
+    ).open();
+  }
+
+  /**
+   * Rebuilds the links between chats and notes from the chats' session files: the notes each changed
+   * (its saved edits), was sent (its prompts' context blocks) and mentioned (the notes its replies
+   * link to). The panel otherwise records them as it draws a chat, so chats never opened since, or
+   * from before a kind of link was recorded, miss some. Links removed by hand stay removed; a chat
+   * whose file cannot be read keeps the links it had. Every chat stays in the project it was in.
+   */
+  async rebuildConnections(): Promise<{ chats: number; notes: number } | null> {
+    const root = this.vaultRoot();
+    if (!root) return null;
+    const notice = new Notice('Rebuilding connections…', 0);
+    try {
+      // Oldest first, each made the newest of its notes in turn: the most recent chat ends up first.
+      const items = (await this.listChats()).filter((item) => !item.scratch).sort((a, b) => a.updatedAt - b.updatedAt);
+      const homes = new Map(items.map((item) => [item.id, this.homeProject(item.id)]));
+      const found = new Map<string, { changed: string[]; sent: string[]; mentioned: string[] }>();
+      await eachInParallel(items, async (item) => {
+        try {
+          const { transcript, edits } = await loadChat(item.id, root);
+          found.set(item.id, { changed: savedChangedFiles(transcript, edits), ...transcriptNotes(transcript) });
+        } catch (error) {
+          log('reading a chat for its connections failed', item.id, error);
+        }
+      });
+      const inVault = (written: string) => {
+        const path = written.startsWith('/') ? vaultRelative(written, root) : written;
+        return path && !this.isHiddenPath(path) && this.onDisk(path) ? path : null;
+      };
+      const linkTarget = (target: string) => {
+        const file = this.app.metadataCache.getFirstLinkpathDest(target, '') ?? this.app.vault.getAbstractFileByPath(target);
+        return file instanceof TFile && file.extension === 'md' && !this.isHiddenPath(file.path) ? file.path : null;
+      };
+      const removed = (path: string, id: string) => this.noteRemoved[path]?.includes(id) === true;
+      const indexes: [NoteChats, NoteChats, NoteChats] = [{}, {}, {}];
+      for (const item of items) {
+        const links = found.get(item.id);
+        if (!links) {
+          // Unread: its links as they were.
+          [this.noteChats, this.noteRefs, this.noteMentions].forEach((old, i) => {
+            for (const [path, ids] of Object.entries(old)) if (ids.includes(item.id)) linkNote(indexes[i], path, item.id);
+          });
+          continue;
+        }
+        const groups = [links.changed.map(inVault), links.sent.map(inVault), links.mentioned.map(linkTarget)];
+        groups.forEach((paths, i) => {
+          for (const path of paths) if (path && !removed(path, item.id)) linkNote(indexes[i], path, item.id);
+        });
+      }
+      // Chats not listed (copies of chats from outside the panel, side sessions) keep theirs.
+      const listed = new Set(items.map((item) => item.id));
+      [this.noteChats, this.noteRefs, this.noteMentions].forEach((old, i) => {
+        for (const [path, ids] of Object.entries(old)) for (const id of ids) if (!listed.has(id)) linkNote(indexes[i], path, id, false);
+      });
+      [this.noteChats, this.noteRefs, this.noteMentions] = indexes;
+      this.notesLinked();
+      // Every chat back in the project it was in, which its notes may now place elsewhere.
+      for (const [id, home] of homes) if (home && this.homeProject(id) !== home) await this.setHomeProject(id, home);
+      this.projectsChanged();
+      const notes = new Set(indexes.flatMap((index) => Object.keys(index))).size;
+      return { chats: found.size, notes };
+    } finally {
+      notice.hide();
+    }
   }
 
   /** A chat's connections map (see ChatMapModal), from panel `view`. */
