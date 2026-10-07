@@ -204,8 +204,6 @@ export class ChatProjectModal extends Pane {
   }
 
   onOpen(): void {
-    this.modalEl.addClass('vc-project-modal');
-    this.setTitle('Project context');
     void this.draw();
   }
 
@@ -326,8 +324,6 @@ export class ManageProjectsModal extends Pane {
   }
 
   onOpen(): void {
-    this.modalEl.addClass('vc-project-modal');
-    this.setTitle('Projects');
     this.draw();
   }
 

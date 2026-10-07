@@ -32,6 +32,8 @@ export interface HistoryItem {
   copies?: HistoryItem[];
 }
 
+// The project and linked-chat blocks: in prompts written before that context went through the
+// UserPromptSubmit hook (see ClaudeSession.addContext); stripped there, written nowhere now.
 const CONTEXT_BLOCK = /^(?:<project_context>[\s\S]*?<\/project_context>\s*)?(?:<linked_chats>[\s\S]*?<\/linked_chats>\s*)?(?:<obsidian_context>[\s\S]*?<\/obsidian_context>\s*)?/;
 
 /** Removes the note context the panel prepends to prompts. */

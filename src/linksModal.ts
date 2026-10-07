@@ -67,8 +67,6 @@ export class LinksModal extends Pane {
   }
 
   onOpen(): void {
-    this.modalEl.addClass('vc-project-modal');
-    this.setTitle('Linked chats');
     this.draw();
   }
 

@@ -75,8 +75,6 @@ export interface ChatMapHost extends MapActions {
   search(query: string): SearchHit[];
   /** Makes project `path` the chat's home (null: takes it out). */
   setHome(path: string | null): Promise<void>;
-  /** Whether the chat was taken out of a project by hand, so that its notes no longer place it in one. */
-  declined: boolean;
   /** The project whose folder holds `folder` (the deepest), if any: what its notes count toward. */
   projectHolding(folder: string): { path: string; name: string; folder: string } | null;
   /** The map's data again, after something it shows changed; with `all`, every note and chat (see chatMap). */
@@ -428,9 +426,9 @@ const LEGEND: [string, string, string][] = [
 ];
 
 /**
- * A chat's connections: the chat in the middle; its notes round it, grouped by folder under arcs, a
- * line to each marked by how it is linked; the chats sharing them, or linked from it, outside. Under
- * it, every folder of its notes with the same actions as the arcs.
+ * A chat's connections, the Chat tab's map: the chat in the middle; its notes round it, grouped by
+ * folder under arcs, a line to each marked by how it is linked; the chats sharing them, or linked
+ * with it, outside. Above it, its project bar and the search; centred on another chat, the trail back.
  */
 export class ChatMapModal extends Pane {
   constructor(app: App, private host: ChatMapHost) {
@@ -438,8 +436,6 @@ export class ChatMapModal extends Pane {
   }
 
   onOpen(): void {
-    this.modalEl.addClass('vc-map-modal');
-    this.setTitle(`Connections: ${shortLabel(this.host.title, 60)}`);
     this.draw();
   }
 
@@ -534,7 +530,7 @@ export class ChatMapModal extends Pane {
     for (const note of host.notes) drawing.line(centre, noteAt(note.path), ['chat', note.path], LINK_KINDS[note.weight] ?? 'mentioned');
     for (const chat of host.chats) {
       for (const path of chat.shared) if (angles.has(path)) drawing.line(chatAt(chat.id), noteAt(path), [chat.id, path], 'shared');
-      if (chat.linked) drawing.line(centre, chatAt(chat.id), ['chat', chat.id], 'linked');
+      if (chat.linked || chat.linkedFrom) drawing.line(centre, chatAt(chat.id), ['chat', chat.id], 'linked');
     }
     const noteLabels = new Map(placeLabels(host.notes.map((note) => ({ key: note.path, angle: angles.get(note.path) ?? 0, text: noteName(note.path) })), ring + ARC_WIDTH / 2 + 2, 24).map((label) => [label.key, label]));
     for (const note of host.notes) {
@@ -560,7 +556,7 @@ export class ChatMapModal extends Pane {
       const label = chatLabels.get(chat.id);
       if (label) drawing.label(group, label.at, label.side, label.text, 14, host.titleOf(chat.id));
       const shared = `${chat.shared.length} shared note${chat.shared.length === 1 ? '' : 's'}`;
-      tooltip(group, `${host.titleOf(chat.id)}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : ''}\nClick to open, mention or ${host.linked(chat.id) ? 'unlink' : 'link'} it`);
+      tooltip(group, `${host.titleOf(chat.id)}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · this chat links to it' : chat.linkedFrom ? ' · it links to this chat' : ''}\nClick to open, mention or ${host.linked(chat.id) ? 'unlink' : 'link'} it`);
       chatNode(group, chat.id, host, () => void this.redraw(), () => void this.moveTo(chat.id));
     }
     const centreNode = drawing.chat('chat', centre, 18, 'is-centre');
@@ -757,8 +753,6 @@ export class ProjectMapModal extends Pane {
   }
 
   onOpen(): void {
-    this.modalEl.addClass('vc-map-modal');
-    this.setTitle(`Project map: ${this.host.name}`);
     this.draw();
   }
 
@@ -780,15 +774,20 @@ export class ProjectMapModal extends Pane {
     // Many chats and notes make many lines: faint until a chat or note is pointed at.
     drawing.root.addClass('is-quiet');
     // Grouped by the folder within the project; notes outside it by their own folder.
+    // Notes at the top of the vault: a group of their own, not the project folder's ('').
+    const TOP = '/';
     const within = (path: string) => {
       const folder = folderOf(path);
-      return folder === host.folder ? '' : folder.startsWith(`${host.folder}/`) ? folder.slice(host.folder.length + 1) : folder;
+      if (folder === host.folder) return '';
+      if (folder.startsWith(`${host.folder}/`)) return folder.slice(host.folder.length + 1);
+      return folder || TOP;
     };
     const inside = (path: string) => folderOf(path) === host.folder || folderOf(path).startsWith(`${host.folder}/`);
     const { angles, arcs, spans } = ringLayout(host.notes, within, 0.8, (path) => (inside(path) ? '' : null));
     drawArcs(drawing, ring, arcs, spans, (sub, outer) => ({
-      text: shortLabel(sub || `◆ ${host.folder.slice(host.folder.lastIndexOf('/') + 1)}`, 22),
-      tip: outer === null ? sub : sub ? `${host.folder}/${sub}` : host.folder,
+      text: shortLabel(sub === TOP ? 'Top of the vault' : sub || `◆ ${host.folder.slice(host.folder.lastIndexOf('/') + 1)}`, 22),
+      // The project's own band (sub '') names its folder; its subfolders, their path; folders outside it, theirs.
+      tip: sub === '' ? host.folder : sub === TOP ? 'Top of the vault' : outer === null ? sub : `${host.folder}/${sub}`,
       cls: outer === '' || sub === '' ? 'is-home' : 'is-plain',
     }));
     // The chats on a small ring round the project, wider when there are many.

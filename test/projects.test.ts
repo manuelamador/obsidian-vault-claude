@@ -17,12 +17,12 @@ test('a new project note has its folder, chats added by hand, its Context, empty
   assert.deepEqual(projectParts(written), { context: 'About tariffs.', instructions: '' });
 });
 
-test('the Context is set between its markers; a note without the section gets one; an old Guide reads as Context', () => {
+test('the Context is set between its markers; a note without the section gets one', () => {
   const set = withContext(note, 'New summary.');
   assert.match(set, /## Context\n\n<!-- BEGIN GENERATED -->\nNew summary\.\n<!-- END GENERATED -->\n\n## Instructions/);
   assert.equal(projectParts(withContext(set, 'Again.')).context, 'Again.');
   const old = '---\ntype: project\n---\n\n# Old\n\n## Instructions\n\nBe brief.\n\n## Guide\n\n- found\n';
-  assert.deepEqual(projectParts(old), { context: '- found', instructions: 'Be brief.' });
+  assert.deepEqual(projectParts(old), { context: '', instructions: 'Be brief.' });
   const added = withContext(old, 'Summary.');
   assert.match(added, /# Old\n\n## Context\n\n<!-- BEGIN GENERATED -->\nSummary\.\n<!-- END GENERATED -->/);
   assert.equal(projectParts(added).context, 'Summary.');
@@ -58,11 +58,11 @@ test('the context block holds an enclosing project\'s Instructions, then the hom
   assert.match(block, /<project name="A" role="home" note="P\/A.md">\nContext \(a summary of the project, from its notes and chats\):\nAbout A\.\n\nInstructions/);
 });
 
-test('a prompt with project context shows its text, with a chip for each project', () => {
+test('a prompt written with project context before the hook carried it shows only its text', () => {
   const block = projectContextBlock([{ name: 'A', note: 'P/A.md', instructions: 'Be brief.', role: 'parent' }]);
   const raw = `${block}\n\n<obsidian_context>\nNote attached to this chat: x.md\n</obsidian_context>\n\nhello`;
   assert.equal(stripContext(raw), 'hello');
-  assert.deepEqual(bubbleOf(prompt(raw)), { text: 'hello', chips: [{ label: 'A', icon: 'folder-kanban' }] });
+  assert.deepEqual(bubbleOf(prompt(raw)), { text: 'hello', chips: [] });
   assert.equal(stripContext(`${block}\n\nhi`), 'hi');
 });
 
@@ -80,6 +80,8 @@ test("a chat's home: added by hand; else its first note's folder; else the folde
   assert.equal(homeOf('c', { notes: notes([['Other/x.md', 3]]), start: 'Other/x.md' }, projects), null);
   assert.equal(homeOf('c', { notes: notes([['Teaching/x.md', 3]]), declined: true }, projects), null);
   assert.deepEqual(homeOf('hand', { declined: true }, projects), { key: 'P/B.md', why: 'added' });
+  // A note counts toward the deepest project holding it: an enclosing project does not gather its nested project's notes.
+  assert.deepEqual(homeOf('c', { notes: notes([['Research/Tariffs/a.md', 3], ['Research/Tariffs/b.md', 3], ['Research/Tariffs/c.md', 3], ['Research/Other/d.md', 1]]) }, projects), { key: 'P/B.md', why: 'notes', count: 3 });
   // Mentions alone: a folder counts once they weigh enough.
   assert.equal(homeOf('c', { notes: notes([['Teaching/x.md', 1], ['Teaching/y.md', 1]]) }, projects), null);
   assert.deepEqual(homeOf('c', { notes: notes([['Teaching/x.md', 1], ['Teaching/y.md', 1], ['Teaching/z.md', 1]]) }, projects), { key: 'P/C.md', why: 'notes', count: 3 });
@@ -92,12 +94,12 @@ test('the fingerprint changes with the Context or Instructions', () => {
   assert.notEqual(contextHash({ context: 'xy', instructions: '' }), contextHash({ context: 'x', instructions: 'y' }));
 });
 
-test('a prompt with linked chats shows its text, with a chip for each chat included', () => {
+test('the linked chats block holds each digest; a prompt written with one before the hook shows only its text', () => {
   const linked = linkedChatsBlock([{ id: 'c1', title: 'Tariff "war" notes', digest: 'Found X.' }]);
   assert.match(linked, /<linked_chat title="Tariff 'war' notes" id="c1">\nFound X\.\n<\/linked_chat>/);
   const block = projectContextBlock([{ name: 'A', note: 'P/A.md', instructions: 'Be brief.', role: 'home' }]);
   const raw = `${block}\n\n${linked}\n\n<obsidian_context>\nNote attached to this chat: x.md\n</obsidian_context>\n\nhello`;
   assert.equal(stripContext(raw), 'hello');
-  assert.deepEqual(bubbleOf(prompt(raw))?.chips, [{ label: 'A', icon: 'folder-kanban' }, { label: "Tariff 'war' notes", icon: 'link' }]);
+  assert.deepEqual(bubbleOf(prompt(raw))?.chips, []);
   assert.equal(linkedChatsBlock([]), '');
 });

@@ -2433,9 +2433,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
 }
 
 .vc-project-name,
-.vc-project-filter {
-  width: 100%;
-}
 
 .vc-project-label,
 .vc-project-chat-when,
@@ -2443,25 +2440,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
 .vc-project-empty {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
-}
-
-.vc-project-chats {
-  max-height: 40vh;
-  overflow-y: auto;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-}
-
-.vc-project-chat {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--size-4-2);
-  padding: var(--size-4-1) var(--size-4-2);
-  cursor: pointer;
-}
-
-.vc-project-chat:hover {
-  background: var(--background-modifier-hover);
 }
 
 .vc-project-foot {
@@ -2555,21 +2533,9 @@ body:has(.vc-pick-up) .popover.hover-popover {
   color: var(--text-muted);
 }
 
-.vc-project-source {
-  margin-left: auto;
-  font-size: var(--font-ui-smaller);
-}
-
 .vc-project-text {
   width: 100%;
   resize: vertical;
-}
-
-.vc-project-conflict {
-  font-size: var(--font-ui-smaller);
-  padding: var(--size-4-1) var(--size-4-2);
-  border-left: 3px solid var(--color-orange);
-  color: var(--text-muted);
 }
 
 .vc-project-group-icon {
@@ -2827,7 +2793,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   font-weight: var(--font-semibold);
   font-size: 12px;
 }
-
 
 .vc-map-badge {
   fill: var(--color-green);

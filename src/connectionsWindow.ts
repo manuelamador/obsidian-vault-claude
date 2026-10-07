@@ -7,30 +7,18 @@ import { Modal, setIcon, type App } from 'obsidian';
 export type ConnectionsTab = 'chat' | 'project' | 'all';
 
 /**
- * Part of a tab: drawn into the element the window gives it (`contentEl`), as a dialog would be, by
- * its onOpen; `close` closes the window. Its own dialogs (pickers, confirmations) open above it.
+ * Part of a tab: drawn into the element the window gives it (`contentEl`) by its onOpen. Its own
+ * dialogs (pickers, confirmations) open above the window.
  */
 export abstract class Pane {
   contentEl!: HTMLElement;
-  modalEl!: HTMLElement;
-  private window: Modal | null = null;
 
   constructor(readonly app: App) {}
 
-  /** Draws the pane into `el`, part of `window`. */
-  mount(el: HTMLElement, window: Modal): void {
+  /** Draws the pane into `el`. */
+  mount(el: HTMLElement): void {
     this.contentEl = el;
-    // Its own: the classes a pane drawn as a dialog put on its frame do not change the window's.
-    this.modalEl = createDiv();
-    this.window = window;
     this.onOpen();
-  }
-
-  /** A pane has no title of its own: the window has one. */
-  setTitle(_title: string): void {}
-
-  close(): void {
-    this.window?.close();
   }
 
   abstract onOpen(): void;
@@ -106,7 +94,7 @@ export class ConnectionsWindow extends Modal {
       return;
     }
     this.panes = panes;
-    for (const pane of panes) pane.mount(this.body.createDiv({ cls: 'vc-connections-pane' }), this);
+    for (const pane of panes) pane.mount(this.body.createDiv({ cls: 'vc-connections-pane' }));
   }
 
   private unmount(): void {

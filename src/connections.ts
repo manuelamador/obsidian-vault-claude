@@ -23,7 +23,10 @@ export interface MapNote {
 export interface MapChat {
   id: string;
   shared: string[];
+  /** The chat the map is of links to it. */
   linked: boolean;
+  /** It links to the chat the map is of. */
+  linkedFrom?: boolean;
 }
 
 /**
@@ -39,6 +42,7 @@ export function chatMap(
   recent: (id: string) => number,
   all = false,
   hubs: ReadonlySet<string> = new Set(),
+  linkedFrom: string[] = [],
 ): { notes: MapNote[]; chats: MapChat[]; moreNotes: number; moreChats: number; folders: { folder: string; count: number }[] } {
   const own = [...(weighted.get(id) ?? new Map<string, number>())].filter(([path]) => onMap(path)).map(([path, weight]) => ({ path, weight }));
   own.sort((a, b) => b.weight - a.weight || a.path.localeCompare(b.path));
@@ -53,7 +57,12 @@ export function chatMap(
     if (shared.length > 0 || links.has(other)) others.push({ id: other, shared, linked: links.has(other) });
   }
   for (const other of links) if (!weighted.has(other) && other !== id) others.push({ id: other, shared: [], linked: true });
-  others.sort((a, b) => Number(b.linked) - Number(a.linked) || b.shared.length - a.shared.length || recent(b.id) - recent(a.id));
+  // Chats linking to this one: shown too, marked as such (a link from them, not to them).
+  const from = new Set(linkedFrom);
+  for (const chat of others) if (from.has(chat.id)) chat.linkedFrom = true;
+  for (const other of from) if (other !== id && !others.some((chat) => chat.id === other)) others.push({ id: other, shared: [], linked: false, linkedFrom: true });
+  const tied = (chat: MapChat) => Number(chat.linked || chat.linkedFrom === true);
+  others.sort((a, b) => tied(b) - tied(a) || b.shared.length - a.shared.length || recent(b.id) - recent(a.id));
   const counts = new Map<string, number>();
   for (const note of own) counts.set(folderOf(note.path), (counts.get(folderOf(note.path)) ?? 0) + 1);
   const folders = [...counts].map(([folder, count]) => ({ folder, count })).sort((a, b) => b.count - a.count || a.folder.localeCompare(b.folder));

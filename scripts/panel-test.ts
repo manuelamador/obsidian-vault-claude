@@ -122,6 +122,9 @@ async function main(): Promise<void> {
     homeReason: (_id: string): unknown => null,
     enclosingProjects: (): unknown[] => [],
     listedChats: (): null => null,
+    chatShown: () => undefined,
+    isProjectNote: () => false,
+    chatMarkdownLink: (id: string) => `[Chat](obsidian://vault-claude?chat=${id})`,
     chatLinks: {} as Record<string, string[]>,
     chatSummaries: {} as Record<string, unknown>,
     linkChats: () => undefined,
@@ -4304,6 +4307,7 @@ async function main(): Promise<void> {
       planChat.session = {
         setPermissionMode: async (mode: string) => void modes.push(mode),
         send: (content: unknown) => void sentPlan.push(content),
+        waitingContext: () => new Set<string>(),
         setHandlers() {},
         close() {},
       };
@@ -4351,7 +4355,7 @@ async function main(): Promise<void> {
       const failInput = root.querySelector('.vc-input') as HTMLTextAreaElement;
       view.newChat();
       const sentFail: unknown[] = [];
-      failView.session = { send: (content: unknown) => void sentFail.push(content), setHandlers() {}, close() {} };
+      failView.session = { send: (content: unknown) => void sentFail.push(content), waitingContext: () => new Set<string>(), setHandlers() {}, close() {} };
       failView.busy = false;
       const vault = app.vault as unknown as { cachedRead: (file: { path: string }) => Promise<string> };
       const readWas = vault.cachedRead;

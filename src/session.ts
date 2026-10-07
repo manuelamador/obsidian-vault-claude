@@ -214,7 +214,7 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
 
 export class ClaudeSession {
   /** Context waiting for the next message (see addContext). */
-  private pendingContext: string[] = [];
+  private pendingContext: { text: string; keys: string[]; delivered: (sessionId: string | null) => void }[] = [];
   sessionId: string | null = null;
   /**
    * Resolves once the session has ended: its process gone (at once for one never started). Claude
@@ -248,10 +248,16 @@ export class ClaudeSession {
   /**
    * Context for Claude to go with the next message, outside its text: given to Claude Code by the
    * UserPromptSubmit hook when that message is taken up (see start), and stored in the chat as the
-   * hook's context. Several given before then go together.
+   * hook's context. Several given before then go together. `keys` name what it holds, waiting until
+   * then (see waitingContext); `delivered` runs once it has gone, with the chat's session id.
    */
-  addContext(text: string): void {
-    if (text.trim()) this.pendingContext.push(text);
+  addContext(text: string, keys: string[], delivered: (sessionId: string | null) => void): void {
+    if (text.trim()) this.pendingContext.push({ text, keys, delivered });
+  }
+
+  /** What context is waiting to go (see addContext): not to be given again meanwhile. */
+  waitingContext(): Set<string> {
+    return new Set(this.pendingContext.flatMap((each) => each.keys));
   }
 
   /**
@@ -409,7 +415,9 @@ export class ClaudeSession {
               hooks: [
                 async () => {
                   const context = this.pendingContext.splice(0);
-                  return context.length > 0 ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: context.join('\n\n') } } : {};
+                  if (context.length === 0) return {};
+                  for (const each of context) each.delivered(this.sessionId);
+                  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: context.map((each) => each.text).join('\n\n') } };
                 },
               ],
             },

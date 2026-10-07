@@ -46,7 +46,7 @@ import { chipFor, closeImage, renderChip } from './chip';
 import { hintAbove } from './hint';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
-import { BOOKMARK_TAG, chatLink, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
+import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -62,7 +62,7 @@ import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
 import type { ChatDraft, ChatProjectState } from './main';
-import { contextHash, linkedChatsBlock, PROJECT_TYPE, projectContextBlock } from './projects';
+import { contextHash, linkedChatsBlock, projectContextBlock } from './projects';
 import { LinksModal } from './linksModal';
 import type { ConnectionsTab } from './connectionsWindow';
 import { ChatProjectModal, ProjectPicker } from './projectModals';
@@ -432,7 +432,6 @@ export class ChatView extends ItemView {
   /** How many notes the chat changed or mentioned, on the notes button; kept current by countNotesSoon. */
   private notesCount!: HTMLElement;
   private notesCountTimer: number | null = null;
-  /** The chat this panel left when a note sent it to another one, so it can go back. */
   /** The chats this panel showed, to go back and forward through (see navigate); not saved. */
   private navBack: { id: string; title: string }[] = [];
   private navForward: { id: string; title: string }[] = [];
@@ -1242,6 +1241,7 @@ export class ChatView extends ItemView {
     this.resumeId = null;
     this.chatId = null;
     this.notesToLink = [];
+    this.chatsToLink = [];
     this.tasks = new Set();
     this.updateStopButton();
     this.sentIds = new Set();
@@ -1537,10 +1537,12 @@ export class ChatView extends ItemView {
   }
 
   /** What goes with the next message from the chat's projects (see projectContextBlock), and which projects it holds. */
-  private async projectContext(): Promise<{ block: string; paths: string[]; hashes: Record<string, string> }> {
+  /** `text`: the message it goes with, whose links to chats count as this chat's (see linksTo). */
+  private async projectContext(text: string): Promise<{ block: string; paths: string[]; hashes: Record<string, string> }> {
     const home = this.homeProjectFile();
     const state = this.projectStateNow();
-    const sent = new Set(state.sent ?? []);
+    // Sent already, or waiting to go with a message Claude Code has not taken up yet.
+    const sent = new Set([...(state.sent ?? []), ...(this.session?.waitingContext() ?? [])]);
     const parts: Parameters<typeof projectContextBlock>[0] = [];
     // What went is marked by key: a project's path; `parent:` and its path for an enclosing project's Instructions; `chat:` and an id.
     const paths: string[] = [];
@@ -1565,7 +1567,7 @@ export class ChatView extends ItemView {
     }
     // The chats it links to and includes: each one's digest, once.
     const chats: Parameters<typeof linkedChatsBlock>[0] = [];
-    for (const id of this.includedChats()) {
+    for (const id of this.includedChats(text)) {
       const key = `chat:${id}`;
       if (sent.has(key)) continue;
       chats.push({ id, title: this.plugin.chatTitleOf(id), digest: await this.plugin.linkedChatDigest(id) });
@@ -1598,10 +1600,13 @@ export class ChatView extends ItemView {
     return `${item?.updatedAt ?? 0}|${this.plugin.chatSummaries[id]?.at ?? 0}`;
   }
 
-  /** The chats this one links to: those recorded, and those linked in the message being typed (recorded when it is sent). */
-  private linksTo(): { id: string; pending: boolean }[] {
+  /**
+   * The chats this one links to: those recorded, and those linked in the message being typed
+   * (recorded when it is sent); `text`, that message, when it has left the input already (see send).
+   */
+  private linksTo(text = this.inputEl.value): { id: string; pending: boolean }[] {
     const recorded = this.chatId && !this.scratch ? (this.plugin.chatLinks[this.chatId] ?? []) : [];
-    const typed = linkedChatIds(this.inputEl.value).filter((id) => id !== this.chatId && !recorded.includes(id));
+    const typed = linkedChatIds(text).filter((id) => id !== this.chatId && !recorded.includes(id));
     return [...recorded.map((id) => ({ id, pending: false })), ...typed.map((id) => ({ id, pending: true }))];
   }
 
@@ -1613,9 +1618,9 @@ export class ChatView extends ItemView {
   }
 
   /** The chats this one links to whose digests are to go with it (see ChatProjectState.includeChats). */
-  private includedChats(): string[] {
+  private includedChats(text?: string): string[] {
     const include = this.projectStateNow().includeChats ?? [];
-    return this.linksTo()
+    return this.linksTo(text)
       .map((link) => link.id)
       .filter((id) => include.includes(id));
   }
@@ -1626,13 +1631,9 @@ export class ChatView extends ItemView {
     if (this.chatId) {
       this.plugin.linkChats(this.chatId, [id]);
       this.projectsChanged();
-    } else this.addToInput(this.chatMarkdownLink(id), 'Chat linked: recorded when the message is sent');
+    } else this.addToInput(this.plugin.chatMarkdownLink(id), 'Chat linked: recorded when the message is sent');
   }
 
-  /** A Markdown link to chat `id`, titled by it (see chatLink). */
-  private chatMarkdownLink(id: string): string {
-    return `[${this.plugin.chatTitleOf(id).replace(/[[\]]/g, '')}](${chatLink({ vault: this.app.vault.getName(), chat: id })})`;
-  }
 
   /** Mentions chat `id` in the message being typed: a link to it, which links the chats once sent. */
   mentionChat(id: string): void {
@@ -1640,7 +1641,7 @@ export class ChatView extends ItemView {
       new Notice('The scratch chat does not link to other chats.');
       return;
     }
-    this.addToInput(this.chatMarkdownLink(id), `“${this.plugin.chatTitleOf(id)}” mentioned: linked when the message is sent`);
+    this.addToInput(this.plugin.chatMarkdownLink(id), `“${this.plugin.chatTitleOf(id)}” mentioned: linked when the message is sent`);
   }
 
   /** @-mentions note `path` in the message being typed. */
@@ -1716,10 +1717,6 @@ export class ChatView extends ItemView {
     return `Project “${home.basename}”: ${reason.count} of the notes it worked on are in its folder.`;
   }
 
-  /** Whether `file` is a project note. */
-  private isProjectNote(file: TFile): boolean {
-    return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === PROJECT_TYPE;
-  }
 
   /**
    * For a chat with no project, the one to offer in a click: the attached note's (the project note
@@ -1730,7 +1727,7 @@ export class ChatView extends ItemView {
     // The attached note, a deliberate choice; not whichever note happens to be in front.
     const attached = this.attachedNote ? this.app.vault.getAbstractFileByPath(this.attachedNote) : null;
     if (attached instanceof TFile) {
-      if (this.isProjectNote(attached)) return attached;
+      if (this.plugin.isProjectNote(attached)) return attached;
       const holding = this.plugin.projectForPath(attached.path);
       if (holding) return holding;
     }
@@ -2588,6 +2585,7 @@ export class ChatView extends ItemView {
     const from = this.navPlace();
     const opened = await this.openChatHere(item, branch);
     if (opened) this.remember(from);
+    this.plugin.chatShown(this);
     return opened;
   }
 
@@ -3341,7 +3339,7 @@ export class ChatView extends ItemView {
       const chats = this.scratch ? [] : (this.plugin.listedChats() ?? []).filter((item) => !item.scratch && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title }));
       new NotePicker(this.app, chats, (item) => {
         // A chat: a link to it, which links the chats once the message is sent.
-        const text = item === null ? '@' : 'id' in item ? `${this.chatMarkdownLink(item.id)} ` : `@[[${this.mentionTarget(item)}]] `;
+        const text = item === null ? '@' : 'id' in item ? `${this.plugin.chatMarkdownLink(item.id)} ` : `@[[${this.mentionTarget(item)}]] `;
         this.inputEl.setRangeText(text, start, end, 'end');
         this.inputEl.focus();
         this.inputEdited();
@@ -3708,7 +3706,7 @@ export class ChatView extends ItemView {
     // The chat's projects' context, once (see projectContext); never with a slash command.
     let project: Awaited<ReturnType<ChatView['projectContext']>> = { block: '', paths: [], hashes: {} };
     try {
-      if (!slash) project = await this.projectContext();
+      if (!slash) project = await this.projectContext(text);
       built = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly);
     } catch (error) {
       // A mentioned note could not be read: nothing is sent, and the message goes back to the input.
@@ -3735,12 +3733,14 @@ export class ChatView extends ItemView {
     session.send(content, undefined, uuid);
     this.linkSentNotes(notes);
     this.linkSentChats(linkedChatIds(text));
-    // The project's context and linked chats' digests go outside the message's text (see ClaudeSession.addContext).
-    if (project.block) session.addContext(project.block);
-    if (project.paths.length > 0) {
-      const state = this.projectStateNow();
-      this.setProjectStateNow({ ...state, sent: [...new Set([...(state.sent ?? []), ...project.paths])], sentHash: { ...state.sentHash, ...project.hashes } });
-      this.projectsChanged();
+    // The project's context and linked chats' digests go outside the message's text (see
+    // ClaudeSession.addContext), marked as sent once Claude Code has taken them up: a session that
+    // never starts leaves them to go with the next message.
+    if (project.block) {
+      session.addContext(project.block, project.paths, (sessionId) => {
+        if (sessionId) this.plugin.markContextSent(sessionId, project.paths, project.hashes);
+        this.projectsChanged();
+      });
     }
   }
 
@@ -4071,7 +4071,7 @@ export class ChatView extends ItemView {
       chip.setAttr('aria-label', `Sent with each message: ${contextWhat(attached)}. Click to open it.`);
     }
     // A project note is never offered as an attachment: the project chips stand for it.
-    if (active && active.file.path !== attached?.file.path && !this.isProjectNote(active.file)) {
+    if (active && active.file.path !== attached?.file.path && !this.plugin.isProjectNote(active.file)) {
       const offer = this.contextRow.createDiv({ cls: 'vc-context-chip vc-context-offer' });
       setIcon(offer.createSpan({ cls: 'vc-context-clip' }), 'plus');
       offer.createSpan({ cls: 'vc-context-name', text: contextLabel(active) });
@@ -4367,6 +4367,7 @@ export class ChatView extends ItemView {
     const from = this.navPlace();
     this.newChat();
     this.remember(from);
+    this.plugin.chatShown(this);
   }
 
   /** Opens the chat offered for the note in front, or a menu of them. */

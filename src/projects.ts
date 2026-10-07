@@ -90,13 +90,20 @@ export function homeOf(id: string, chat: { notes?: ReadonlyMap<string, number>; 
     const holding = folders.find((project) => inFolder(chat.start ?? '', project.folder));
     if (holding) return { key: holding.key, why: 'start', note: chat.start };
   }
-  const notes = [...(chat.notes ?? new Map<string, number>())];
+  // Each note counts toward the deepest project holding it only: an enclosing project gathers the
+  // notes outside its nested projects, not theirs.
+  const byProject = new Map<ProjectFolder, number[]>();
+  for (const [path, weight] of chat.notes ?? new Map<string, number>()) {
+    const holding = folders.find((project) => inFolder(path, project.folder));
+    if (holding) byProject.set(holding, [...(byProject.get(holding) ?? []), weight]);
+  }
   let best: { project: ProjectFolder; score: number; count: number } | null = null;
+  // Deepest first, so that a tie goes to the deeper folder.
   for (const project of folders) {
-    const inside = notes.filter(([path]) => inFolder(path, project.folder));
-    const score = inside.reduce((sum, [, weight]) => sum + weight, 0);
-    const enough = inside.some(([, weight]) => weight > 1) || score >= MENTIONS_ENOUGH;
-    if (enough && (!best || score > best.score)) best = { project, score, count: inside.length };
+    const weights = byProject.get(project) ?? [];
+    const score = weights.reduce((sum, weight) => sum + weight, 0);
+    const enough = weights.some((weight) => weight > 1) || score >= MENTIONS_ENOUGH;
+    if (enough && (!best || score > best.score)) best = { project, score, count: weights.length };
   }
   return best && { key: best.project.key, why: 'notes', count: best.count };
 }
@@ -116,16 +123,11 @@ export function withGenerated(note: string, heading: string, body: string): stri
 
 /**
  * A project's sections as they go with a chat: its Context (between its markers, or the whole section
- * in a note edited by hand) and its Instructions (their placeholder left out). A note written before
- * Context replaced the Guide gives its Guide as its Context.
+ * in a note edited by hand) and its Instructions (their placeholder left out).
  */
 export function projectParts(note: string): { context: string; instructions: string } {
-  const strip = (text: string) => text.replace(BEGIN, '').replace(END, '').trim();
-  const context = strip(memoSection(note, 'Context')) || memoSection(note, 'Guide').trim();
-  const instructions = memoSection(note, 'Instructions')
-    .replace(INSTRUCTIONS_PLACEHOLDER, '')
-    .replace(/^Standing instructions for every chat in this project: yours to write\. Nothing generated changes this section\.\s*/, '')
-    .trim();
+  const context = memoSection(note, 'Context').replace(BEGIN, '').replace(END, '').trim();
+  const instructions = memoSection(note, 'Instructions').replace(INSTRUCTIONS_PLACEHOLDER, '').trim();
   return { context, instructions };
 }
 
@@ -135,7 +137,8 @@ export function withContext(note: string, context: string): string {
     const replaced = withGenerated(note, 'Context', context);
     if (replaced !== note || projectParts(note).context === context.trim()) return replaced;
     // A Context section without markers: its text replaced, markers added.
-    return note.replace(/^## Context[ \t]*\n[\s\S]*?(?=^## |(?![\s\S]))/m, `## Context\n\n${BEGIN}\n${context.trim()}\n${END}\n\n`);
+    // A function: a context holding `$` (display math) must not be read as a replacement pattern.
+    return note.replace(/^## Context[ \t]*\n[\s\S]*?(?=^## |(?![\s\S]))/m, () => `## Context\n\n${BEGIN}\n${context.trim()}\n${END}\n\n`);
   }
   const heading = /^# .*$/m.exec(note);
   const at = heading ? heading.index + heading[0].length : note.length;

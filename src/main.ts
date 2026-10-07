@@ -94,7 +94,7 @@ const PROJECT_KEY_NOTES = 12;
 
 /** Today, as YYYY-MM-DD in local time. */
 function today(): string {
-  return formatDate(Date.now()).slice(0, 10);
+  return localDay(Date.now());
 }
 
 /** The chat ids in a frontmatter value. */
@@ -114,7 +114,7 @@ export interface ChatProjectState {
   sentHash?: Record<string, string>;
   declined?: boolean;
   start?: string;
-  /** The chats it links to whose digests go with it (see ChatView.openLinks). */
+  /** The chats it links to whose digests go with it (see ChatView.linksPane). */
   includeChats?: string[];
 }
 
@@ -180,6 +180,9 @@ export default class VaultClaudePlugin extends Plugin {
   /** The Connections window, while open, and the project its Project tab shows when not the chat's own (see openConnections). */
   private connections: ConnectionsWindow | null = null;
   private connectionsProject: TFile | null = null;
+  /** The panel and chat the Connections window was opened for (see chatShown). */
+  private connectionsView: ChatView | null = null;
+  private connectionsChat: string | null = null;
   /** Projects' fingerprints, by path, once read (see projectHashNow). */
   private readonly projectHashes = new Map<string, string | null>();
   /** Models reported by Claude Code, cached so a new chat can list them before its session starts. */
@@ -879,13 +882,26 @@ export default class VaultClaudePlugin extends Plugin {
         else state.start = start;
         changed = true;
       }
-      for (const key of ['sent'] as const) {
-        const paths = state[key];
-        if (!paths?.some((path) => movedPath(path, from, to) !== undefined)) continue;
-        state[key] = paths.flatMap((path) => {
-          const moved = movedPath(path, from, to);
-          return moved === undefined ? [path] : moved === null ? [] : [moved];
+      // What went is kept by key: a project note's path, `parent:` and one, or `chat:` and an id (see ChatView.projectContext).
+      const follow = (key: string): string | null | undefined => {
+        const parent = key.startsWith('parent:');
+        const moved = movedPath(parent ? key.slice('parent:'.length) : key, from, to);
+        return moved === undefined || moved === null ? moved : parent ? `parent:${moved}` : moved;
+      };
+      if (state.sent?.some((key) => follow(key) !== undefined)) {
+        state.sent = state.sent.flatMap((key) => {
+          const moved = follow(key);
+          return moved === undefined ? [key] : moved === null ? [] : [moved];
         });
+        changed = true;
+      }
+      if (state.sentHash && Object.keys(state.sentHash).some((key) => follow(key) !== undefined)) {
+        state.sentHash = Object.fromEntries(
+          Object.entries(state.sentHash).flatMap(([key, hash]) => {
+            const moved = follow(key);
+            return moved === undefined ? [[key, hash]] : moved === null ? [] : [[moved, hash]];
+          }),
+        );
         changed = true;
       }
     }
@@ -1401,13 +1417,13 @@ export default class VaultClaudePlugin extends Plugin {
     return this.projectCache.filter((file) => this.app.vault.getAbstractFileByPath(file.path) === file);
   }
 
-  private isProjectNote(file: TFile): boolean {
+  isProjectNote(file: TFile): boolean {
     return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === PROJECT_TYPE;
   }
 
   /** A project note's list of chat ids added to it by hand (`added`). */
-  private projectChatIds(file: TFile, key: 'added'): string[] {
-    return idList(this.app.metadataCache.getFileCache(file)?.frontmatter?.[key]);
+  private projectAdded(file: TFile): string[] {
+    return idList(this.app.metadataCache.getFileCache(file)?.frontmatter?.added);
   }
 
   /** A project's folder, without slashes at its ends; empty when it has none (a note made by hand). */
@@ -1424,7 +1440,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Chat `id`'s home project and why it is (see homeOf); kept until projects, notes or the chat's choices change. */
   homeReason(id: string): { file: TFile; reason: HomeReason } | null {
     if (!this.homeCache.has(id)) {
-      const projects = this.projectNotes().map((file) => ({ key: file.path, folder: this.projectFolder(file), added: this.projectChatIds(file, 'added') }));
+      const projects = this.projectNotes().map((file) => ({ key: file.path, folder: this.projectFolder(file), added: this.projectAdded(file) }));
       const state = this.projectState(id);
       this.homeCache.set(id, homeOf(id, { notes: withoutHubs(this.weightedNotes().get(id), this.hubNotes()), start: state.start, declined: state.declined }, projects));
     }
@@ -1662,7 +1678,18 @@ export default class VaultClaudePlugin extends Plugin {
       if (this.connections === window) this.connections = null;
     });
     this.connections = window;
+    this.connectionsView = view;
+    this.connectionsChat = id;
     window.open();
+  }
+
+  /**
+   * Panel `view` shows another chat: a Connections window open for it is drawn again for that chat, so
+   * that its tabs, which act for the chat on screen, all show the one they act for.
+   */
+  chatShown(view: ChatView): void {
+    if (!this.connections || this.connectionsView !== view || view.currentChatId() === this.connectionsChat) return;
+    void this.openConnections(view, 'chat');
   }
 
   /**
@@ -1680,7 +1707,9 @@ export default class VaultClaudePlugin extends Plugin {
     const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
     const listed = new Set((this.lastListing ?? []).filter((item) => !item.scratch).map((item) => item.id));
     const weighted = new Map([...this.weightedNotes()].filter(([other]) => other === id || listed.has(other)));
-    const map = chatMap(id, weighted, this.linkedChats(id).filter((other) => listed.has(other)), recent, all, this.hubNotes());
+    const to = (this.chatLinks[id] ?? []).filter((other) => listed.has(other));
+    const from = this.linkedChats(id).filter((other) => listed.has(other) && !to.includes(other));
+    const map = chatMap(id, weighted, to, recent, all, this.hubNotes(), from);
     const home = this.homeProject(id);
     return {
       // Links and mentions act for the chat on screen, wherever the map is centred.
@@ -1730,8 +1759,7 @@ export default class VaultClaudePlugin extends Plugin {
         return null;
       })(),
       folderSuggestion: home ? null : this.folderSuggestionFor(id),
-      declined: this.projectState(id).declined === true,
-      makeProject: (folder, created) => void this.openCreateProject({ folder, chatId: this.homeProject(baseline) ? null : baseline, created }),
+      makeProject: (folder, created) => void this.openCreateProject({ folder, chatId: baseline, created }),
     };
   }
 
@@ -1838,6 +1866,12 @@ export default class VaultClaudePlugin extends Plugin {
     void this.saveSettings();
   }
 
+  /** Records that context `paths` (see ChatView.projectContext), with their fingerprints, went with chat `id`. */
+  markContextSent(id: string, paths: string[], hashes: Record<string, string>): void {
+    const state = this.projectState(id);
+    this.setProjectState(id, { ...state, sent: [...new Set([...(state.sent ?? []), ...paths])], sentHash: { ...state.sentHash, ...hashes } });
+  }
+
   /**
    * Makes `file` chat `id`'s project, added by hand; null takes it out of its project, by hand, after
    * which its notes do not give it one. A chat has at most one project.
@@ -1845,20 +1879,19 @@ export default class VaultClaudePlugin extends Plugin {
   async setHomeProject(id: string, file: TFile | null): Promise<void> {
     for (const project of this.projectNotes()) {
       const isHome = project === file;
-      const listed = this.projectChatIds(project, 'added').includes(id);
-      const stale = this.app.metadataCache.getFileCache(project)?.frontmatter?.connected_chats !== undefined;
-      if ((isHome ? listed : !listed) && !stale) continue;
+      const listed = this.projectAdded(project).includes(id);
+      if (isHome ? listed : !listed) continue;
       // From the frontmatter as written, which the index may not have caught up with.
       await this.app.fileManager.processFrontMatter(project, (front: Record<string, unknown>) => {
         const added = idList(front.added).filter((each) => each !== id);
         front.added = isHome ? [...added, id] : added;
-        // Connections between chats and other projects were dropped (2026-10-07); clear what is left of them.
-        delete front.connected_chats;
         front.updated = today();
       });
       await this.indexed(project);
     }
-    this.setProjectState(id, { ...this.projectState(id), declined: file === null });
+    // A new home's context (with its enclosing projects' Instructions) goes with the chat's next message, however it was chosen.
+    const state = this.projectState(id);
+    this.setProjectState(id, { ...state, declined: file === null, sent: file ? state.sent?.filter((key) => key !== file.path && !key.startsWith('parent:')) : state.sent });
     this.membershipChanged();
     this.projectsChanged();
   }
@@ -1903,7 +1936,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** A Markdown link that opens chat `id` (see chatLink), titled by it. */
-  private chatMarkdownLink(id: string): string {
+  chatMarkdownLink(id: string): string {
     return `[${this.chatTitleOf(id).replace(/[[\]]/g, '')}](${chatLink({ vault: this.app.vault.getName(), chat: id })})`;
   }
 
@@ -1954,25 +1987,14 @@ export default class VaultClaudePlugin extends Plugin {
    */
   async openCreateProject(options: { folder?: string; chatId?: string | null; created?: () => void } = {}): Promise<void> {
     await this.listChats().catch(() => []);
-    const notes = this.chatNotes();
-    const folders = this.app.vault
-      .getAllLoadedFiles()
-      .filter((each): each is TFolder => each instanceof TFolder && each.path !== '/' && !this.skipFolder(each.path))
-      .map((folder) => folder.path)
-      .sort();
-    const listed = (this.lastListing ?? []).filter((item) => !item.scratch);
-    const suggestion = options.chatId ? suggestFolder(notes.get(options.chatId) ?? [], (folder) => this.skipFolder(folder)) : null;
     new CreateProjectModal(this.app, {
-      folders,
+      ...this.folderSource((this.lastListing ?? []).filter((item) => !item.scratch), this.chatNotes()),
       folder: options.folder,
-      suggestion: suggestion && !this.projectOfFolder(suggestion.folder) ? suggestion : null,
-      preview: (folder) => {
-        const chats = listed.filter((item) => [...(notes.get(item.id) ?? [])].some((path) => inFolder(path, folder)));
-        return { count: chats.length, latest: chats.length > 0 ? formatDate(Math.max(...chats.map((item) => item.updatedAt))) : '' };
-      },
-      projectOf: (folder) => this.projectOfFolder(folder)?.basename ?? null,
+      suggestion: options.chatId ? this.folderSuggestionFor(options.chatId) : null,
       create: async (name, folder) => {
-        const made = await this.createProject(name, folder, options.chatId ?? null);
+        // The chat it is made for joins it only when it has no project: one in another stays there.
+        const joining = options.chatId && !this.homeProject(options.chatId) ? options.chatId : null;
+        const made = await this.createProject(name, folder, joining);
         if (made) options.created?.();
         return made;
       },
@@ -2021,10 +2043,6 @@ export default class VaultClaudePlugin extends Plugin {
     return suggestion && !this.projectOfFolder(suggestion.folder) ? suggestion : null;
   }
 
-  /**
-   * Makes project note `name` for folder `folder` and opens it; `chatId`, a chat it is made for, which
-   * is added to it unless its notes put it there already. False when it could not be made.
-   */
   /** A project note's name as it is written: without the characters a note name cannot hold. */
   private cleanProjectName(name: string): string {
     return name.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -2038,6 +2056,10 @@ export default class VaultClaudePlugin extends Plugin {
     return taken ? `A note named “${clean}” exists already (${taken.path}): choose another name.` : null;
   }
 
+  /**
+   * Makes project note `name` for folder `folder` and opens it; `chatId`, a chat it is made for, which
+   * is added to it unless its notes put it there already. False when it could not be made.
+   */
   async createProject(name: string, folder: string, chatId: string | null): Promise<boolean> {
     const clean = this.cleanProjectName(name);
     const problem = this.projectNameProblem(name);
