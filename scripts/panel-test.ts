@@ -128,12 +128,11 @@ async function main(): Promise<void> {
     chatLinks: {} as Record<string, string[]>,
     chatSummaries: {} as Record<string, unknown>,
     linkChats: () => undefined,
-    connectedProjects: (_id: string): unknown[] => [],
     projectNotes: (): unknown[] => [],
     projectState: (_id: string) => ({}),
     setProjectState: () => undefined,
     setHomeProject: async () => undefined,
-    projectParts: async () => ({ instructions: '', guide: '' }),
+    projectParts: async () => ({ context: '', instructions: '' }),
     sideSessions: [] as string[],
     holdSideSession(id: string) {
       if (!this.sideSessions.includes(id)) this.sideSessions.push(id);

@@ -63,7 +63,7 @@ import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
 import type { ChatDraft, ChatProjectState } from './main';
 import { contextHash, linkedChatsBlock, projectContextBlock } from './projects';
-import { LinksModal } from './linksModal';
+import { LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
@@ -482,12 +482,7 @@ export class ChatView extends ItemView {
   private quoteTracking = false;
   /** What the chips above the input last showed, so an unchanged selection does not redraw them. */
   private contextKey = '';
-  /**
-   * A chat not started yet: its project as chosen (a project note's path; null, none), or undefined
-   * for the one its attached note's folder belongs to; and what it chose to send (see ChatProjectState).
-   * Both go to the plugin's record once the chat has an id.
-   */
-  private projectPick: string | null | undefined = undefined;
+  /** A chat not started yet: what it chose to send (see ChatProjectState), which goes to the plugin's record once it has an id. */
   private projectLocal: ChatProjectState = {};
   private noteChatsEl!: HTMLElement;
   private draftEl!: HTMLElement;
@@ -1336,7 +1331,6 @@ export class ChatView extends ItemView {
     this.growInput();
     const fresh = draft === undefined && isLocalDraft(key);
     this.attachedNote = draft?.note ?? (fresh && this.plugin.settings.attachActiveNote ? (this.activeNote()?.file.path ?? null) : null);
-    this.projectPick = undefined;
     this.projectLocal = {};
     this.updateContextChip();
   }
@@ -1513,15 +1507,10 @@ export class ChatView extends ItemView {
     return this.scratch ? null : this.chatId;
   }
 
-  /** The chat's home project: its own once started, else the one chosen or its attached note's (see projectPick); none for the scratch chat. */
+  /** The chat's home project: its own once started, else its attached note's; none for the scratch chat. */
   private homeProjectFile(): TFile | null {
     if (this.scratch) return null;
     if (this.chatId) return this.plugin.homeProject(this.chatId);
-    if (this.projectPick === null) return null;
-    if (this.projectPick !== undefined) {
-      const file = this.app.vault.getAbstractFileByPath(this.projectPick);
-      return file instanceof TFile ? file : null;
-    }
     return this.attachedNote ? this.plugin.projectForPath(this.attachedNote) : null;
   }
 
@@ -1553,7 +1542,8 @@ export class ChatView extends ItemView {
       if (!read.instructions) continue;
       parts.push({ name: parent.basename, note: parent.path, instructions: read.instructions, role: 'parent' });
       paths.push(key);
-      hashes[key] = contextHash(read);
+      // Only its Instructions go: a change to its Context alone sends nothing again.
+      hashes[key] = contextHash({ context: '', instructions: read.instructions });
     }
     if (home && !sent.has(home.path)) {
       const read = await this.plugin.projectParts(home);
@@ -1581,7 +1571,8 @@ export class ChatView extends ItemView {
     const was = state.sentHash?.[key];
     if (!(state.sent?.includes(key) ?? false) || was === undefined) return false;
     if (key.startsWith('chat:')) return this.chatStamp(key.slice('chat:'.length)) !== was;
-    const now = this.plugin.projectHashNow(key.replace(/^parent:/, ''));
+    const parent = key.startsWith('parent:');
+    const now = this.plugin.projectHashNow(parent ? key.slice('parent:'.length) : key, parent);
     return now !== null && now !== was;
   }
 
@@ -1616,9 +1607,10 @@ export class ChatView extends ItemView {
   }
 
   /** The chats this one links to whose digests are to go with it (see ChatProjectState.includeChats). */
-  private includedChats(text?: string): string[] {
+  /** `to`: its links, when read already (see linksTo). */
+  private includedChats(text?: string, to = this.linksTo(text)): string[] {
     const include = this.projectStateNow().includeChats ?? [];
-    return this.linksTo(text)
+    return to
       .map((link) => link.id)
       .filter((id) => include.includes(id));
   }
@@ -1648,8 +1640,8 @@ export class ChatView extends ItemView {
     if (file instanceof TFile) this.addToInput(`@[[${this.mentionTarget(file)}]] `, `“${file.basename}” mentioned`);
   }
 
-  /** The chat's links (see LinksModal), for the Chat tab of Connections: those it links to, each to include or not, and those linking to it. */
-  linksPane(): LinksModal {
+  /** The chat's links (see LinksList), drawn under the chat's map in Connections: those it links to, each to include or not, and those linking to it. */
+  linksPane(): LinksList {
     const titleOf = (id: string) => this.plugin.chatTitleOf(id);
     const when = (id: string) => {
       const item = this.plugin.listedChats()?.find((each) => each.id === id);
@@ -1659,7 +1651,7 @@ export class ChatView extends ItemView {
       this.setProjectStateNow(change({ ...this.projectStateNow() }));
       this.projectsChanged();
     };
-    return new LinksModal(this.app, {
+    return new LinksList(this.app, {
       rows: () => {
         const state = this.projectStateNow();
         return [
@@ -1709,7 +1701,7 @@ export class ChatView extends ItemView {
     const home = this.homeProjectFile();
     if (!home) return '';
     const reason = this.chatId ? this.plugin.homeReason(this.chatId)?.reason : null;
-    if (!this.chatId) return this.projectPick ? `Project “${home.basename}”, chosen by you.` : `Project “${home.basename}”: the attached note is in its folder.`;
+    if (!this.chatId) return `Project “${home.basename}”: the attached note is in its folder.`;
     if (!reason || reason.why === 'added') return `Project “${home.basename}”, chosen by you.`;
     if (reason.why === 'start') return `Project “${home.basename}”: it started with ${reason.note}, in its folder.`;
     return `Project “${home.basename}”: ${reason.count} of the notes it worked on are in its folder.`;
@@ -1745,7 +1737,8 @@ export class ChatView extends ItemView {
   /** What the links chip shows, to tell when it must be drawn again. */
   private linksChipKey(): string {
     const to = this.linksTo();
-    return JSON.stringify([to, this.linksFrom().length, this.includedChats(), this.includedChats().filter((id) => this.sentChanged(`chat:${id}`))]);
+    const included = this.includedChats(undefined, to);
+    return JSON.stringify([to, this.linksFrom().length, included, included.filter((id) => this.sentChanged(`chat:${id}`))]);
   }
 
   /** The links chip: how many chats this one is linked with (0 too, so linking one is a click away), marked when one included changed since it went. */
@@ -2258,11 +2251,13 @@ export class ChatView extends ItemView {
         if (tool.group) this.updateToolGroup(tool.group);
       }
     }
-    // Messages still queued, not yet in its file: shown again, in the turn running, marked as queued.
+    // Messages still queued: shown again, in the turn running, marked as queued; unless its file has
+    // them already (taken up mid-turn, see queuedTaken), drawn above under the id they were sent with.
     for (const [id, queued] of entry.queued) {
       const waiting = this.pending.get(id);
       if (!waiting || waiting.running) continue;
-      this.pending.set(id, { ...waiting, bubble: this.drawQueued(queued.text, queued.chips), text: queued.text, chips: queued.chips });
+      const drawn = Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).find((bubble) => bubble.dataset.uuid === id);
+      this.pending.set(id, { ...waiting, bubble: drawn ?? this.drawQueued(queued.text, queued.chips), text: queued.text, chips: queued.chips });
     }
     for (const approval of entry.approvals) this.renderApprovalCard(approval);
     this.currentModel = entry.currentModel;
@@ -3990,7 +3985,7 @@ export class ChatView extends ItemView {
       chip.toggleClass('is-updated', updated);
       chip.setAttr(
         'aria-label',
-        `${this.projectWhy()} ${updated ? 'Its Context or Instructions changed since they went with this chat: click to send them again.' : sent ? 'Its context went with this chat.' : 'Its Context goes with your next message.'} Click to see what goes.`,
+        `${this.projectWhy()} ${updated ? 'Its Context or Instructions changed since they went with this chat: Send its context again is in the Project menu.' : sent ? 'Its context went with this chat.' : 'Its Context goes with your next message.'} Click to see what goes.`,
       );
     } else if (this.offersProject()) {
       // One chip says there is none; a second offers the likeliest project in one click.
@@ -4900,21 +4895,16 @@ export class ChatView extends ItemView {
           this.forkOnResume = false;
           if (this.chatId !== message.session_id) {
             // What its projects sent and its choices, kept under its id (a fork keeps its original's); a
-            // new chat's project chosen by hand is recorded, and one from its attached note follows from it.
+            // new chat's project follows from its attached note.
             const started = this.chatId === null;
-            const picked = this.projectPick;
             const projectState: ChatProjectState = { ...this.projectStateNow() };
-            if (started && picked === null) projectState.declined = true;
-            else if (started && this.attachedNote) projectState.start = this.attachedNote;
+            if (started && this.attachedNote) projectState.start = this.attachedNote;
             this.chatId = message.session_id;
             if (this.scratch) this.plugin.setScratch(message.session_id);
             else {
               this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf);
               this.plugin.setProjectState(message.session_id, projectState);
-              const file = started && typeof picked === 'string' ? this.app.vault.getAbstractFileByPath(picked) : null;
-              if (file instanceof TFile) void this.plugin.setHomeProject(message.session_id, file);
             }
-            this.projectPick = undefined;
             this.projectLocal = {};
           }
           this.moveDraft(draftWas);

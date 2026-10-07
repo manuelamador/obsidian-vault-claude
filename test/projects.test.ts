@@ -12,9 +12,12 @@ test('a new project note has its folder, chats added by hand, its Context, empty
   assert.match(note, /folder: "Research\/Tariffs"/);
   assert.match(note, /added: \["a", "b"\]/);
   assert.deepEqual(projectParts(note), { context: '', instructions: '' });
-  const written = projectNoteMarkdown({ name: 'T', folder: 'F', added: [], date: '2026-10-07', context: 'About tariffs.' });
-  assert.match(written, /context_updated: 2026-10-07/);
-  assert.deepEqual(projectParts(written), { context: 'About tariffs.', instructions: '' });
+  // A Context with headings of its own: read whole, and set again whole.
+  const headed = withContext(note, readContext('## Summary\n\nAbout tariffs.\n\n## Data\n\nTables.'));
+  assert.equal(projectParts(headed).context, 'About tariffs.\n\n### Data\n\nTables.');
+  assert.equal(projectParts(withContext(headed, 'Short.')).context, 'Short.');
+  assert.equal(projectParts(withContext(note, 'A\n\n## B\n\nc')).context, 'A\n\n## B\n\nc');
+  assert.match(withContext(withContext(note, 'A\n\n## B\n\nc'), 'D'), /<!-- BEGIN GENERATED -->\nD\n<!-- END GENERATED -->\n\n## Instructions/);
 });
 
 test('the Context is set between its markers; a note without the section gets one', () => {

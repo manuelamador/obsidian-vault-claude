@@ -1,4 +1,4 @@
-// The links of a chat, in the Chat tab of Connections (see ChatView.linksPane): the chats it links
+// The links of a chat, under its map in Connections (see ChatView.linksPane): the chats it links
 // to, each of which may be included (its digest goes with the next message, once), and the chats that
 // link to it, which send it nothing. What would go is shown before it goes, with its size.
 import { FuzzySuggestModal, setIcon, type App } from 'obsidian';
@@ -59,7 +59,7 @@ export class ChatPicker extends FuzzySuggestModal<{ id: string; title: string }>
 }
 
 /** The chat's links, drawn under its map (see ConnectionsMap): its own dialogs (pickers) open above. */
-export class LinksModal {
+export class LinksList {
   private contentEl!: HTMLElement;
 
   private readonly running = new Set<AbortController>();

@@ -181,8 +181,8 @@ export default class VaultClaudePlugin extends Plugin {
   /** The panel and chat the Connections window was opened for (see chatShown). */
   private connectionsView: ChatView | null = null;
   private connectionsChat: string | null = null;
-  /** Projects' fingerprints, by path, once read (see projectHashNow). */
-  private readonly projectHashes = new Map<string, string | null>();
+  /** Projects' fingerprints, by path, once read (see projectHashNow): of Context and Instructions, and of Instructions alone. */
+  private readonly projectHashes = new Map<string, { all: string; instructions: string } | null>();
   /** Models reported by Claude Code, cached so a new chat can list them before its session starts. */
   models: ModelInfo[] = [];
   modelsFetchedAt = 0;
@@ -681,7 +681,8 @@ export default class VaultClaudePlugin extends Plugin {
       this.app.metadataCache.on('changed', (file) => {
         const isProject = this.isProjectNote(file);
         if (this.projectCache && isProject !== this.projectCache.includes(file)) this.projectCache = null;
-        if (isProject || this.projectCache === null) this.membershipChanged();
+        // A project's folder or added chats may have changed: only the chats' homes follow from those.
+        if (isProject || this.projectCache === null) this.homesChanged();
         if (isProject && this.projectHashes.has(file.path)) {
           this.projectHashes.delete(file.path);
           this.projectHashNow(file.path);
@@ -859,6 +860,13 @@ export default class VaultClaudePlugin extends Plugin {
    * it go; so do the panels, for what they hold by path (see ChatView.followNote).
    */
   noteMoved(from: string, to: string | null): void {
+    // A project note renamed or deleted: the projects are found again, and the chats' homes, which name them by path.
+    if (this.projectCache?.some((file) => file.path === from || file.path === to)) {
+      this.projectCache = null;
+      this.projectHashes.delete(from);
+      this.homesChanged();
+      this.projectsChanged();
+    }
     let changed = followNote(this.noteChats, from, to);
     changed = followNote(this.noteRefs, from, to) || changed;
     changed = followNote(this.noteMentions, from, to) || changed;
@@ -1452,18 +1460,20 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * A fingerprint of project `path`'s Context and Instructions (see contextHash); null until read, when
-   * the panels are told. Read again when the note changes.
+   * A fingerprint of project `path`'s Context and Instructions (see contextHash), or of its Instructions
+   * alone (what goes of an enclosing project); null until read, when the panels are told. Read again
+   * when the note changes.
    */
-  projectHashNow(path: string): string | null {
+  projectHashNow(path: string, instructionsOnly = false): string | null {
     const known = this.projectHashes.get(path);
-    if (known !== undefined) return known;
+    if (known) return instructionsOnly ? known.instructions : known.all;
+    if (known === null) return null;
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return null;
     this.projectHashes.set(path, null);
     void this.projectParts(file).then(
       (parts) => {
-        this.projectHashes.set(path, contextHash(parts));
+        this.projectHashes.set(path, { all: contextHash(parts), instructions: contextHash({ context: '', instructions: parts.instructions }) });
         this.projectsChanged();
       },
       (error: unknown) => log('reading a project failed', error),
@@ -1563,7 +1573,7 @@ export default class VaultClaudePlugin extends Plugin {
         if (on) this.linkChats(from, [id]);
         else this.unlinkChat(from, id);
         this.projectsChanged();
-        new Notice(on ? `Linked to “${this.chatTitleOf(id)}”: tick Include on the links chip to send what it found.` : `No longer linked to “${this.chatTitleOf(id)}”.`);
+        new Notice(on ? `Linked to “${this.chatTitleOf(id)}”: tick Include in the links under the chat's map to send what it found.` : `No longer linked to “${this.chatTitleOf(id)}”.`);
       },
       projectOfChat: (other: string) => this.homeProject(other)?.basename ?? null,
       rebuild: (done: () => void) => this.confirmRebuildConnections(done),
@@ -1575,7 +1585,7 @@ export default class VaultClaudePlugin extends Plugin {
     new ConfirmModal(
       this.app,
       'Rebuild connections',
-      "Reads every chat's session file again and rebuilds its links to notes: the notes it changed, was sent and linked to in its replies. Links you removed by hand stay removed, and every chat stays in the project it is in now.",
+      "Reads every chat's session file again and rebuilds its links to notes: the notes it changed, was sent and linked to in its replies. Links you removed by hand stay removed. Chats put in a project by hand stay in it; the others follow their notes, so some may move to another project.",
       'Rebuild',
       () =>
         void this.rebuildConnections().then((result) => {
@@ -1590,7 +1600,8 @@ export default class VaultClaudePlugin extends Plugin {
    * (its saved edits), was sent (its prompts' context blocks) and mentioned (the notes its replies
    * link to). The panel otherwise records them as it draws a chat, so chats never opened since, or
    * from before a kind of link was recorded, miss some. Links removed by hand stay removed; a chat
-   * whose file cannot be read keeps the links it had. Every chat stays in the project it was in.
+   * whose file cannot be read keeps the links it had. Chats added to a project by hand stay in it; the
+   * others' projects follow from their notes, as rebuilt.
    */
   async rebuildConnections(): Promise<{ chats: number; notes: number } | null> {
     const root = this.vaultRoot();
@@ -1599,7 +1610,6 @@ export default class VaultClaudePlugin extends Plugin {
     try {
       // Oldest first, each made the newest of its notes in turn: the most recent chat ends up first.
       const items = (await this.listChats()).filter((item) => !item.scratch).sort((a, b) => a.updatedAt - b.updatedAt);
-      const homes = new Map(items.map((item) => [item.id, this.homeProject(item.id)]));
       const found = new Map<string, { changed: string[]; sent: string[]; mentioned: string[] }>();
       await eachInParallel(items, async (item) => {
         try {
@@ -1640,8 +1650,6 @@ export default class VaultClaudePlugin extends Plugin {
       });
       [this.noteChats, this.noteRefs, this.noteMentions] = indexes;
       this.notesLinked();
-      // Every chat back in the project it was in, which its notes may now place elsewhere.
-      for (const [id, home] of homes) if (home && this.homeProject(id) !== home) await this.setHomeProject(id, home);
       this.projectsChanged();
       const notes = new Set(indexes.flatMap((index) => Object.keys(index))).size;
       return { chats: found.size, notes };
@@ -1677,6 +1685,8 @@ export default class VaultClaudePlugin extends Plugin {
   /** Panel `view` shows another chat: a Connections map open for it is drawn again for that chat, which its actions are for. */
   chatShown(view: ChatView): void {
     if (!this.connections || this.connectionsView !== view || view.currentChatId() === this.connectionsChat) return;
+    // A new chat, not started yet, has no map: the one open was for the chat before.
+    if (!view.currentChatId()) return void this.connections.close();
     void this.openConnections(view);
   }
 
@@ -1700,6 +1710,7 @@ export default class VaultClaudePlugin extends Plugin {
       ...map,
       hubs: this.hubNotes(),
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
+      ownProject: ((own) => (own ? { name: own.basename, path: own.path } : null))(id === baseline ? home : this.homeProject(baseline)),
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
       projectMap: async (path) => {
         const file = this.app.vault.getAbstractFileByPath(path);
@@ -1805,9 +1816,14 @@ export default class VaultClaudePlugin extends Plugin {
     return this.homeReason(id)?.file ?? null;
   }
 
-  /** What chats' homes are worked out from changed: they are worked out again when asked for. */
-  private membershipChanged(): void {
+  /** The projects changed (their notes, folders or added chats): the chats' homes are worked out again when asked for. */
+  private homesChanged(): void {
     this.homeCache.clear();
+  }
+
+  /** What chats' homes are worked out from changed, their notes too: they are worked out again when asked for. */
+  private membershipChanged(): void {
+    this.homesChanged();
     this.notesCache = null;
     this.weightsCache = null;
     this.hubsCache = null;
@@ -1884,7 +1900,7 @@ export default class VaultClaudePlugin extends Plugin {
     // A new home's context (with its enclosing projects' Instructions) goes with the chat's next message, however it was chosen.
     const state = this.projectState(id);
     this.setProjectState(id, { ...state, declined: file === null, sent: file ? state.sent?.filter((key) => key !== file.path && !key.startsWith('parent:')) : state.sent });
-    this.membershipChanged();
+    this.homesChanged();
     this.projectsChanged();
   }
 
@@ -2123,7 +2139,7 @@ export default class VaultClaudePlugin extends Plugin {
       front.updated = today();
     });
     await this.indexed(file);
-    this.membershipChanged();
+    this.homesChanged();
     this.projectsChanged();
     new Notice(`“${file.basename}” is now the project of ${folder}.`);
     return true;
@@ -2140,11 +2156,10 @@ export default class VaultClaudePlugin extends Plugin {
         if (name.trim() === file.basename) return;
         const problem = this.projectNameProblem(name);
         if (problem) return void new Notice(problem);
-        void this.app.fileManager.renameFile(file, `${file.parent?.path ?? this.projectsFolder()}/${this.cleanProjectName(name)}.md`).then(() => {
-          this.projectCache = null;
-          this.membershipChanged();
-          this.projectsChanged();
-          done();
+        const folder = file.parent && !file.parent.isRoot() ? file.parent.path : '';
+        void this.app.fileManager.renameFile(file, `${folder ? `${folder}/` : ''}${this.cleanProjectName(name)}.md`).then(done, (error: unknown) => {
+          log('renaming a project failed', error);
+          new Notice(`The project was not renamed: ${errorText(error)}.`);
         });
       },
       'Rename project',
@@ -2163,9 +2178,6 @@ export default class VaultClaudePlugin extends Plugin {
       'Delete',
       () =>
         void this.app.fileManager.trashFile(file).then(() => {
-          this.projectCache = null;
-          this.membershipChanged();
-          this.projectsChanged();
           new Notice(`Project “${file.basename}” deleted: its note is in the trash.`);
           done();
         }),
@@ -2204,6 +2216,10 @@ export default class VaultClaudePlugin extends Plugin {
       write: (signal) => this.writeProjectContext(file, signal),
       save: async (context) => {
         await this.saveProjectContext(file, context);
+        // Its chats get it again, whether or not it went before.
+        for (const [id, state] of Object.entries(this.chatProjects)) {
+          if (state.sent?.includes(file.path)) this.setProjectState(id, { ...state, sent: state.sent.filter((key) => key !== file.path) });
+        }
         new Notice(`The context of “${file.basename}” is updated: it goes with the next message of each of its chats.`);
         saved?.();
       },

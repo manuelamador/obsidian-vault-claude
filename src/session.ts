@@ -413,10 +413,11 @@ export class ClaudeSession {
           UserPromptSubmit: [
             {
               hooks: [
-                async () => {
+                async (input) => {
                   const context = this.pendingContext.splice(0);
                   if (context.length === 0) return {};
-                  for (const each of context) each.delivered(this.sessionId);
+                  // The hook's own session id: a new chat's is not known to the panel yet.
+                  for (const each of context) each.delivered(input.session_id || this.sessionId);
                   return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: context.map((each) => each.text).join('\n\n') } };
                 },
               ],

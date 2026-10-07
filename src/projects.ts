@@ -23,15 +23,14 @@ function yamlList(values: string[]): string {
 /** The placeholder a new project's Instructions hold, left out of what is sent. */
 const INSTRUCTIONS_PLACEHOLDER = 'Optional: anything every chat in this project should follow. Left empty, nothing is sent from here.';
 
-/** A new project note: its folder, the chats added to it by hand, its Context (as written, or empty), empty Instructions, and the generated lists. */
-export function projectNoteMarkdown(project: { name: string; folder: string; added: string[]; date: string; context?: string }): string {
+/** A new project note: its folder, the chats added to it by hand, an empty Context (written once it is made), empty Instructions, and the generated lists. */
+export function projectNoteMarkdown(project: { name: string; folder: string; added: string[]; date: string }): string {
   return [
     '---',
     `type: ${PROJECT_TYPE}`,
     'tags: [project]',
     `folder: ${JSON.stringify(project.folder)}`,
     `added: ${yamlList(project.added)}`,
-    ...(project.context ? [`context_updated: ${project.date}`] : []),
     `updated: ${project.date}`,
     '---',
     '',
@@ -40,7 +39,6 @@ export function projectNoteMarkdown(project: { name: string; folder: string; add
     '## Context',
     '',
     BEGIN,
-    ...(project.context ? [project.context.trim()] : []),
     END,
     '',
     '## Instructions',
@@ -114,10 +112,11 @@ export function withGenerated(note: string, heading: string, body: string): stri
   if (!start) return note;
   const from = note.indexOf(BEGIN, start.index);
   const to = from === -1 ? -1 : note.indexOf(END, from);
-  // Only the markers of this section: none before the next section's heading.
+  // Only the markers of this section: its BEGIN before the next section's heading; its END the first
+  // after, past any headings of the text between them (a Context may have some).
   const next = /^## /m.exec(note.slice(start.index + start[0].length));
   const limit = next ? start.index + start[0].length + next.index : note.length;
-  if (from === -1 || to === -1 || to > limit) return note;
+  if (from === -1 || to === -1 || from > limit) return note;
   return `${note.slice(0, from + BEGIN.length)}\n${body.trim()}\n${note.slice(to)}`;
 }
 
@@ -126,9 +125,19 @@ export function withGenerated(note: string, heading: string, body: string): stri
  * in a note edited by hand) and its Instructions (their placeholder left out).
  */
 export function projectParts(note: string): { context: string; instructions: string } {
-  const context = memoSection(note, 'Context').replace(BEGIN, '').replace(END, '').trim();
   const instructions = memoSection(note, 'Instructions').replace(INSTRUCTIONS_PLACEHOLDER, '').trim();
-  return { context, instructions };
+  return { context: generatedText(note, 'Context') ?? memoSection(note, 'Context').trim(), instructions };
+}
+
+/** The text between section `heading`'s markers, headings in it included (see withGenerated); null when it has none. */
+function generatedText(note: string, heading: string): string | null {
+  const start = new RegExp(`^## ${heading}[ \\t]*$`, 'm').exec(note);
+  if (!start) return null;
+  const from = note.indexOf(BEGIN, start.index);
+  const to = from === -1 ? -1 : note.indexOf(END, from);
+  const next = /^## /m.exec(note.slice(start.index + start[0].length));
+  if (from === -1 || to === -1 || (next && from > start.index + start[0].length + next.index)) return null;
+  return note.slice(from + BEGIN.length, to).trim();
 }
 
 /** `note` with its Context set to `context`: between the section's markers, the section (and its markers) made when the note has none. */
@@ -236,5 +245,7 @@ export function readContext(reply: string): string {
     .trim()
     .replace(/^```(?:markdown)?\n([\s\S]*?)\n```$/, '$1')
     .replace(/^#{1,3} .*\n+/, '')
-    .trim();
+    .trim()
+    // Headings in it kept below the note's own sections (`##`), so that they do not end its Context.
+    .replace(/^#{1,2} /gm, '### ');
 }

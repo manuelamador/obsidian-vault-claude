@@ -10,7 +10,7 @@ import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type 
 
 const SVG = 'http://www.w3.org/2000/svg';
 /** What Link does, said where it is offered. */
-const LINK_TIP = 'Link: connects the two chats so you can jump between them; both show it. Nothing is sent unless you tick Include on the links chip, which sends a short digest of it once.';
+const LINK_TIP = 'Link: connects the two chats so you can jump between them; both show it. Nothing is sent unless you tick Include in the links under this chat’s map, which sends a short digest of it once.';
 /** What putting a chat in a project does, said where it is offered. A chat has at most one project. */
 const HOME_TIP = "This project's Context then goes with this chat's next message. A chat is in one project at most.";
 /** How a note is linked, by weight (see LINK_WEIGHTS). */
@@ -60,8 +60,10 @@ export interface ChatMapHost extends MapActions {
   moreChats: number;
   /** The folders of all its notes, the busiest first. */
   folders: { folder: string; count: number }[];
-  /** The chat's home project: its name, folder and note. */
+  /** The home project of the chat the map is centred on: its name, folder and note. */
   project: { name: string; folder: string; path: string } | null;
+  /** The home project of the chat on screen (`baseline`), which the map's actions put it in or take it out of. */
+  ownProject: { name: string; path: string } | null;
   /** Create project for `folder`; `created` runs once it is made. */
   makeProject(folder: string, created: () => void): void;
   openProjectNote(path: string): void;
@@ -74,7 +76,7 @@ export interface ChatMapHost extends MapActions {
   sendAgain(path: string): void;
   renameProject(path: string, done: () => void): void;
   deleteProject(path: string, done: () => void): void;
-  /** The chat's links, drawn into `el` (see LinksModal), under the map of the chat on screen; the function returned stops what they still run (a summary). */
+  /** The chat's links, drawn into `el` (see LinksList), under the map of the chat on screen; the function returned stops what they still run (a summary). */
   drawLinks(el: HTMLElement): () => void;
   search(query: string): SearchHit[];
   /** Makes project `path` the chat's home (null: takes it out). */
@@ -630,7 +632,7 @@ export class ConnectionsMap extends Modal {
     if (this.project?.path !== path) add('Show the project', 'locate-fixed', () => void this.moveToProject(path));
     add('Open project note', 'file-text', () => host.openProjectNote(path));
     add('Refresh context…', 'refresh-cw', () => host.refreshContext(path, () => void this.redraw()));
-    if (host.project?.path === path) add('Send its context again', 'send', () => host.sendAgain(path));
+    if (host.ownProject?.path === path) add('Send its context again', 'send', () => host.sendAgain(path));
     add('Change folder…', 'folder-input', () => host.changeFolder(path, () => void this.redraw()));
     add('Rename…', 'pencil', () => host.renameProject(path, () => void this.redraw()));
     menu.addSeparator();
@@ -742,8 +744,8 @@ export class ConnectionsMap extends Modal {
           act(buttons, 'Open', () => host.openChat(hit.key));
         } else if (hit.kind === 'project') {
           act(buttons, 'Show', () => void this.moveToProject(hit.key)).setAttr('aria-label', 'Centre the map on the project');
-          if (hit.key !== host.project?.path) {
-            act(buttons, host.project ? 'Move chat here' : 'Put chat here', () => void host.setHome(hit.key).then(() => this.redraw()), true).setAttr('aria-label', HOME_TIP);
+          if (hit.key !== host.ownProject?.path) {
+            act(buttons, host.ownProject ? 'Move chat here' : 'Put chat here', () => void host.setHome(hit.key).then(() => this.redraw()), true).setAttr('aria-label', HOME_TIP);
           }
           act(buttons, 'Open note', () => host.openProjectNote(hit.key));
         } else {
@@ -765,11 +767,11 @@ export class ConnectionsMap extends Modal {
     const project = host.projectHolding(folder);
     if (project && project.folder !== folder) return [];
     const show = (path: string) => ({ label: 'Show the project', run: () => void this.moveToProject(path) });
-    if (project && project.path === host.project?.path) return [show(project.path), { label: 'Open project note', run: () => host.openProjectNote(project.path) }];
+    if (project && project.path === host.ownProject?.path) return [show(project.path), { label: 'Open project note', run: () => host.openProjectNote(project.path) }];
     if (project)
       return [
         show(project.path),
-        { label: host.project ? 'Move chat here' : 'Put chat here', tip: HOME_TIP, run: () => void host.setHome(project.path).then(() => this.redraw()) },
+        { label: host.ownProject ? 'Move chat here' : 'Put chat here', tip: HOME_TIP, run: () => void host.setHome(project.path).then(() => this.redraw()) },
         { label: 'Open project note', run: () => host.openProjectNote(project.path) },
       ];
     if (!folder) return [];
@@ -801,8 +803,8 @@ export class ConnectionsMap extends Modal {
     menuButton.appendText('Project');
     setIcon(menuButton.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
     menuButton.addEventListener('click', (evt) => this.projectMenu(host.path, evt));
-    const own = this.host.project?.path === host.path;
-    const chatAction = bar.createEl('button', { cls: `vc-map-action${own ? '' : ' mod-cta'}`, text: own ? 'Take chat out' : this.host.project ? 'Move chat here' : 'Put chat here' });
+    const own = this.host.ownProject?.path === host.path;
+    const chatAction = bar.createEl('button', { cls: `vc-map-action${own ? '' : ' mod-cta'}`, text: own ? 'Take chat out' : this.host.ownProject ? 'Move chat here' : 'Put chat here' });
     if (!own) chatAction.setAttr('aria-label', HOME_TIP);
     chatAction.addEventListener('click', () => void this.host.setHome(own ? null : host.path).then(async () => {
       this.host = await this.host.reload(this.host.all);
@@ -818,20 +820,21 @@ export class ConnectionsMap extends Modal {
     // Many chats and notes make many lines: faint until a chat or note is pointed at.
     drawing.root.addClass('is-quiet');
     // Grouped by the folder within the project; notes outside it by their own folder.
-    // Notes at the top of the vault: a group of their own, not the project folder's ('').
+    // Folders outside it keyed by their path after a slash, so that none is taken for a subfolder of
+    // the same name; notes at the top of the vault, a group of their own ('/'), not the project folder's ('').
     const TOP = '/';
     const within = (path: string) => {
       const folder = folderOf(path);
       if (folder === host.folder) return '';
       if (folder.startsWith(`${host.folder}/`)) return folder.slice(host.folder.length + 1);
-      return folder || TOP;
+      return `/${folder}`;
     };
     const inside = (path: string) => folderOf(path) === host.folder || folderOf(path).startsWith(`${host.folder}/`);
     const { angles, arcs, spans } = ringLayout(host.notes, within, 0.8, (path) => (inside(path) ? '' : null));
     drawArcs(drawing, ring, arcs, spans, (sub, outer) => ({
-      text: shortLabel(sub === TOP ? 'Top of the vault' : sub || `◆ ${host.folder.slice(host.folder.lastIndexOf('/') + 1)}`, 22),
+      text: shortLabel(sub === TOP ? 'Top of the vault' : sub.startsWith('/') ? sub.slice(1) : sub || `◆ ${host.folder.slice(host.folder.lastIndexOf('/') + 1)}`, 22),
       // The project's own band (sub '') names its folder; its subfolders, their path; folders outside it, theirs.
-      tip: sub === '' ? host.folder : sub === TOP ? 'Top of the vault' : outer === null ? sub : `${host.folder}/${sub}`,
+      tip: sub === '' ? host.folder : sub === TOP ? 'Top of the vault' : sub.startsWith('/') ? sub.slice(1) : `${host.folder}/${sub}`,
       cls: outer === '' || sub === '' ? 'is-home' : 'is-plain',
     }));
     // The chats on a small ring round the project, wider when there are many.
