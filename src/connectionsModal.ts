@@ -60,6 +60,8 @@ export interface ChatMapHost extends MapActions {
   /** Create project for `folder`; `created` runs once it is made. */
   makeProject(folder: string, created: () => void): void;
   openProjectNote(path: string): void;
+  /** Chooses another folder for project `path`; `changed` runs once it is set. */
+  changeFolder(path: string, changed: () => void): void;
   search(query: string): SearchHit[];
   /** Makes project `path` the chat's home (null: takes it out). */
   setHome(path: string | null): Promise<void>;
@@ -387,7 +389,7 @@ export class ChatMapModal extends Modal {
   }
 
   /**
-   * The chat's project, at the top: its name, its note, Move… (to the search) and Take chat out; or,
+   * The chat's project, at the top: its name, its note, Change folder…, Move… (to the search) and Take chat out; or,
    * with none, the project holding most of its notes, the project of a chat it is linked with and the
    * folder its notes suggest, each in one click.
    */
@@ -403,6 +405,7 @@ export class ChatMapModal extends Modal {
       const { project } = host;
       bar.createSpan({ cls: 'vc-map-bar-name', text: `In “${project.name}”` });
       act('Open note', () => host.openProjectNote(project.path));
+      act('Change folder…', () => host.changeFolder(project.path, () => void this.redraw()));
       act('Move…', () => this.focusSearch());
       act('Take chat out', () => void host.setHome(null).then(() => this.redraw()));
       return;

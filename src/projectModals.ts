@@ -82,7 +82,7 @@ export interface CreateProjectHost extends FolderSource {
 }
 
 /** What a folder browser needs: the vault's folders, which are projects, and how many chats worked in each. */
-interface FolderSource {
+export interface FolderSource {
   folders: string[];
   projectOf(folder: string): string | null;
   preview(folder: string): { count: number; latest: string };
@@ -569,7 +569,7 @@ export class ManageProjectsModal extends Modal {
 }
 
 /** Chooses a new folder for project `name`, in the folder browser, starting at its folder now. */
-class ChooseFolderModal extends Modal {
+export class ChooseFolderModal extends Modal {
   constructor(
     app: App,
     private readonly source: FolderSource,

@@ -16,7 +16,7 @@ import { PickUpModal, type ChatDetails } from './pickUpModal';
 import { renderSafely } from './safeRender';
 import { inFolder, notesByChat, suggestFolder, weightedNotes, type FolderSuggestion } from './chatFolders';
 import { GUIDE_SYSTEM, PROJECT_TYPE, contextHash, homeOf, chatDigest, chatEdits, guideLine, guidePrompt, projectNoteMarkdown, projectParts, readGuideProposals, withGenerated, withGuideLines, type GuideProposal, type HomeReason } from './projects';
-import { CreateProjectModal, GuideModal, ManageProjectsModal, ProjectPicker, type ProjectRef } from './projectModals';
+import { ChooseFolderModal, CreateProjectModal, GuideModal, ManageProjectsModal, ProjectPicker, type FolderSource, type ProjectRef } from './projectModals';
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
 import { chatMap, projectMap } from './connections';
@@ -1586,6 +1586,14 @@ export default class VaultClaudePlugin extends Plugin {
       ...map,
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
+      changeFolder: (path, changed) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) return;
+        const source = this.folderSource((this.lastListing ?? []).filter((item) => !item.scratch), this.chatNotes());
+        new ChooseFolderModal(this.app, source, this.projectFolder(file), file.basename, (folder) => {
+          void this.setProjectFolder(file, folder).then(changed);
+        }).open();
+      },
       search: (query) => this.mapSearch(query, id),
       setHome: async (path) => {
         const file = path === null ? null : this.app.vault.getAbstractFileByPath(path);
@@ -1931,16 +1939,9 @@ export default class VaultClaudePlugin extends Plugin {
     }
   }
 
-  /** Manage projects (see ManageProjectsModal): every project, with its folder, chats and Guide, and what can be done to it. */
-  async openManageProjects(): Promise<void> {
-    await this.listChats().catch(() => []);
-    const notes = this.chatNotes();
-    const listed = (this.lastListing ?? []).filter((item) => !item.scratch);
-    const fileAt = (path: string) => {
-      const file = this.app.vault.getAbstractFileByPath(path);
-      return file instanceof TFile ? file : null;
-    };
-    new ManageProjectsModal(this.app, {
+  /** The vault's folders, as the folder browser offers them: which are projects, and the chats working in each. */
+  private folderSource(listed: HistoryItem[], notes: Map<string, Set<string>>): FolderSource {
+    return {
       folders: this.app.vault
         .getAllLoadedFiles()
         .filter((each): each is TFolder => each instanceof TFolder && each.path !== '/' && !this.skipFolder(each.path))
@@ -1951,6 +1952,33 @@ export default class VaultClaudePlugin extends Plugin {
         const chats = listed.filter((item) => [...(notes.get(item.id) ?? [])].some((path) => inFolder(path, folder)));
         return { count: chats.length, latest: chats.length > 0 ? formatDate(Math.max(...chats.map((item) => item.updatedAt))) : '' };
       },
+    };
+  }
+
+  /** Makes `folder` project `file`'s folder. */
+  private async setProjectFolder(file: TFile, folder: string): Promise<boolean> {
+    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
+      front.folder = folder;
+      front.updated = today();
+    });
+    await this.indexed(file);
+    this.membershipChanged();
+    this.projectsChanged();
+    new Notice(`“${file.basename}” is now the project of ${folder}.`);
+    return true;
+  }
+
+  /** Manage projects (see ManageProjectsModal): every project, with its folder, chats and Guide, and what can be done to it. */
+  async openManageProjects(): Promise<void> {
+    await this.listChats().catch(() => []);
+    const notes = this.chatNotes();
+    const listed = (this.lastListing ?? []).filter((item) => !item.scratch);
+    const fileAt = (path: string) => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      return file instanceof TFile ? file : null;
+    };
+    new ManageProjectsModal(this.app, {
+      ...this.folderSource(listed, notes),
       projects: () =>
         this.projectNotes()
           .map((file) => ({
@@ -1972,16 +2000,7 @@ export default class VaultClaudePlugin extends Plugin {
       },
       setFolder: async (path, folder) => {
         const file = fileAt(path);
-        if (!file) return false;
-        await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
-          front.folder = folder;
-          front.updated = today();
-        });
-        await this.indexed(file);
-        this.membershipChanged();
-        this.projectsChanged();
-        new Notice(`“${file.basename}” is now the project of ${folder}.`);
-        return true;
+        return file ? this.setProjectFolder(file, folder) : false;
       },
       rename: async (path, name) => {
         const file = fileAt(path);
