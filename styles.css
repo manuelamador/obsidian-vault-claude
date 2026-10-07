@@ -3097,3 +3097,8 @@ body:has(.vc-map-modal) .popover.hover-popover {
   font-weight: var(--font-semibold);
   font-size: 12px;
 }
+
+/* The chats about the note in front: a way to another chat, marked as one (the arrows go back). */
+.vc-note-chats-offer::before {
+  content: '← ';
+}

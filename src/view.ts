@@ -958,7 +958,7 @@ export class ChatView extends ItemView {
     this.renderWelcome();
 
     const footer = root.createDiv({ cls: 'vc-footer' });
-    this.noteChatsEl = footer.createDiv({ cls: 'vc-note-chats' });
+    this.noteChatsEl = footer.createDiv({ cls: 'vc-note-chats vc-note-chats-offer' });
     this.noteChatsEl.hide();
     this.registerDomEvent(this.noteChatsEl, 'click', (evt) => this.openNoteChats(evt));
     this.contextRow = footer.createDiv({ cls: 'vc-context-row' });
