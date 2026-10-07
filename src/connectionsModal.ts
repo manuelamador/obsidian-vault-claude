@@ -1,5 +1,5 @@
 // The Connections map, drawn (see connections.ts): one window, centred on a chat (its notes and the
-// chats that share them) or on a project (its chats and their notes), with a trail back. Plain SVG. Notes are squares with a page glyph,
+// chats that share them) or on a project (its chats and their notes), with back and forward arrows. Plain SVG. Notes are squares with a page glyph,
 // chats circles with a speech bubble, folders arcs behind their notes. A note opens in a new tab on a
 // click and shows Obsidian's page preview on ⌘-hover; a chat offers to open, mention, link or unlink
 // it; a folder's arc offers its project, or to make it one. The map stays open through all of these,
@@ -433,18 +433,19 @@ type Place = { kind: 'chat' | 'project'; key: string; title: string };
  * marked by how it is linked; the chats sharing them, or linked with it, outside; above, the project
  * bar and the search (its own map only), below, its links. Centred on a project: the project in the
  * middle, its chats round it, their notes outside. A chat or project on the map can be centred on, and
- * the trail leads back; links, mentions and the project bar act for the chat on screen throughout.
+ * the arrows go back and forward, ◎ back to the chat on screen; links, mentions and the project bar act for it throughout.
  */
 export class ConnectionsMap extends Modal {
   /** The map centred on a project, when it is (see moveToProject). */
   private project: ProjectMapHost | null = null;
-  /** The places the map was centred on before, to go back to (the first: the chat on screen). */
-  private trail: Place[] = [];
+  /** The places the map was centred on, in order, the first the chat on screen; `at`, the one shown (see go). */
+  private places: Place[] = [];
+  private at = 0;
 
   constructor(
     app: App,
     private host: ChatMapHost,
-    /** A project to start centred on (the project chip's), its trail starting at the chat. */
+    /** A project to start centred on (the project chip's), Back going to the chat. */
     private readonly startAt: string | null = null,
   ) {
     super(app);
@@ -453,6 +454,7 @@ export class ConnectionsMap extends Modal {
   onOpen(): void {
     this.modalEl.addClass('vc-map-modal');
     this.setTitle(`Connections: ${shortLabel(this.host.baseline.title, 60)}`);
+    this.places = [this.here()];
     if (this.startAt) void this.moveToProject(this.startAt);
     else this.draw();
   }
@@ -471,48 +473,86 @@ export class ConnectionsMap extends Modal {
     return { kind: 'chat', key: this.host.centre, title: this.host.centre === this.host.baseline.id ? this.host.baseline.title : this.host.title };
   }
 
-  /** Centres the map on chat `id`, the place shown before going on the trail. */
+  /** Centres the map on chat `id`: a new place after the one shown, those forward of it dropped. */
   private async moveTo(id: string): Promise<void> {
-    this.trail.push(this.here());
-    this.project = null;
-    this.host = await this.host.recentre(id);
-    this.contentEl.empty();
-    this.draw();
+    await this.show({ kind: 'chat', key: id, title: '' });
+    this.visit();
   }
 
-  /** Centres the map on project `path`, the place shown before going on the trail. */
+  /** Centres the map on project `path`, as moveTo does a chat. */
   private async moveToProject(path: string): Promise<void> {
-    this.trail.push(this.here());
-    this.project = await this.host.projectMap(path);
-    this.contentEl.empty();
-    this.draw();
+    await this.show({ kind: 'project', key: path, title: '' });
+    this.visit();
   }
 
-  /** Back along the trail to its `index`th place (0: the chat on screen). */
-  private async back(index: number): Promise<void> {
-    const target = this.trail[index];
-    this.trail = this.trail.slice(0, index);
-    if (target.kind === 'project') this.project = await this.host.projectMap(target.key);
-    else {
-      this.project = null;
-      this.host = await this.host.recentre(target.key);
+  /** Records the place now shown after the one before, dropping those forward of it, and draws it. */
+  private visit(): void {
+    const here = this.here();
+    const last = this.places[this.at];
+    if (last?.kind !== here.kind || last.key !== here.key) {
+      this.places = [...this.places.slice(0, this.at + 1), here];
+      this.at = this.places.length - 1;
     }
     this.contentEl.empty();
     this.draw();
   }
 
-  /** Away from the chat on screen's own map: where the map is, the way back, and that links and mentions still act for the chat on screen. */
-  private drawTrail(): void {
+  /** Reads place `place`'s map, to be drawn. */
+  private async show(place: Place): Promise<void> {
+    if (place.kind === 'project') this.project = await this.host.projectMap(place.key);
+    else {
+      this.project = null;
+      this.host = await this.host.recentre(place.key);
+    }
+  }
+
+  /** Drops place `key` (a project deleted or renamed, a chat gone) from those visited. */
+  private forget(key: string): void {
+    const before = this.places.slice(0, this.at + 1).filter((place) => place.key !== key).length;
+    this.places = this.places.filter((place, i) => i === 0 || place.key !== key);
+    this.at = Math.max(0, Math.min(before - 1, this.places.length - 1));
+  }
+
+  /** Goes to the `index`th place visited, keeping the others (Back and Forward); one that cannot be shown any more is dropped. */
+  private async go(index: number): Promise<void> {
+    const place = this.places[index];
+    if (!place) return;
+    try {
+      await this.show(place);
+    } catch {
+      this.forget(place.key);
+      return this.go(Math.min(index, this.places.length - 1));
+    }
+    this.at = index;
+    this.contentEl.empty();
+    this.draw();
+  }
+
+  /** Back to the chat on screen's own map, as a new place (Back returns to where the map was). */
+  private home(): void {
+    void this.moveTo(this.host.baseline.id);
+  }
+
+  /**
+   * Back, Forward and ◎ (the chat on screen), with where the map is; away from the chat on screen's
+   * own map, that links and mentions still act for it. Not drawn on its own map with nowhere to go.
+   */
+  private drawNav(): void {
     const { host, contentEl } = this;
+    const away = this.project !== null || host.centre !== host.baseline.id;
+    if (!away && this.places.length < 2) return;
     const bar = contentEl.createDiv({ cls: 'vc-map-bar vc-map-trail' });
-    setIcon(bar.createSpan({ cls: 'vc-project-group-icon' }), 'locate');
-    this.trail.forEach((step, i) => {
-      const crumb = bar.createEl('a', { text: shortLabel(step.title, 30) });
-      crumb.addEventListener('click', () => void this.back(i));
-      bar.appendText(' › ');
-    });
-    bar.createSpan({ cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 40) });
-    bar.createDiv({ cls: 'vc-project-size', text: `Links and mentions still act for “${shortLabel(host.baseline.title, 40)}”, the chat on screen.` });
+    const button = (icon: string, tip: string, enabled: boolean, run: () => void) => {
+      const el = bar.createSpan({ cls: `clickable-icon vc-map-nav${enabled ? '' : ' is-disabled'}`, attr: { 'aria-label': tip } });
+      setIcon(el, icon);
+      if (enabled) el.addEventListener('click', run);
+    };
+    const titled = (index: number) => shortLabel(this.places[index]?.title ?? '', 50);
+    button('arrow-left', this.at > 0 ? `Back to “${titled(this.at - 1)}”` : 'Back', this.at > 0, () => void this.go(this.at - 1));
+    button('arrow-right', this.at < this.places.length - 1 ? `Forward to “${titled(this.at + 1)}”` : 'Forward', this.at < this.places.length - 1, () => void this.go(this.at + 1));
+    button('locate', `To “${shortLabel(host.baseline.title, 50)}”, the chat on screen`, away, () => this.home());
+    bar.createSpan({ cls: 'vc-map-bar-name', text: shortLabel(this.here().title, 50) });
+    if (away) bar.createDiv({ cls: 'vc-project-size', text: `Links and mentions still act for “${shortLabel(host.baseline.title, 40)}”, the chat on screen.` });
   }
 
   /** Stops what the links drawn under the map still run (see ChatMapHost.drawLinks). */
@@ -528,7 +568,7 @@ export class ConnectionsMap extends Modal {
     const { host, contentEl } = this;
     // Centred on another chat: the way back in place of the project bar and search, which are the chat on screen's.
     const away = host.centre !== host.baseline.id;
-    if (away) this.drawTrail();
+    this.drawNav();
     if (host.notes.length === 0 && host.chats.length === 0) {
       if (away) {
         contentEl.createDiv({ cls: 'vc-project-empty', text: 'This chat has worked on no notes yet, and links to no chats.' });
@@ -631,9 +671,9 @@ export class ConnectionsMap extends Modal {
     menu.addSeparator();
     add('Delete project…', 'trash-2', () =>
       host.deleteProject(path, () => {
-        // Its map gone: back to the chat on screen's.
-        this.project = null;
-        void this.back(0).catch(() => this.redraw());
+        // Its map gone, and from the places to go back to: back to the chat on screen's.
+        this.forget(path);
+        void this.go(0);
       }),
     );
     menu.showAtMouseEvent(evt);
@@ -782,13 +822,13 @@ export class ConnectionsMap extends Modal {
   }
 
   /**
-   * Centred on project `host`: the trail back, the project's bar (its menu, and putting the chat on
+   * Centred on project `host`: Back and Forward (see drawNav), the project's bar (its menu, and putting the chat on
    * screen in it or taking it out), then its map: the project in the middle, its note previewed on
    * ⌘-hover and opened beside the panel on a click; its chats round it; their notes outside.
    */
   private drawProjectCentre(host: ProjectMapHost): void {
     const { contentEl } = this;
-    this.drawTrail();
+    this.drawNav();
     const bar = contentEl.createDiv({ cls: 'vc-map-bar' });
     setIcon(bar.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
     bar.createSpan({ cls: 'vc-map-bar-name', text: host.name });

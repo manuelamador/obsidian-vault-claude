@@ -3077,6 +3077,11 @@ body:has(.vc-map-modal) .popover.hover-popover {
   cursor: pointer;
 }
 
+.vc-map-nav.is-disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .vc-map-trail .vc-project-size {
   flex-basis: 100%;
 }
