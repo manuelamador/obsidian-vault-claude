@@ -2928,6 +2928,11 @@ body:has(.vc-map-modal) .popover.hover-popover {
   color: var(--text-normal);
 }
 
+.vc-links-chip.is-empty,
+.vc-links-chip.is-empty .vc-context-name {
+  color: var(--text-faint);
+}
+
 .vc-project-suggestion {
   border: 1px dashed var(--interactive-accent);
   color: var(--text-accent);

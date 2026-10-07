@@ -1755,18 +1755,19 @@ export class ChatView extends ItemView {
     return JSON.stringify([to, this.linksFrom().length, this.includedChats(), this.includedChats().filter((id) => this.sentChanged(`chat:${id}`))]);
   }
 
-  /** The links chip: how many chats this one is linked with, marked when one included changed since it went. */
+  /** The links chip: how many chats this one is linked with (0 too, so linking one is a click away), marked when one included changed since it went. */
   private drawLinksChip(): void {
+    if (this.scratch) return;
     const to = this.linksTo();
     const count = to.length + this.linksFrom().length;
-    if (count === 0) return;
     const included = this.includedChats();
-    const chip = this.contextRow.createDiv({ cls: 'vc-context-chip vc-links-chip' });
+    const chip = this.contextRow.createDiv({ cls: `vc-context-chip vc-links-chip${count === 0 ? ' is-empty' : ''}` });
     setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'link');
     chip.createSpan({ cls: 'vc-context-name', text: String(count) });
     const updated = included.some((id) => this.sentChanged(`chat:${id}`));
     if (updated) chip.createSpan({ cls: 'vc-project-updated', attr: { 'aria-hidden': 'true' } });
     const waiting = included.filter((id) => !(this.projectStateNow().sent ?? []).includes(`chat:${id}`)).length;
+    if (count === 0) return void chip.setAttr('aria-label', 'Linked with no chats. Click to link one.');
     chip.setAttr(
       'aria-label',
       `Linked with ${count} chat${count === 1 ? '' : 's'}${waiting > 0 ? `; ${waiting} included, to go with your next message` : ''}${updated ? '; an included chat changed since it went' : ''}. Click to see them.`,
