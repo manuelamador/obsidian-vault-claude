@@ -160,7 +160,22 @@ class MapDrawing {
     const centre = () => ({ x: this.view.x + this.view.w / 2, y: this.view.y + this.view.h / 2 });
     button('zoom-in', 'Zoom in', () => this.zoom(1 / 1.4, centre()));
     button('zoom-out', 'Zoom out', () => this.zoom(1.4, centre()));
-    button('maximize', 'Whole map', () => this.show({ ...this.whole }));
+    button('scan', 'Whole map', () => this.show({ ...this.whole }));
+    // Full screen: the dialog fills the window, until clicked again (or the dialog closes).
+    const modal = frame.closest('.modal');
+    if (modal) {
+      const full = controls.createEl('button', { cls: 'clickable-icon' });
+      const draw = () => {
+        const on = modal.hasClass('is-full');
+        setIcon(full, on ? 'minimize-2' : 'maximize-2');
+        full.setAttr('aria-label', on ? 'Leave full screen' : 'Full screen');
+      };
+      draw();
+      full.addEventListener('click', () => {
+        modal.toggleClass('is-full', !modal.hasClass('is-full'));
+        draw();
+      });
+    }
     this.root.addEventListener(
       'wheel',
       (evt) => {
