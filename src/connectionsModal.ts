@@ -343,8 +343,7 @@ export class ChatMapModal extends Modal {
     tooltip(centreNode, host.project ? `${host.title} · in “${host.project.name}”` : host.title);
     legend(contentEl, drawing.drawn, LEGEND);
     const more = [host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : '', host.moreChats > 0 ? `${host.moreChats} more chat${host.moreChats === 1 ? '' : 's'}` : ''].filter(Boolean);
-    if (more.length > 0) contentEl.createDiv({ cls: 'vc-project-empty', text: `Not shown: ${more.join(' and ')}. The folders below count every note.` });
-    this.drawFolders();
+    if (more.length > 0) contentEl.createDiv({ cls: 'vc-project-empty', text: `Not shown: ${more.join(' and ')}.` });
   }
 
   /**
@@ -479,51 +478,6 @@ export class ChatMapModal extends Modal {
     const menu = new Menu();
     for (const action of actions) menu.addItem((item) => item.setTitle(action.label).onClick(action.run));
     menu.showAtMouseEvent(evt);
-  }
-
-  /**
-   * The folders this chat worked in: each project first, with all its notes counted (its folders'
-   * too, listed indented under it, with nothing of their own to do), then the folders in no project,
-   * each with Make it a project; the busiest first.
-   */
-  private drawFolders(): void {
-    const { host, contentEl } = this;
-    if (host.folders.length === 0) return;
-    const box = contentEl.createDiv({ cls: 'vc-map-folders' });
-    box.createDiv({ cls: 'vc-map-folders-title', text: 'Folders this chat worked in' });
-    box.createDiv({ cls: 'vc-project-label', text: 'Make a folder a project to give its chats shared Instructions and a Guide. A project counts the notes in the folders inside it.' });
-    const projects = new Map<string, { project: { path: string; name: string; folder: string }; count: number; inside: { folder: string; count: number }[] }>();
-    const loose: { folder: string; count: number }[] = [];
-    for (const entry of host.folders) {
-      const project = host.projectHolding(entry.folder);
-      if (!project) {
-        loose.push(entry);
-        continue;
-      }
-      const group = projects.get(project.path) ?? { project, count: 0, inside: [] };
-      group.count += entry.count;
-      if (entry.folder !== project.folder) group.inside.push(entry);
-      projects.set(project.path, group);
-    }
-    const row = (parent: HTMLElement, icon: string, path: string, detail: string, actions: { label: string; tip?: string; run: () => void }[], cls = '') => {
-      const line = parent.createDiv({ cls: `vc-project-browser-row ${cls}` });
-      setIcon(line.createSpan({ cls: 'vc-project-group-icon' }), icon);
-      const text = line.createDiv({ cls: 'vc-project-chat-text' });
-      text.createDiv({ cls: 'vc-project-folder-path', text: path });
-      text.createDiv({ cls: 'vc-project-chat-when', text: detail });
-      for (const action of actions) {
-        const button = line.createEl('button', { cls: 'vc-map-action', text: action.label });
-        if (action.tip) button.setAttr('aria-label', action.tip);
-        button.addEventListener('click', action.run);
-      }
-    };
-    const notes = (n: number) => `${n} note${n === 1 ? '' : 's'}`;
-    for (const { project, count, inside } of [...projects.values()].sort((a, b) => b.count - a.count)) {
-      const home = project.path === host.project?.path;
-      row(box, 'folder-kanban', project.folder, `${notes(count)} · ${home ? `this chat's project, “${project.name}”` : `project “${project.name}”, not this chat's`}`, this.folderActions(project.folder), home ? 'is-home' : '');
-      for (const entry of inside.sort((a, b) => b.count - a.count)) row(box, 'folder', entry.folder.slice(project.folder.length + 1), `${notes(entry.count)} · in “${project.name}”`, [], 'vc-map-folder-inside');
-    }
-    for (const entry of loose) row(box, 'folder', entry.folder || 'Top of the vault', `${notes(entry.count)} · in no project`, this.folderActions(entry.folder));
   }
 
   onClose(): void {

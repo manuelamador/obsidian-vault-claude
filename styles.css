@@ -2902,10 +2902,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   background: var(--color-green);
 }
 
-.vc-map-folders {
-  margin-top: var(--size-4-2);
-}
-
 .vc-map-action {
   margin-left: auto;
   font-size: var(--font-ui-smaller);
@@ -3062,16 +3058,4 @@ body:has(.vc-map-modal) .popover.hover-popover {
   margin-right: auto;
 }
 
-.vc-map-folders-title {
-  font-weight: var(--font-semibold);
-}
-
-.vc-map-folders .vc-project-browser-row.is-home .vc-project-folder-path {
-  color: var(--text-accent);
-}
-
 /* A folder inside a project: listed under it, its notes counted toward it. */
-.vc-map-folder-inside {
-  padding-left: var(--size-4-8);
-  opacity: 0.85;
-}
