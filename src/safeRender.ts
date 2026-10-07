@@ -13,7 +13,7 @@ export interface DrawnLinks {
   /** Opens `linktext` (a link's target, or a vault path); `newTab` on ⌘-click. */
   open(linktext: string, newTab: boolean): void;
   /** Shows `linktext`'s preview, as hovering a link does. */
-  preview(linktext: string, event: MouseEvent, target: HTMLElement): void;
+  preview(linktext: string, event: MouseEvent | KeyboardEvent, target: HTMLElement): void;
 }
 
 /** Draws `markdown` into `el`, loading nothing from outside this computer; its links work as `links` says. */
@@ -49,8 +49,16 @@ export async function renderSafely(app: App, markdown: string, el: HTMLElement, 
     evt.preventDefault();
     links.open(linktext(link), Keymap.isModEvent(evt) !== false);
   });
+  // Over a link, with ⌘ held or pressed while there: its preview.
+  let over: HTMLElement | null = null;
   component.registerDomEvent(el, 'mouseover', (evt) => {
-    const link = target(evt);
-    if (link) links.preview(linktext(link), evt, link);
+    over = target(evt);
+    if (over) links.preview(linktext(over), evt, over);
+  });
+  component.registerDomEvent(el, 'mouseout', (evt) => {
+    if (over && !over.contains(evt.relatedTarget as Node | null)) over = null;
+  });
+  component.registerDomEvent(el.ownerDocument, 'keydown', (evt) => {
+    if (over && over.isConnected && (evt.key === 'Meta' || evt.key === 'Control')) links.preview(linktext(over), evt, over);
   });
 }

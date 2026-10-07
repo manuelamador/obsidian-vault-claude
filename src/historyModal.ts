@@ -1,5 +1,6 @@
 import { Keymap, Modal, Platform, SuggestModal, setIcon, type App } from 'obsidian';
 import { eachInParallel, formatDate, type HistoryItem } from './history';
+import { folderUp, folderView, notesByChat, readFolderQuery, type FolderRow } from './chatFolders';
 import { NOTE_CHAT_ICONS, chatsByNote, type NoteChats, type NoteGroup } from './noteChats';
 import { escapeRegExp } from './pathFilter';
 
@@ -19,6 +20,14 @@ export interface HistoryActions {
   noteLinks(): { changed: NoteChats; sent: NoteChats; mentioned: NoteChats };
   /** Opens a note. */
   openNote(path: string): void;
+  /** The project folder `folder` is (its note's path), if it is one. */
+  projectOf(folder: string): string | null;
+  /** Create project, with folder `folder` chosen. */
+  createProject(folder: string): void;
+  /** Links the chat on screen to `item`; absent where it cannot be (the scratch chat). */
+  link?(item: HistoryItem): void;
+  /** Whether `item` is the chat on screen, or one it links to already: not offered to link. */
+  isLinked?(item: HistoryItem): boolean;
 }
 
 /** A row: a chat; or, in the notes view (see NOTES_PREFIX), a note, a chat under it, or the rest of its chats folded. */
@@ -31,10 +40,17 @@ type Match =
       /** Under a note in the notes view: how the chat is linked to it. */
       why?: NoteGroup['chats'][number]['why'];
     }
-  | { kind: 'note' | 'more'; note: NoteGroup };
+  | { kind: 'note' | 'more'; note: NoteGroup }
+  /** `here`: the folder gone into, first under it. */
+  | { kind: 'folder'; folder: FolderRow; here?: boolean };
+
+/** The history's views: all chats, chats by note, chats by folder. */
+type HistoryView = 'chats' | 'notes' | 'folders';
 
 /** A query that starts with this lists notes with their chats beneath them, not chats; Tab types it or takes it away. */
 const NOTES_PREFIX = 'with:';
+/** A query that starts with this lists folders, and the chats in the folder gone into (see readFolderQuery). */
+const FOLDERS_PREFIX = 'in:';
 /** The chats shown under a note before "+N more". */
 const NOTE_CHATS_SHOWN = 3;
 /** The most rows the history draws (Obsidian's own limit is 100). */
@@ -77,8 +93,8 @@ export class HistoryModal extends SuggestModal<Match> {
   private readonly listed: Promise<void>;
   /** Notes in the notes view shown with all their chats. */
   private readonly expanded = new Set<string>();
-  /** Which view the hint line names the keys of (see showKeys): the notes view, or the list of chats. */
-  private keysFor: boolean | null = null;
+  /** Which view the hint line names the keys of (see showKeys). */
+  private keysFor: HistoryView | null = null;
 
   /**
    * `shown`: the chats as listed before, shown at once, or null; `listing`: the chats listed now,
@@ -95,7 +111,7 @@ export class HistoryModal extends SuggestModal<Match> {
     this.emptyStateText = 'No matching chats.';
     // Every chat, and in the notes view every note, rather than Obsidian's first 100 rows.
     this.limit = ROW_LIMIT;
-    this.showKeys(false);
+    this.showKeys('chats');
     this.scope.register([], 'Tab', () => {
       this.switchView();
       return false;
@@ -103,6 +119,14 @@ export class HistoryModal extends SuggestModal<Match> {
     // ⌘↵ reaches the row picked as Enter does (see selectSuggestion), which Obsidian leaves unbound.
     this.scope.register(['Mod'], 'Enter', (evt) => {
       (this as unknown as { chooser?: { useSelectedItem?(evt: KeyboardEvent): void } }).chooser?.useSelectedItem?.(evt);
+      return false;
+    });
+    // In the folders view, ⌫ just after a folder's `/` goes up a folder.
+    this.scope.register([], 'Backspace', () => {
+      const query = this.inputEl.value;
+      if (viewOf(query) !== 'folders' || !query.endsWith('/') || this.inputEl.selectionStart !== query.length) return true;
+      this.inputEl.value = `${FOLDERS_PREFIX}${folderUp(query.slice(FOLDERS_PREFIX.length))}`;
+      this.refresh();
       return false;
     });
     if (shown) {
@@ -127,8 +151,10 @@ export class HistoryModal extends SuggestModal<Match> {
 
   async getSuggestions(query: string): Promise<Match[]> {
     await this.listed;
-    this.showKeys(byNote(query));
-    if (byNote(query)) return this.noteRows(query.slice(NOTES_PREFIX.length));
+    const view = viewOf(query);
+    this.showKeys(view);
+    if (view === 'notes') return this.noteRows(query.slice(NOTES_PREFIX.length));
+    if (view === 'folders') return this.folderRows(query.slice(FOLDERS_PREFIX.length));
     const needle = query.trim().toLowerCase();
     const ordered = [...this.items].sort(
       (a, b) =>
@@ -157,10 +183,13 @@ export class HistoryModal extends SuggestModal<Match> {
     return [...byTitle, ...byContent];
   }
 
-  /** Switches between the list of chats and the notes view: types NOTES_PREFIX before the query, or takes it away. */
+  /** Goes to the next view, chats → by note → by folder: types its prefix before the query in place of the last's (a folder gone into is left). */
   private switchView(): void {
     const query = this.inputEl.value;
-    this.inputEl.value = byNote(query) ? query.slice(NOTES_PREFIX.length).trimStart() : `${NOTES_PREFIX}${query}`;
+    const view = viewOf(query);
+    if (view === 'chats') this.inputEl.value = `${NOTES_PREFIX}${query}`;
+    else if (view === 'notes') this.inputEl.value = `${FOLDERS_PREFIX}${query.slice(NOTES_PREFIX.length).trimStart()}`;
+    else this.inputEl.value = readFolderQuery(query.slice(FOLDERS_PREFIX.length)).words.join(' ');
     this.refresh();
   }
 
@@ -168,22 +197,28 @@ export class HistoryModal extends SuggestModal<Match> {
    * The hint line under the list: its keys for the list of chats, or for the notes view (`notes`),
    * where ⌘↵ opens a note. The Tab hint is a button as well, which switches views as Tab does.
    */
-  private showKeys(notes: boolean): void {
-    if (this.keysFor === notes) return;
-    this.keysFor = notes;
+  private showKeys(view: HistoryView): void {
+    if (this.keysFor === view) return;
+    this.keysFor = view;
     const mod = Platform.isMacOS ? '⌘' : 'ctrl';
     this.setInstructions(
-      notes
+      view === 'notes'
         ? [
             { command: '↵', purpose: "open a chat, or show a note's chats" },
             { command: `${mod} ↵`, purpose: 'in a new tab, or open the note' },
-            { command: 'tab', purpose: 'all chats' },
+            { command: 'tab', purpose: 'chats by folder' },
           ]
-        : [
-            { command: '↵', purpose: 'open' },
-            { command: `${mod} ↵`, purpose: 'in a new tab' },
-            { command: 'tab', purpose: 'chats by note' },
-          ],
+        : view === 'folders'
+          ? [
+              { command: '↵', purpose: 'open a chat, or go into a folder' },
+              { command: '⌫', purpose: 'up a folder' },
+              { command: 'tab', purpose: 'all chats' },
+            ]
+          : [
+              { command: '↵', purpose: 'open' },
+              { command: `${mod} ↵`, purpose: 'in a new tab' },
+              { command: 'tab', purpose: 'chats by note' },
+            ],
     );
     // Obsidian draws each hint as a .prompt-instruction with its key in a .prompt-instruction-command.
     const tab = [...this.modalEl.querySelectorAll<HTMLElement>('.prompt-instruction')].find(
@@ -209,6 +244,27 @@ export class HistoryModal extends SuggestModal<Match> {
     });
   }
 
+  /**
+   * The folders view: the folders in the one gone into, then its chats (see folderView). Under a
+   * folder gone into, a first row names it, with Create project from it.
+   */
+  private folderRows(rest: string): Match[] {
+    const { folder, words } = readFolderQuery(rest);
+    const { changed, sent, mentioned } = this.actions.noteLinks();
+    const byId = new Map(this.items.filter((item) => !item.scratch).map((item) => [item.id, item]));
+    const notes = notesByChat(changed, sent, mentioned);
+    const { folders, chats } = folderView(notes, byId, folder, words);
+    const rows: Match[] = [];
+    // The folder gone into counts, and makes a project of, all its chats, whatever words are typed.
+    if (folder) rows.push({ kind: 'folder', folder: { path: folder, chats: words.length > 0 ? folderView(notes, byId, folder, []).chats : chats, latest: 0 }, here: true });
+    rows.push(...folders.map((row) => ({ kind: 'folder' as const, folder: row })));
+    rows.push(...chats.flatMap((id) => {
+      const item = byId.get(id);
+      return item ? [{ kind: 'chat' as const, item }] : [];
+    }));
+    return rows;
+  }
+
   /** Reads the texts of the listed chats not read yet, a few at a time; one reading at a time, which a second request shares. */
   private readTexts(): Promise<void> {
     this.reading ??= eachInParallel(
@@ -226,6 +282,10 @@ export class HistoryModal extends SuggestModal<Match> {
   }
 
   renderSuggestion(match: Match, el: HTMLElement): void {
+    if (match.kind === 'folder') {
+      this.renderFolder(match, el);
+      return;
+    }
     if (match.kind !== 'chat') {
       this.renderNote(match, el);
       return;
@@ -265,6 +325,14 @@ export class HistoryModal extends SuggestModal<Match> {
         this.refresh();
       });
     }
+    // Offered unless the chat on screen links to it already, or is it.
+    const { link, isLinked } = this.actions;
+    if (link && !item.scratch && !(isLinked?.(item) ?? false)) {
+      this.addButton(buttons, 'link', 'Link the chat on screen to this one', () => {
+        link(item);
+        this.refresh();
+      });
+    }
     // The scratch chat is always first and always called Scratch: nothing to pin or rename.
     if (!item.scratch) {
       this.addButton(buttons, item.pinned ? 'pin-off' : 'pin', item.pinned ? 'Unpin' : 'Pin to the top', () => {
@@ -297,6 +365,61 @@ export class HistoryModal extends SuggestModal<Match> {
     });
   }
 
+  /**
+   * A folder in the folders view, with the folder holding it and how many chats worked on notes in
+   * it; or, first under a folder gone into, that folder, with ⌫ to leave it. A folder that is a
+   * project says so and opens its note; another offers to make it one.
+   */
+  private renderFolder(match: Extract<Match, { kind: 'folder' }>, el: HTMLElement): void {
+    const { folder } = match;
+    const here = match.here === true;
+    el.addClass('vc-history-item', 'vc-history-note');
+    el.toggleClass('vc-history-here', here);
+    const body = el.createDiv({ cls: 'vc-history-body' });
+    const slash = folder.path.lastIndexOf('/');
+    const title = body.createDiv({ cls: 'vc-history-title' });
+    const project = this.actions.projectOf(folder.path);
+    setIcon(title.createSpan({ cls: 'vc-history-pin' }), project ? 'folder-kanban' : here ? 'folder-open' : 'folder');
+    if (here) {
+      // The path as a breadcrumb: each part goes back up to it, the vault to the top.
+      const parts = folder.path.split('/');
+      const crumb = (label: string, path: string | null) => {
+        const el = title.createEl(path === null ? 'span' : 'a', { cls: 'vc-history-crumb', text: label });
+        if (path === null) return;
+        el.addEventListener('mousedown', (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+        });
+        el.addEventListener('click', (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+          this.inputEl.value = `${FOLDERS_PREFIX}${path ? `${path}/` : ''}`;
+          this.refresh();
+          this.inputEl.focus();
+        });
+      };
+      crumb('Vault', '');
+      parts.forEach((part, i) => {
+        title.appendText(' › ');
+        crumb(part, i === parts.length - 1 ? null : parts.slice(0, i + 1).join('/'));
+      });
+    } else title.appendText(folder.path.slice(slash + 1));
+    const count = `${project ? 'project · ' : ''}${folder.chats.length} ${folder.chats.length === 1 ? 'chat' : 'chats'}`;
+    body.createDiv({ cls: 'vc-muted', text: here ? `${count} · ⌫ goes up` : slash > 0 ? `${folder.path.slice(0, slash)} · ${count}` : count });
+    const buttons = el.createDiv({ cls: 'vc-history-actions' });
+    if (project) {
+      this.addButton(buttons, 'folder-kanban', 'Open its project note', () => {
+        this.close();
+        this.actions.openNote(project);
+      });
+    } else {
+      this.addButton(buttons, 'folder-plus', 'Make this folder a project', () => {
+        this.close();
+        this.actions.createProject(folder.path);
+      });
+    }
+  }
+
   /** A note in the notes view, with its folder and how many chats it has; or the rest of its chats, folded. */
   private renderNote(match: Extract<Match, { kind: 'note' | 'more' }>, el: HTMLElement): void {
     const { note } = match;
@@ -322,6 +445,11 @@ export class HistoryModal extends SuggestModal<Match> {
   selectSuggestion(match: Match, evt: MouseEvent | KeyboardEvent): void {
     if (match.kind === 'chat') {
       super.selectSuggestion(match, evt);
+    } else if (match.kind === 'folder') {
+      // Into the folder; the folder gone into, already here, stays.
+      if (match.here) return;
+      this.inputEl.value = `${FOLDERS_PREFIX}${match.folder.path}/`;
+      this.refresh();
     } else if (match.kind === 'note' && Keymap.isModEvent(evt)) {
       this.close();
       this.actions.openNote(match.note.path);
@@ -377,9 +505,10 @@ export class HistoryModal extends SuggestModal<Match> {
   }
 }
 
-/** Whether a query asks for the notes view: it starts with NOTES_PREFIX, in any case. */
-function byNote(query: string): boolean {
-  return query.toLowerCase().startsWith(NOTES_PREFIX);
+/** The view a query asks for, by its prefix (NOTES_PREFIX, FOLDERS_PREFIX), in any case. */
+function viewOf(query: string): HistoryView {
+  const lower = query.toLowerCase();
+  return lower.startsWith(NOTES_PREFIX) ? 'notes' : lower.startsWith(FOLDERS_PREFIX) ? 'folders' : 'chats';
 }
 
 /** Where a chat comes from, after its date: started outside the panel (and how often copied), or a copy of one. */

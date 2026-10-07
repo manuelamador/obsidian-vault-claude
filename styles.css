@@ -1499,8 +1499,6 @@ button.vc-continue-button:hover span:last-child {
   background: var(--text-warning);
 }
 
-
-
 /* Chats about the active note, offered above the input. */
 /* Plan mode, above the input: what it means, and a way back. Where plan mode starts and ends in the
    chat, a line like the compaction divider (see ChatView.renderModeLine). */
@@ -2137,7 +2135,6 @@ button.vc-continue-button:hover span:last-child {
   margin-top: var(--size-4-2);
 }
 
-
 /* The list: a bar with the status and Suggest again; rows that open in place. */
 .vc-pick-up-bar {
   display: flex;
@@ -2427,4 +2424,475 @@ button.vc-continue-button:hover span:last-child {
 
 .vc-pick-up-said p {
   margin: var(--size-2-2) 0;
+}
+
+/* A note's preview shown from the Pick up list goes over the list, not under it. */
+body:has(.vc-pick-up) .popover.hover-popover {
+  z-index: calc(var(--layer-modal, 50) + 1);
+}
+
+/* Projects (see projects.ts, projectModals.ts). */
+.vc-project-chip .vc-context-name {
+  color: var(--text-normal);
+}
+
+.vc-project-more {
+  opacity: 0.7;
+}
+
+.vc-project-modal {
+  width: min(640px, 92vw);
+}
+
+.vc-project-modal .modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-3);
+}
+
+.vc-project-name,
+.vc-project-filter {
+  width: 100%;
+}
+
+.vc-project-label,
+.vc-project-chat-when,
+.vc-project-size,
+.vc-project-empty {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-project-chats {
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.vc-project-chat {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) var(--size-4-2);
+  cursor: pointer;
+}
+
+.vc-project-chat:hover {
+  background: var(--background-modifier-hover);
+}
+
+.vc-project-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+}
+
+.vc-project-foot .vc-project-status {
+  margin-right: auto;
+}
+
+.vc-project-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.vc-project-title {
+  font-weight: var(--font-semibold);
+  font-size: var(--font-ui-medium);
+}
+
+.vc-project-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--size-4-2);
+}
+
+.vc-project-status {
+  color: var(--text-muted);
+}
+
+.vc-project-section {
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.vc-project-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  font-weight: var(--font-semibold);
+}
+
+.vc-project-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-weight: normal;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.vc-project-body {
+  max-height: 30vh;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.vc-project-connections summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.vc-project-connection {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) 0;
+}
+
+.vc-project-connections > button {
+  margin-top: var(--size-4-2);
+}
+
+.vc-project-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.vc-project-proposal-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.vc-project-kind {
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  color: var(--text-muted);
+}
+
+.vc-project-source {
+  margin-left: auto;
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-project-text {
+  width: 100%;
+  resize: vertical;
+}
+
+.vc-project-conflict {
+  font-size: var(--font-ui-smaller);
+  padding: var(--size-4-1) var(--size-4-2);
+  border-left: 3px solid var(--color-orange);
+  color: var(--text-muted);
+}
+
+.vc-project-group-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.vc-project-group-icon .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.vc-project-suggest {
+  margin-top: var(--size-4-1);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.vc-project-suggest a {
+  cursor: pointer;
+}
+
+.vc-history-here {
+  background: var(--background-secondary);
+}
+
+.vc-project-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.vc-project-folder > button {
+  margin-left: auto;
+}
+
+.vc-project-folder-path {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+}
+
+.vc-project-browser {
+  margin-top: var(--size-4-1);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.vc-project-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: var(--size-4-1) var(--size-4-2);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+
+.vc-project-crumbs a,
+.vc-history-crumb {
+  cursor: pointer;
+}
+
+.vc-project-crumbs > button {
+  margin-left: auto;
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-project-browser-rows > .vc-project-empty {
+  padding: var(--size-4-1) var(--size-4-2);
+}
+
+.vc-project-browser-rows {
+  max-height: 28vh;
+  overflow-y: auto;
+}
+
+.vc-project-browser-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) var(--size-4-2);
+  cursor: pointer;
+}
+
+.vc-project-browser-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.vc-project-into {
+  margin-left: auto;
+}
+
+/* A project's Instructions or Guide changed since they went with the chat. */
+.vc-project-updated {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-orange);
+}
+
+/* Connections maps (see connectionsModal.ts). */
+.vc-map-modal {
+  width: min(800px, 94vw);
+}
+
+.vc-map {
+  width: 100%;
+  height: auto;
+  max-height: 64vh;
+  display: block;
+}
+
+.vc-map-line {
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  opacity: 0.7;
+}
+
+.vc-map-line.is-edited {
+  stroke: var(--interactive-accent);
+  stroke-width: 2.5;
+}
+
+.vc-map-line.is-sent {
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+}
+
+.vc-map-line.is-mentioned {
+  stroke-dasharray: 3 3;
+}
+
+.vc-map-line.is-shared {
+  opacity: 0.35;
+}
+
+.vc-map-line.is-linked {
+  stroke: var(--color-orange);
+  stroke-dasharray: 6 4;
+}
+
+.vc-map-node {
+  cursor: pointer;
+}
+
+.vc-map-node circle {
+  fill: var(--background-modifier-border);
+  stroke: var(--background-primary);
+  stroke-width: 1.5;
+}
+
+.vc-map-node text {
+  fill: var(--text-muted);
+  font-size: 11px;
+}
+
+.vc-map-node.is-edited circle {
+  fill: var(--interactive-accent);
+}
+
+.vc-map-node.is-sent circle {
+  fill: var(--text-muted);
+}
+
+.vc-map-node.is-project circle {
+  stroke: var(--color-green);
+  stroke-width: 2.5;
+}
+
+.vc-map-node.is-chat circle {
+  fill: var(--background-secondary);
+  stroke: var(--text-muted);
+}
+
+.vc-map-node.is-chat.is-linked circle {
+  stroke: var(--color-orange);
+}
+
+.vc-map-node.is-centre circle {
+  fill: var(--interactive-accent);
+}
+
+.vc-map-node.is-centre text {
+  fill: var(--text-normal);
+  font-weight: var(--font-semibold);
+  font-size: 12px;
+}
+
+/* Pointing at a node: it and its lines stand out, the rest fade. */
+.vc-map.is-pointing .vc-map-line:not(.is-lit),
+.vc-map.is-pointing .vc-map-node:not(.is-lit) {
+  opacity: 0.2;
+}
+
+.vc-map-line.is-lit {
+  opacity: 1;
+}
+
+.vc-map-node:hover text,
+.vc-map-node:focus text {
+  fill: var(--text-normal);
+}
+
+.vc-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-3);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.vc-map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vc-map-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--background-modifier-border);
+}
+
+.vc-map-swatch.is-edited {
+  background: var(--interactive-accent);
+}
+
+.vc-map-swatch.is-sent {
+  background: var(--text-muted);
+}
+
+.vc-map-swatch.is-mentioned {
+  background: transparent;
+  border: 1px dashed var(--text-faint);
+}
+
+.vc-map-swatch.is-project {
+  background: transparent;
+  border: 2px solid var(--color-green);
+}
+
+.vc-map-swatch.is-chat {
+  background: var(--background-secondary);
+  border: 1px solid var(--text-muted);
+}
+
+.vc-map-swatch.is-linked {
+  background: transparent;
+  border: 2px solid var(--color-orange);
+}
+
+.vc-map-folders {
+  margin-top: var(--size-4-2);
+}
+
+.vc-map-action {
+  margin-left: auto;
+  font-size: var(--font-ui-smaller);
+}
+
+/* Page previews of notes on a map show above it. */
+body:has(.vc-map-modal) .popover.hover-popover {
+  z-index: calc(var(--layer-modal, 50) + 1);
+}
+
+/* Links between chats (see linksModal.ts). */
+.vc-links-chip .vc-context-name {
+  color: var(--text-normal);
+}
+
+.vc-project-suggestion {
+  border: 1px dashed var(--interactive-accent);
+  color: var(--text-accent);
+}
+
+.vc-link-line {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-3);
+  margin-top: var(--size-4-1);
+}
+
+.vc-link-line .vc-project-toggle {
+  margin-left: 0;
+}
+
+.vc-link-digest {
+  max-height: 30vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: var(--font-ui-smaller);
+  user-select: text;
+}
+
+.vc-project-problem {
+  color: var(--text-error);
 }

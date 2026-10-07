@@ -116,6 +116,21 @@ async function main(): Promise<void> {
     setModels: () => undefined,
     setPlanUsage: () => undefined,
     recordChat: () => undefined,
+    // Projects: none, unless a test sets one.
+    projectForPath: (_path: string): unknown => null,
+    homeProject: (_id: string): unknown => null,
+    homeReason: (_id: string): unknown => null,
+    enclosingProjects: (): unknown[] => [],
+    listedChats: (): null => null,
+    chatLinks: {} as Record<string, string[]>,
+    chatSummaries: {} as Record<string, unknown>,
+    linkChats: () => undefined,
+    connectedProjects: (_id: string): unknown[] => [],
+    projectNotes: (): unknown[] => [],
+    projectState: (_id: string) => ({}),
+    setProjectState: () => undefined,
+    setHomeProject: async () => undefined,
+    projectParts: async () => ({ instructions: '', guide: '' }),
     sideSessions: [] as string[],
     holdSideSession(id: string) {
       if (!this.sideSessions.includes(id)) this.sideSessions.push(id);
@@ -852,10 +867,12 @@ async function main(): Promise<void> {
       searchText: async (item: { id: string }) => texts[item.id],
       noteLinks: () => ({ changed: {}, sent: {}, mentioned: {} }),
       openNote: () => undefined,
+      projectOf: () => null,
+      createProject: () => undefined,
     };
     /** Rows as ids: a chat's id (with how it is linked to the note above it), else the note's path. */
     type Row = Awaited<ReturnType<InstanceType<typeof HistoryModal>['getSuggestions']>>[number];
-    const rowIds = (rows: Row[]) => rows.map((row) => (row.kind === 'chat' ? `${row.item.id}${row.why ? ` ${row.why}` : ''}` : `${row.kind} ${row.note.path}`));
+    const rowIds = (rows: Row[]) => rows.map((row) => (row.kind === 'chat' ? `${row.item.id}${row.why ? ` ${row.why}` : ''}` : `${row.kind} ${row.kind === 'folder' ? row.folder.path : row.note.path}`));
     const modal = new HistoryModal({} as never, null, Promise.resolve(items), historyActions);
     const order = rowIds(await modal.getSuggestions('')).join(',');
     // The texts are read from the moment the history opens.
@@ -986,6 +1003,43 @@ async function main(): Promise<void> {
         picked.join() === 'c5 new tab,c4';
       console.log(`chats by note: tab ${tabbed}; ${rowIds(orchard).join(' | ')}; all notes ${all.join(' | ')}; after "+N more" ${expanded.length - 1} chats; opened ${opened} -> ${notesOk}`);
       if (!notesOk) process.exitCode = 1;
+    }
+    // Chats by folder: Tab after "with:" types "in:"; the folders in the one gone into, then its chats;
+    // Enter on a folder goes into it; words keep folders by name and chats by title.
+    {
+      const chats = [1, 2, 3, 4, 5].map((n) => ({ id: `c${n}`, title: `Chat ${n}`, updatedAt: n, fromPanel: true }));
+      const pruning = 'Projects/Orchard/Threads/Pruning.md';
+      const byFolder = new HistoryModal({} as never, chats, Promise.resolve(null), {
+        ...historyActions,
+        noteLinks: () => ({
+          changed: { [pruning]: ['c4', 'c3', 'c1', 'c2', 'gone'] },
+          sent: { [pruning]: ['c5', 'c4'], 'Reading/Novels.md': ['c2'] },
+          mentioned: { [pruning]: ['c5'], 'Timeline — Garden.md': ['c3'] },
+        }),
+      });
+      const keys = byFolder as unknown as { scope: { keys: { key: string; run(evt: unknown): unknown }[] }; inputEl: { value: string }; instructions: { command: string }[] };
+      keys.inputEl.value = 'with:orchard';
+      keys.scope.keys.find((key) => key.key === 'Tab')?.run({});
+      const tabbed = keys.inputEl.value;
+      const top = rowIds(await byFolder.getSuggestions('in:'));
+      const folderKeys = keys.instructions.map((key) => key.command).join(' ');
+      const projects = await byFolder.getSuggestions('in:Projects/');
+      byFolder.selectSuggestion(projects[1], {} as never);
+      const into = keys.inputEl.value;
+      const narrowed = rowIds(await byFolder.getSuggestions('in:Projects/Orchard/ 5'));
+      keys.inputEl.value = 'in:Projects/ chat';
+      keys.scope.keys.find((key) => key.key === 'Tab')?.run({});
+      const back = keys.inputEl.value;
+      const foldersOk =
+        tabbed === 'in:orchard' &&
+        top.join() === 'folder Projects,folder Reading,c3' &&
+        folderKeys === '↵ ⌫ tab' &&
+        rowIds(projects).join() === 'folder Projects,folder Projects/Orchard,c5,c4,c3,c2,c1' &&
+        into === 'in:Projects/Orchard/' &&
+        narrowed.join() === 'folder Projects/Orchard,c5' &&
+        back === 'chat';
+      console.log(`chats by folder: tab ${tabbed}; top ${top.join(' | ')}; in Projects ${rowIds(projects).join(' | ')}; into ${into}; narrowed ${narrowed.join(' | ')}; tab back ${back} -> ${foldersOk}`);
+      if (!foldersOk) process.exitCode = 1;
     }
     // The chats as last listed show at once; a new listing replaces them only if something changed.
     let listNow: (value: typeof items) => void = () => undefined;

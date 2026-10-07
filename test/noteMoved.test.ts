@@ -92,7 +92,7 @@ test('renames and deletions reach noteMoved, and quitting starts the waiting sav
     handlers.set(name, handler);
     return {};
   };
-  (p as unknown as { app: unknown }).app = { vault: { on }, workspace: { on, getLeavesOfType: () => [] } };
+  (p as unknown as { app: unknown }).app = { vault: { on }, metadataCache: { on }, workspace: { on, getLeavesOfType: () => [] } };
   const calls: string[] = [];
   p.noteMoved = (from, to) => void calls.push(`${from}->${to}`);
   p.flushSave = async () => void calls.push('flush');

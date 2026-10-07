@@ -1,19 +1,24 @@
 import { existsSync } from 'fs';
-import { FileSystemAdapter, Menu, Notice, Plugin, TFile, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
+import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
 import { join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
-import { deleteSessionIfAny, deleteSessions, lastMessages, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem } from './history';
+import { deleteSessionIfAny, deleteSessions, formatDate, lastMessages, listHistory, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem } from './history';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, upgradeMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatLink, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, upgradeMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
 import { ContinueMemoModal } from './memoModal';
 import { DAY_MS, OLDER_LOOKED_AT, PICK_UP_SYSTEM, SKIP_DAYS, candidateOf, leftOut, ownMessage, chatsToLookAt, keptToday, localDay, remindersNow, pickUpPrompt, readPickUp, type Candidate, type PickUpState, type Suggestion } from './pickUp';
 import { PickUpModal, type ChatDetails } from './pickUpModal';
 import { renderSafely } from './safeRender';
+import { inFolder, notesByChat, suggestFolder, weightedNotes, type FolderSuggestion } from './chatFolders';
+import { GUIDE_SYSTEM, PROJECT_TYPE, contextHash, homeOf, chatDigest, chatEdits, guideLine, guidePrompt, projectNoteMarkdown, projectParts, readGuideProposals, withGenerated, withGuideLines, type GuideProposal, type HomeReason } from './projects';
+import { CreateProjectModal, GuideModal, ProjectPicker, type ProjectRef } from './projectModals';
+import { chatMap, projectMap } from './connections';
+import { ChatMapModal, ProjectMapModal } from './connectionsModal';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -62,6 +67,48 @@ const PICK_UP_BYTES = 2_000_000;
 /** The most older chats read, at random, for those with a clue that something was left open. */
 const PICK_UP_OLDER_READS = 30;
 
+/** How many of a chat's last messages its digest reads, when it has no memos (see linkedChatDigest). */
+const DIGEST_MESSAGES = 16;
+/** The instructions for summarising a chat that is included in another. */
+const LINKED_SUMMARY_SYSTEM =
+  'Summarise the conversation given, between a user and an AI assistant, for another conversation that will use it as context. In at most 250 words: what was asked, what was decided or found (with numbers where given), and what was left open. Plain prose or short bullets; no preamble.';
+/** The most key notes a project lists. */
+const PROJECT_KEY_NOTES = 12;
+
+/** Today, as YYYY-MM-DD in local time. */
+function today(): string {
+  return formatDate(Date.now()).slice(0, 10);
+}
+
+/** The chat ids in a frontmatter value. */
+function idList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string' && id !== '') : [];
+}
+
+/** A project note as the dialogs show it. */
+function projectRef(file: TFile): ProjectRef {
+  return { path: file.path, name: file.basename };
+}
+
+/**
+ * What a chat's projects sent with it and what it chose to send: `sent`, the projects whose context
+ * went with a message (it goes once, until sent again by hand); `noGuide`, its home project's Guide
+ * left out; `guides`, the connected projects whose Guides go; `declined`, its project removed by
+ * hand, after which its notes do not give it one and none is offered; `start`, the note attached when
+ * it started, whose folder decides its project first (see homeOf).
+ */
+export interface ChatProjectState {
+  sent?: string[];
+  /** Per project sent, a fingerprint of what went (see contextHash), to tell when it changed since. */
+  sentHash?: Record<string, string>;
+  noGuide?: boolean;
+  guides?: string[];
+  declined?: boolean;
+  start?: string;
+  /** The chats it links to whose digests go with it (see ChatView.openLinks). */
+  includeChats?: string[];
+}
+
 /** A plan edited in a note (see ChatView.renderPlanCard): the note, and the plan as Claude wrote it. */
 interface PlanNote {
   path: string;
@@ -87,6 +134,9 @@ interface PluginData {
   scratch?: { id: string; usedAt: number };
   sideSessions?: string[];
   pickUp?: PickUpState;
+  chatProjects?: Record<string, ChatProjectState>;
+  chatLinks?: Record<string, string[]>;
+  chatSummaries?: Record<string, { text: string; at: number }>;
 }
 
 export default class VaultClaudePlugin extends Plugin {
@@ -102,6 +152,20 @@ export default class VaultClaudePlugin extends Plugin {
   ticks: Record<string, Record<string, number[]>> = {};
   /** Pick up where you left off: the chats set aside (see pickUp.ts). */
   pickUp: PickUpState = { hidden: {} };
+  /** Per chat, what its projects sent with it and what it chose to send (see ChatProjectState). */
+  chatProjects: Record<string, ChatProjectState> = {};
+  /** Chats linked from a message of another (see linkChats): chat id → the chats it linked to. */
+  chatLinks: Record<string, string[]> = {};
+  /** Summaries asked for of chats, used when they are included in another (see summariseLinkedChat). */
+  chatSummaries: Record<string, { text: string; at: number }> = {};
+  /** The project notes, once found (see projectNotes). */
+  private projectCache: TFile[] | null = null;
+  /** Chats' home projects, and the notes each chat worked on, once worked out (see homeReason, chatNotes). */
+  private homeCache = new Map<string, HomeReason | null>();
+  private notesCache: Map<string, Set<string>> | null = null;
+  private weightsCache: Map<string, Map<string, number>> | null = null;
+  /** Projects' fingerprints, by path, once read (see projectHashNow). */
+  private readonly projectHashes = new Map<string, string | null>();
   /** Models reported by Claude Code, cached so a new chat can list them before its session starts. */
   models: ModelInfo[] = [];
   modelsFetchedAt = 0;
@@ -189,6 +253,35 @@ export default class VaultClaudePlugin extends Plugin {
       callback: async () => (await this.activateView())?.openHistory(),
     });
     this.addCommand({ id: 'pick-up', name: 'Pick up where you left off', callback: () => void this.openPickUp() });
+    this.addCommand({ id: 'create-project', name: 'Create project…', callback: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId() }) });
+    this.addCommand({ id: 'update-project-guide', name: 'Update project guide…', callback: () => void this.openUpdateGuide(this.frontChatView()?.currentChatId()) });
+    this.addCommand({
+      id: 'chat-connections',
+      name: "Show this chat's connections",
+      callback: async () => (this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView()))?.openConnections(),
+    });
+    this.addCommand({
+      id: 'project-map',
+      name: 'Show project map…',
+      callback: () => {
+        const active = this.app.workspace.getActiveFile();
+        const view = this.frontChatView();
+        const id = view?.currentChatId();
+        const project = active && this.isProjectNote(active) ? active : id ? this.homeProject(id) : null;
+        if (project) return void this.openProjectMap(project, view);
+        const projects = this.projectNotes();
+        if (projects.length === 0) return void new Notice('There are no projects yet: create one first.');
+        new ProjectPicker(this.app, projects.map(projectRef), 'Show the map of…', (chosen) => {
+          const file = this.app.vault.getAbstractFileByPath(chosen.path);
+          if (file instanceof TFile) void this.openProjectMap(file, view);
+        }).open();
+      },
+    });
+    this.addCommand({
+      id: 'chat-project',
+      name: "Show this chat's project context",
+      callback: async () => (this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView()))?.openProjectContext(),
+    });
     this.addCommand({
       id: 'pick-up-reset',
       name: 'Pick up where you left off: show ignored chats again',
@@ -426,6 +519,15 @@ export default class VaultClaudePlugin extends Plugin {
     if (ids) {
       for (const id of Object.keys(this.ticks)) if (!ids.has(id)) changed = delete this.ticks[id] || changed;
       for (const id of Object.keys(this.unseen)) if (!ids.has(id)) changed = delete this.unseen[id] || changed;
+      for (const id of Object.keys(this.chatProjects)) if (!ids.has(id)) changed = delete this.chatProjects[id] || changed;
+      for (const id of Object.keys(this.chatSummaries)) if (!ids.has(id)) changed = delete this.chatSummaries[id] || changed;
+      for (const [id, to] of Object.entries(this.chatLinks)) {
+        const kept = to.filter((other) => ids.has(other));
+        if (ids.has(id) && kept.length === to.length) continue;
+        if (ids.has(id) && kept.length > 0) this.chatLinks[id] = kept;
+        else delete this.chatLinks[id];
+        changed = true;
+      }
       for (const record of [this.pickUp.hidden, this.pickUp.later ?? {}, this.pickUp.skipped ?? {}]) for (const id of Object.keys(record)) if (!ids.has(id)) changed = delete record[id] || changed;
       // Skips that have run out.
       for (const [id, until] of Object.entries(this.pickUp.skipped ?? {})) if (until <= Date.now()) changed = delete this.pickUp.skipped?.[id] || changed;
@@ -452,7 +554,7 @@ export default class VaultClaudePlugin extends Plugin {
         changed = true;
       }
     }
-    if (changed) this.saveSoon();
+    if (changed) this.notesLinked();
   }
 
   /**
@@ -550,9 +652,32 @@ export default class VaultClaudePlugin extends Plugin {
    * app without saving" quit the app instead (a reported Obsidian bug).
    */
   registerNoteEvents(): void {
-    this.registerEvent(this.app.vault.on('rename', (file, oldPath) => this.noteMoved(oldPath, file.path)));
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) => {
+        this.noteMoved(oldPath, file.path);
+        if (file instanceof TFolder) this.projectFolderMoved(oldPath, file.path);
+      }),
+    );
     this.registerEvent(this.app.vault.on('delete', (file) => this.noteMoved(file.path, null)));
+    // The projects are found again when a note becomes, or stops being, one.
+    this.registerEvent(
+      this.app.metadataCache.on('changed', (file) => {
+        const isProject = this.isProjectNote(file);
+        if (this.projectCache && isProject !== this.projectCache.includes(file)) this.projectCache = null;
+        if (isProject || this.projectCache === null) this.membershipChanged();
+        if (isProject && this.projectHashes.has(file.path)) {
+          this.projectHashes.delete(file.path);
+          this.projectHashNow(file.path);
+        }
+      }),
+    );
     this.registerEvent(this.app.workspace.on('quit', () => void this.flushSave()));
+    // A project note's lists of chats and notes follow from the notes: brought up to date when it is opened.
+    this.registerEvent(
+      this.app.workspace.on('file-open', (file) => {
+        if (file && this.isProjectNote(file)) void this.refreshProjectLists(file).catch((error: unknown) => log('refreshing a project failed', error));
+      }),
+    );
   }
 
   onunload(): void {
@@ -735,8 +860,25 @@ export default class VaultClaudePlugin extends Plugin {
       else note.path = moved;
       changed = true;
     }
+    for (const state of Object.values(this.chatProjects)) {
+      const start = state.start === undefined ? undefined : movedPath(state.start, from, to);
+      if (start !== undefined) {
+        if (start === null) delete state.start;
+        else state.start = start;
+        changed = true;
+      }
+      for (const key of ['sent', 'guides'] as const) {
+        const paths = state[key];
+        if (!paths?.some((path) => movedPath(path, from, to) !== undefined)) continue;
+        state[key] = paths.flatMap((path) => {
+          const moved = movedPath(path, from, to);
+          return moved === undefined ? [path] : moved === null ? [] : [moved];
+        });
+        changed = true;
+      }
+    }
     // Moving or deleting a folder is one event per file: saved once for them all.
-    if (changed) this.saveSoon();
+    if (changed) this.notesLinked();
     for (const view of this.chatViews()) view.followNote(from, to);
   }
 
@@ -877,12 +1019,18 @@ export default class VaultClaudePlugin extends Plugin {
     new Notice('Scratch chat cleared.');
   }
 
+  /** A note was linked to a chat: saved soon, and chats' projects are worked out again (see homeReason). */
+  private notesLinked(): void {
+    this.membershipChanged();
+    this.saveSoon();
+  }
+
   /** Records that a chat changed a note, so the note can offer it later. */
   /** `promote`: an edit made now, which makes the chat the note's newest (see linkNote); saved only when the index changed. */
   linkNoteChat(path: string, chatId: string, promote = true): void {
     if (this.isHiddenPath(path) || !this.onDisk(path) || !this.mayLink(path, chatId, promote)) return;
     // Links come in bursts (a turn editing many notes, an older chat reopened): saved once for them.
-    if (linkNote(this.noteChats, path, chatId, promote)) this.saveSoon();
+    if (linkNote(this.noteChats, path, chatId, promote)) this.notesLinked();
   }
 
   chatDraft(id: string): ChatDraft {
@@ -904,13 +1052,13 @@ export default class VaultClaudePlugin extends Plugin {
   /** Records that a note went with a message in a chat: as the attached note, or mentioned. */
   linkNoteRef(path: string, chatId: string): void {
     if (this.isHiddenPath(path) || !this.onDisk(path) || !this.mayLink(path, chatId, true)) return;
-    if (linkNote(this.noteRefs, path, chatId)) this.saveSoon();
+    if (linkNote(this.noteRefs, path, chatId)) this.notesLinked();
   }
 
   /** Records that a chat mentioned a note (see ChatView.recordMentions), for the history's notes view. */
   linkNoteMention(path: string, chatId: string): void {
     if (this.isHiddenPath(path) || !this.onDisk(path) || !this.mayLink(path, chatId, false)) return;
-    if (linkNote(this.noteMentions, path, chatId, false)) this.saveSoon();
+    if (linkNote(this.noteMentions, path, chatId, false)) this.notesLinked();
   }
 
   /**
@@ -932,7 +1080,7 @@ export default class VaultClaudePlugin extends Plugin {
   removeNoteChat(path: string, chatId: string, title: string): void {
     for (const index of [this.noteChats, this.noteRefs, this.noteMentions]) unlinkNote(index, path, chatId);
     linkNote(this.noteRemoved, path, chatId, false);
-    this.saveSoon();
+    this.notesLinked();
     for (const view of this.chatViews()) view.noteLinksChanged();
     new Notice(`“${title}” is no longer listed with this note.`);
   }
@@ -1176,6 +1324,11 @@ export default class VaultClaudePlugin extends Plugin {
     new Notice(count > 0 ? `Took ${count} chat${count === 1 ? '' : 's'} off the phone.` : 'No chats are on the phone.');
   }
 
+  /** The chat panel in front, else the first. */
+  frontChatView(): ChatView | null {
+    return this.app.workspace.getActiveViewOfType(ChatView) ?? this.firstChatView();
+  }
+
   firstChatView(): ChatView | null {
     return this.chatViews()[0] ?? null;
   }
@@ -1227,6 +1380,579 @@ export default class VaultClaudePlugin extends Plugin {
     this.pickUp.hidden = {};
     void this.saveSettings();
     new Notice(count > 0 ? `${count} ignored chat${count === 1 ? '' : 's'} can be suggested again.` : 'No chats were ignored.');
+  }
+
+  /** The project notes of the vault: notes with `type: project` (see projects.ts). */
+  projectNotes(): TFile[] {
+    // Kept: the chip looks for the chat's project on every move of the cursor.
+    this.projectCache ??= this.app.vault.getMarkdownFiles().filter((file) => this.isProjectNote(file));
+    return this.projectCache.filter((file) => this.app.vault.getAbstractFileByPath(file.path) === file);
+  }
+
+  private isProjectNote(file: TFile): boolean {
+    return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === PROJECT_TYPE;
+  }
+
+  /** A project note's list of chat ids (`added`, added to it by hand; `connected_chats`, those connected to it). */
+  private projectChatIds(file: TFile, key: 'added' | 'connected_chats'): string[] {
+    return idList(this.app.metadataCache.getFileCache(file)?.frontmatter?.[key]);
+  }
+
+  /** A project's folder, without slashes at its ends; empty when it has none (a note made by hand). */
+  projectFolder(file: TFile): string {
+    const value: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.folder;
+    return typeof value === 'string' ? value.trim().replace(/^\/+|\/+$/g, '') : '';
+  }
+
+  /** The project whose folder is `folder`, if one is. */
+  projectOfFolder(folder: string): TFile | null {
+    return this.projectNotes().find((file) => this.projectFolder(file) === folder) ?? null;
+  }
+
+  /** Chat `id`'s home project and why it is (see homeOf); kept until projects, notes or the chat's choices change. */
+  homeReason(id: string): { file: TFile; reason: HomeReason } | null {
+    if (!this.homeCache.has(id)) {
+      const projects = this.projectNotes().map((file) => ({ key: file.path, folder: this.projectFolder(file), added: this.projectChatIds(file, 'added') }));
+      const state = this.projectState(id);
+      this.homeCache.set(id, homeOf(id, { notes: this.weightedNotes().get(id), start: state.start, declined: state.declined }, projects));
+    }
+    const reason = this.homeCache.get(id);
+    const file = reason ? this.app.vault.getAbstractFileByPath(reason.key) : null;
+    return reason && file instanceof TFile ? { file, reason } : null;
+  }
+
+  /**
+   * A fingerprint of project `path`'s Instructions and Guide (see contextHash); null until read, when
+   * the panels are told. Read again when the note changes.
+   */
+  projectHashNow(path: string): string | null {
+    const known = this.projectHashes.get(path);
+    if (known !== undefined) return known;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return null;
+    this.projectHashes.set(path, null);
+    void this.projectParts(file).then(
+      (parts) => {
+        this.projectHashes.set(path, contextHash(parts));
+        this.projectsChanged();
+      },
+      (error: unknown) => log('reading a project failed', error),
+    );
+    return null;
+  }
+
+  /** Records that chat `from` linked to chats `to` in a message sent (see ChatView.send): shown on its map, and their projects offered. */
+  linkChats(from: string, to: string[]): void {
+    const known = this.chatLinks[from] ?? [];
+    const added = to.filter((id) => id !== from && !known.includes(id));
+    if (added.length === 0) return;
+    this.chatLinks[from] = [...known, ...added];
+    this.saveSoon();
+  }
+
+  /** The chats chat `id` linked to, and those that linked to it. */
+  linkedChats(id: string): string[] {
+    const to = this.chatLinks[id] ?? [];
+    const from = Object.keys(this.chatLinks).filter((other) => this.chatLinks[other].includes(id));
+    return [...new Set([...to, ...from])];
+  }
+
+  /** Takes away chat `from`'s link to chat `to`. */
+  unlinkChat(from: string, to: string): void {
+    const kept = (this.chatLinks[from] ?? []).filter((id) => id !== to);
+    if (kept.length > 0) this.chatLinks[from] = kept;
+    else delete this.chatLinks[from];
+    this.saveSoon();
+  }
+
+  /**
+   * What goes to another chat when chat `id` is included in it: its title and date, then its summary
+   * when one was asked for (see summariseLinkedChat), else its memos (description, Next), else its last
+   * exchanges, the latest kept (see chatDigest). Read locally: no request.
+   */
+  async linkedChatDigest(id: string): Promise<string> {
+    const item = this.lastListing?.find((each) => each.id === id);
+    const head = `${this.chatTitleOf(id)}${item ? ` (last active ${formatDate(item.updatedAt)})` : ''}`;
+    const summary = this.chatSummaries[id];
+    if (summary) return `${head}\nSummary (${formatDate(summary.at)}):\n${summary.text}`;
+    const memos = this.memoNotes(id).slice(0, 3);
+    if (memos.length > 0) {
+      const items = await Promise.all(
+        memos.map(async (file) => {
+          const text = await this.app.vault.cachedRead(file);
+          // Its description: what follows the title, up to the first section.
+          const description = /^# .*\n+([^#][\s\S]*?)(?=\n## |(?![\s\S]))/m.exec(text.replace(/^---\n[\s\S]*?\n---\n+/, ''))?.[1]?.trim() ?? '';
+          const next = memoSection(text, 'Next').trim();
+          return [`Memo “${file.basename}”${description ? `: ${description}` : ''}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
+        }),
+      );
+      return `${head}\n${items.join('\n\n')}`;
+    }
+    const dir = this.vaultRoot();
+    const messages = dir ? await lastMessages(id, dir, ownMessage, DIGEST_MESSAGES, PICK_UP_BYTES).catch(() => []) : [];
+    const digest = chatDigest(messages);
+    return digest ? `${head}\nIts last exchanges:\n${digest}` : head;
+  }
+
+  /** Asks the model for small jobs for a summary of chat `id`, used in place of its digest when it is included in another chat. */
+  async summariseLinkedChat(id: string, signal: AbortSignal): Promise<void> {
+    const launch = this.claudeLaunch();
+    const dir = this.vaultRoot();
+    if (typeof launch === 'string') throw new Error(launch);
+    if (!dir) throw new Error('the vault is not a folder on this computer');
+    const transcript = chatDigest(await loadTranscript(id, dir));
+    const text = await runOneShot(launch, { system: LINKED_SUMMARY_SYSTEM, prompt: `Conversation “${this.chatTitleOf(id)}”:\n\n${transcript}`, model: this.smallJobModel(), effort: 'low' }, () => undefined, signal);
+    if (signal.aborted || !text.trim()) return;
+    this.chatSummaries[id] = { text: text.trim(), at: Date.now() };
+    this.saveSoon();
+  }
+
+  /** Drops chat `id`'s summary: its digest is read from it again. */
+  forgetLinkedSummary(id: string): void {
+    delete this.chatSummaries[id];
+    this.saveSoon();
+  }
+
+  /** What the maps do: open a note or chat, preview a note, and link a chat from chat `from` (the map's, or the one on screen). */
+  private mapActions(from: string | null) {
+    return {
+      titleOf: (id: string) => this.chatTitleOf(id),
+      openNote: (path: string, newTab: boolean) => void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false),
+      previewNote: (path: string, event: MouseEvent | KeyboardEvent, target: Element, parent: unknown) =>
+        this.app.workspace.trigger('hover-link', { event, source: VIEW_TYPE, hoverParent: parent, targetEl: target, linktext: path }),
+      openChat: (id: string) => void this.openChatById(id, this.chatTitleOf(id)),
+      linked: (id: string) => (from ? (this.chatLinks[from] ?? []).includes(id) : null),
+      link: (id: string, on: boolean) => {
+        if (!from || from === id) return;
+        if (on) this.linkChats(from, [id]);
+        else this.unlinkChat(from, id);
+        this.projectsChanged();
+        new Notice(on ? `Linked to “${this.chatTitleOf(id)}”: tick Include on the links chip to send what it found.` : `No longer linked to “${this.chatTitleOf(id)}”.`);
+      },
+    };
+  }
+
+  /** A chat's connections map (see ChatMapModal), from panel `view`. */
+  async openChatMap(view: ChatView, id: string): Promise<void> {
+    await this.listChats().catch(() => []);
+    const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
+    const listed = new Set((this.lastListing ?? []).filter((item) => !item.scratch).map((item) => item.id));
+    const weighted = new Map([...this.weightedNotes()].filter(([other]) => other === id || listed.has(other)));
+    const map = chatMap(id, weighted, this.linkedChats(id).filter((other) => listed.has(other)), recent);
+    const home = this.homeProject(id);
+    new ChatMapModal(this.app, {
+      ...this.mapActions(id),
+      title: this.chatTitleOf(id),
+      ...map,
+      project: home ? { name: home.basename, folder: this.projectFolder(home) } : null,
+      projectOfChat: (other) => this.homeProject(other)?.basename ?? null,
+      folderProject: (folder) => {
+        const file = this.projectOfFolder(folder);
+        return file && { path: file.path, name: file.basename };
+      },
+      makeProject: (folder) => void this.openCreateProject({ folder, chatId: home ? null : id }),
+      connect: (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) void this.connectProject(id, file, true).then(() => new Notice(`Connected to “${file.basename}”: choose to use its Guide in the project dialog.`));
+      },
+    }).open();
+  }
+
+  /** A project's map (see ProjectMapModal). */
+  async openProjectMap(file: TFile, view: ChatView | null = null): Promise<void> {
+    await this.listChats().catch(() => []);
+    const members = this.projectMembers(file).map((item) => item.id);
+    const map = projectMap(members, this.weightedNotes());
+    new ProjectMapModal(this.app, { ...this.mapActions(view?.currentChatId() ?? null), name: file.basename, ...map, moreChats: Math.max(0, members.length - map.chats.length) }).open();
+  }
+
+  /** Chat `id`'s home project, if it has one. */
+  homeProject(id: string): TFile | null {
+    return this.homeReason(id)?.file ?? null;
+  }
+
+  /** What chats' homes are worked out from changed: they are worked out again when asked for. */
+  private membershipChanged(): void {
+    this.homeCache.clear();
+    this.notesCache = null;
+    this.weightsCache = null;
+  }
+
+  /** The listed chats whose home project is `file`, newest first. */
+  projectMembers(file: TFile): HistoryItem[] {
+    return (this.lastListing ?? []).filter((item) => !item.scratch && this.homeProject(item.id) === file).sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** The projects chat `id` is connected to. */
+  connectedProjects(id: string): TFile[] {
+    return this.projectNotes().filter((file) => this.projectChatIds(file, 'connected_chats').includes(id));
+  }
+
+  /** The projects whose folders hold project `file`'s folder, the outermost first: their Instructions go with its chats too. */
+  enclosingProjects(file: TFile): TFile[] {
+    const folder = this.projectFolder(file);
+    if (!folder) return [];
+    return this.projectNotes()
+      .filter((other) => other !== file && this.projectFolder(other) !== '' && folder.startsWith(`${this.projectFolder(other)}/`))
+      .sort((a, b) => this.projectFolder(a).length - this.projectFolder(b).length);
+  }
+
+  /** The project whose folder holds note `path` (the deepest such folder), which a new chat with it attached joins. */
+  projectForPath(path: string): TFile | null {
+    let best: TFile | null = null;
+    let depth = -1;
+    for (const file of this.projectNotes()) {
+      const folder = this.projectFolder(file);
+      if (!folder || !inFolder(path, folder) || folder.length <= depth) continue;
+      best = file;
+      depth = folder.length;
+    }
+    return best;
+  }
+
+  /** What a chat's projects have sent with it, and what it chose (see ChatProjectState). */
+  projectState(id: string): ChatProjectState {
+    return this.chatProjects[id] ?? {};
+  }
+
+  setProjectState(id: string, state: ChatProjectState): void {
+    const kept: ChatProjectState = {};
+    if (state.sent?.length) kept.sent = state.sent;
+    if (state.sent?.length && state.sentHash) kept.sentHash = Object.fromEntries(Object.entries(state.sentHash).filter(([path]) => state.sent?.includes(path)));
+    if (state.noGuide) kept.noGuide = true;
+    if (state.guides?.length) kept.guides = state.guides;
+    if (state.declined) kept.declined = true;
+    if (state.start) kept.start = state.start;
+    if (state.includeChats?.length) kept.includeChats = state.includeChats;
+    if (Object.keys(kept).length > 0) this.chatProjects[id] = kept;
+    else delete this.chatProjects[id];
+    this.homeCache.delete(id);
+    void this.saveSettings();
+  }
+
+  /**
+   * Makes `file` chat `id`'s home project, added by hand (and no longer only connected to it); null
+   * takes it out of its project, by hand, after which its notes do not give it one.
+   */
+  async setHomeProject(id: string, file: TFile | null): Promise<void> {
+    for (const project of this.projectNotes()) {
+      const isHome = project === file;
+      const listed = this.projectChatIds(project, 'added').includes(id);
+      if (isHome ? listed && !this.projectChatIds(project, 'connected_chats').includes(id) : !listed) continue;
+      // From the frontmatter as written, which the index may not have caught up with.
+      await this.app.fileManager.processFrontMatter(project, (front: Record<string, unknown>) => {
+        const added = idList(front.added).filter((each) => each !== id);
+        front.added = isHome ? [...added, id] : added;
+        if (isHome) front.connected_chats = idList(front.connected_chats).filter((each) => each !== id);
+        front.updated = today();
+      });
+      await this.indexed(project);
+    }
+    const state = this.projectState(id);
+    // Its connected projects' Guides no longer go when one of them is now its home.
+    this.setProjectState(id, { ...state, declined: file === null, guides: file ? state.guides?.filter((path) => path !== file.path) : state.guides });
+    this.membershipChanged();
+    this.projectsChanged();
+  }
+
+  /** Connects chat `id` to project `file` (or not, `on` false); its Guide goes only once chosen in the chat. */
+  async connectProject(id: string, file: TFile, on: boolean): Promise<void> {
+    if (this.projectChatIds(file, 'connected_chats').includes(id) === on) return;
+    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
+      const connected = idList(front.connected_chats).filter((each) => each !== id);
+      front.connected_chats = on ? [...connected, id] : connected;
+      front.updated = today();
+    });
+    await this.indexed(file);
+    if (!on) {
+      const state = this.projectState(id);
+      this.setProjectState(id, { ...state, guides: state.guides?.filter((path) => path !== file.path) });
+    }
+    this.projectsChanged();
+  }
+
+  /** Resolves once Obsidian has read `file` again after a change (at most a second later). */
+  private indexed(file: TFile): Promise<void> {
+    return new Promise((resolve) => {
+      const ref = this.app.metadataCache.on('changed', (changed) => {
+        if (changed !== file) return;
+        this.app.metadataCache.offref(ref);
+        window.clearTimeout(timer);
+        resolve();
+      });
+      const timer = window.setTimeout(() => {
+        this.app.metadataCache.offref(ref);
+        resolve();
+      }, 1000);
+    });
+  }
+
+  /** A folder moved or was renamed: the projects of it and of folders in it follow (their notes, and so their chats, are there). */
+  private projectFolderMoved(from: string, to: string): void {
+    for (const file of this.projectNotes()) {
+      const folder = this.projectFolder(file);
+      const moved = folder ? movedPath(folder, from, to) : undefined;
+      if (!moved) continue;
+      void this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
+        front.folder = moved;
+        front.updated = today();
+      });
+    }
+  }
+
+  /** The panels draw their project chips again. */
+  private projectsChanged(): void {
+    for (const view of this.chatViews()) view.projectsChanged();
+  }
+
+  /** A chat's title as listed; `Chat` when it is not. */
+  chatTitleOf(id: string): string {
+    return this.lastListing?.find((item) => item.id === id)?.title ?? this.chats.find((chat) => chat.id === id)?.title ?? 'Chat';
+  }
+
+  /** A Markdown link that opens chat `id` (see chatLink), titled by it. */
+  private chatMarkdownLink(id: string): string {
+    return `[${this.chatTitleOf(id).replace(/[[\]]/g, '')}](${chatLink({ vault: this.app.vault.getName(), chat: id })})`;
+  }
+
+  /**
+   * Writes a project's generated lists as they are now: its chats (newest first) and connected chats,
+   * and the notes its chats worked on most. Written only when they changed; done when the note is
+   * opened, as its chats follow from their notes rather than from the note.
+   */
+  async refreshProjectLists(file: TFile): Promise<void> {
+    await this.listChats().catch(() => []);
+    const own = this.projectMembers(file).map((item) => item.id);
+    const when = (id: string) => this.lastListing?.find((item) => item.id === id)?.updatedAt ?? 0;
+    const connected = this.projectChatIds(file, 'connected_chats').sort((a, b) => when(b) - when(a));
+    const chats = [
+      ...own.map((id) => `- ${this.chatMarkdownLink(id)}`),
+      ...(connected.length > 0 ? ['', 'Connected:', '', ...connected.map((id) => `- ${this.chatMarkdownLink(id)}`)] : []),
+    ].join('\n');
+    const keyNotes = this.keyNotes(file, own);
+    const before = await this.app.vault.read(file);
+    const after = withGenerated(withGenerated(before, 'Chats', chats), 'Key notes', keyNotes);
+    if (after !== before) await this.app.vault.process(file, (text) => withGenerated(withGenerated(text, 'Chats', chats), 'Key notes', keyNotes));
+  }
+
+  /** The notes chats `own` edited or were sent most (how many of them did), as a list of links from project note `file`. */
+  private keyNotes(file: TFile, own: string[]): string {
+    const counts = new Map<string, number>();
+    for (const index of [this.noteChats, this.noteRefs]) {
+      for (const [path, ids] of Object.entries(index)) {
+        const n = ids.filter((id) => own.includes(id)).length;
+        if (n > 0 && path !== file.path) counts.set(path, Math.max(counts.get(path) ?? 0, n));
+      }
+    }
+    return [...counts]
+      .flatMap(([path, n]) => {
+        const note = this.app.vault.getAbstractFileByPath(path);
+        return note instanceof TFile ? [{ note, n }] : [];
+      })
+      .sort((a, b) => b.n - a.n || a.note.basename.localeCompare(b.note.basename))
+      .slice(0, PROJECT_KEY_NOTES)
+      .map(({ note, n }) => `- [[${this.app.metadataCache.fileToLinktext(note, file.path)}]]${n > 1 ? ` (${n} chats)` : ''}`)
+      .join('\n');
+  }
+
+  /** Where project notes go: `Projects` beside the memos folder. */
+  private projectsFolder(): string {
+    const memos = this.memosFolder();
+    const parent = memos === '/' ? '' : memos.split('/').slice(0, -1).join('/');
+    return parent ? `${parent}/Projects` : 'Projects';
+  }
+
+  /**
+   * Create project: a folder of the vault, chosen in a browser; `folder`, one chosen already (from the
+   * history); `chatId`, a chat to make it for, whose notes suggest the folder and which joins it.
+   */
+  async openCreateProject(options: { folder?: string; chatId?: string | null } = {}): Promise<void> {
+    await this.listChats().catch(() => []);
+    const notes = this.chatNotes();
+    const folders = this.app.vault
+      .getAllLoadedFiles()
+      .filter((each): each is TFolder => each instanceof TFolder && each.path !== '/' && !this.skipFolder(each.path))
+      .map((folder) => folder.path)
+      .sort();
+    const listed = (this.lastListing ?? []).filter((item) => !item.scratch);
+    const suggestion = options.chatId ? suggestFolder(notes.get(options.chatId) ?? [], (folder) => this.skipFolder(folder)) : null;
+    new CreateProjectModal(this.app, {
+      folders,
+      folder: options.folder,
+      suggestion: suggestion && !this.projectOfFolder(suggestion.folder) ? suggestion : null,
+      preview: (folder) => {
+        const chats = listed.filter((item) => [...(notes.get(item.id) ?? [])].some((path) => inFolder(path, folder)));
+        return { count: chats.length, latest: chats.length > 0 ? formatDate(Math.max(...chats.map((item) => item.updatedAt))) : '' };
+      },
+      projectOf: (folder) => this.projectOfFolder(folder)?.basename ?? null,
+      create: (name, folder) => this.createProject(name, folder, options.chatId ?? null),
+      nameProblem: (name) => this.projectNameProblem(name),
+      defaultName: (folder) => {
+        const base = `Claude Project — ${folder.slice(folder.lastIndexOf('/') + 1)}`;
+        let name = base;
+        for (let n = 2; this.projectNameProblem(name) !== null; n++) name = `${base} ${n}`;
+        return name;
+      },
+    }).open();
+  }
+
+  /** The notes each chat edited or was sent (see notesByChat): what tells which folder its work is in. Kept until the indexes change. */
+  chatNotes(): Map<string, Set<string>> {
+    this.notesCache ??= notesByChat(this.noteChats, this.noteRefs);
+    return this.notesCache;
+  }
+
+  /** Each chat's notes, edited, sent or mentioned, with the weight of its link to each (see weightedNotes). Kept until the indexes change. */
+  weightedNotes(): Map<string, Map<string, number>> {
+    this.weightsCache ??= weightedNotes(this.noteChats, this.noteRefs, this.noteMentions);
+    return this.weightsCache;
+  }
+
+  /** Folders not offered for a project: the plugin's own (saved chats, memos, projects) and those hidden. */
+  private skipFolder(folder: string): boolean {
+    const own = [this.settings.savedChatsFolder, this.memosFolder(), this.projectsFolder()].map((each) => normalizePath(each || '/')).filter((each) => each !== '/');
+    return own.some((each) => folder === each || folder.startsWith(`${each}/`)) || this.isHiddenFolder(folder);
+  }
+
+  /** Whether a folder's notes are hidden from Claude: the hidden-path patterns read notes only, so a note in it is asked about. */
+  private isHiddenFolder(folder: string): boolean {
+    return this.isHiddenPath(`${folder}/note.md`);
+  }
+
+  /** For a chat without a project, the folder its notes suggest (see suggestFolder), when it is not a project already. */
+  folderSuggestionFor(id: string): FolderSuggestion | null {
+    const suggestion = suggestFolder(this.chatNotes().get(id) ?? [], (folder) => this.skipFolder(folder));
+    return suggestion && !this.projectOfFolder(suggestion.folder) ? suggestion : null;
+  }
+
+  /**
+   * Makes project note `name` for folder `folder` and opens it; `chatId`, a chat it is made for, which
+   * is added to it unless its notes put it there already. False when it could not be made.
+   */
+  /** A project note's name as it is written: without the characters a note name cannot hold. */
+  private cleanProjectName(name: string): string {
+    return name.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  /** Why a project note cannot be called `name`: none left once cleaned, or a note of that name exists (names are unique in the vault). */
+  projectNameProblem(name: string): string | null {
+    const clean = this.cleanProjectName(name);
+    if (!clean) return 'A project needs a name with letters or numbers in it.';
+    const taken = this.app.vault.getAbstractFileByPath(`${this.projectsFolder()}/${clean}.md`) ?? this.app.metadataCache.getFirstLinkpathDest(clean, '');
+    return taken ? `A note named “${clean}” exists already (${taken.path}): choose another name.` : null;
+  }
+
+  async createProject(name: string, folder: string, chatId: string | null): Promise<boolean> {
+    const clean = this.cleanProjectName(name);
+    const problem = this.projectNameProblem(name);
+    if (problem) {
+      new Notice(problem);
+      return false;
+    }
+    if (!(this.app.vault.getAbstractFileByPath(folder) instanceof TFolder)) {
+      new Notice(`There is no folder “${folder}”.`);
+      return false;
+    }
+    const taken = this.projectOfFolder(folder);
+    if (taken) {
+      new Notice(`“${folder}” is the folder of “${taken.basename}” already.`);
+      return false;
+    }
+    const where = this.projectsFolder();
+    const path = `${where}/${clean}.md`;
+    try {
+      if (!this.app.vault.getAbstractFileByPath(where)) await this.app.vault.createFolder(where);
+      const file = await this.app.vault.create(path, projectNoteMarkdown({ name: clean, folder, added: [], date: today() }));
+      await this.indexed(file);
+      this.projectCache = null;
+      this.membershipChanged();
+      if (chatId && this.homeProject(chatId) !== file) await this.setHomeProject(chatId, file);
+      await this.refreshProjectLists(file);
+      this.projectsChanged();
+      await this.app.workspace.getLeaf('tab').openFile(file);
+      new Notice(`Project “${clean}” created. Write its Instructions in the note.`);
+      return true;
+    } catch (error) {
+      log('creating a project failed', error);
+      new Notice(`The project could not be created: ${errorText(error)}.`);
+      return false;
+    }
+  }
+
+  /** A project's Instructions and Guide as they go with a chat. */
+  async projectParts(file: TFile): Promise<{ instructions: string; guide: string }> {
+    return projectParts(await this.app.vault.cachedRead(file));
+  }
+
+  /** Update project guide: the project of the note in front, else of the chat on screen, else one chosen. */
+  async openUpdateGuide(chatId?: string | null): Promise<void> {
+    const active = this.app.workspace.getActiveFile();
+    const project = active && this.app.metadataCache.getFileCache(active)?.frontmatter?.type === PROJECT_TYPE ? active : chatId ? this.homeProject(chatId) : null;
+    if (project) return this.updateGuide(project);
+    const projects = this.projectNotes();
+    if (projects.length === 0) {
+      new Notice('There are no projects yet: create one first.');
+      return;
+    }
+    new ProjectPicker(this.app, projects.map(projectRef), 'Update the Guide of…', (chosen) => {
+      const file = this.app.vault.getAbstractFileByPath(chosen.path);
+      if (file instanceof TFile) void this.updateGuide(file);
+    }).open();
+  }
+
+  private async updateGuide(file: TFile): Promise<void> {
+    await this.refreshProjectLists(file);
+    const since = String(this.app.metadataCache.getFileCache(file)?.frontmatter?.guide_updated ?? '');
+    const choice = (id: string, tick: boolean) => {
+      const item = this.lastListing?.find((each) => each.id === id);
+      // Ticked: those active since the Guide was last updated, all when it never was.
+      return { id, title: this.chatTitleOf(id), when: item ? formatDate(item.updatedAt) : 'not found', ticked: tick && !!item && (!since || formatDate(item.updatedAt).slice(0, 10) >= since), item };
+    };
+    const own = this.projectMembers(file).map((item) => choice(item.id, true));
+    const connected = this.projectChatIds(file, 'connected_chats').map((id) => choice(id, false)).filter((each) => each.item);
+    const newest = (a: { item?: HistoryItem }, b: { item?: HistoryItem }) => (b.item?.updatedAt ?? 0) - (a.item?.updatedAt ?? 0);
+    new GuideModal(this.app, {
+      project: projectRef(file),
+      chats: own,
+      connected: connected.sort(newest),
+      propose: (ids, signal) => this.proposeGuide(file, ids, signal),
+      apply: (accepted) => this.applyGuide(file, accepted),
+      titleOf: (id) => this.chatTitleOf(id),
+      openChat: (id) => void this.openChatById(id, this.chatTitleOf(id)),
+    }).open();
+  }
+
+  /** Claude's proposals for a project's Guide from chats `ids`, read locally from their session files (see chatDigest, chatEdits). */
+  private async proposeGuide(file: TFile, ids: string[], signal: AbortSignal): Promise<GuideProposal[]> {
+    const launch = this.claudeLaunch();
+    const dir = this.vaultRoot();
+    if (typeof launch === 'string') throw new Error(launch);
+    if (!dir) throw new Error('the vault is not a folder on this computer');
+    const chats = [];
+    for (const id of ids) {
+      const messages = await loadTranscript(id, dir).catch(() => []);
+      chats.push({ id, title: this.chatTitleOf(id), digest: chatDigest(messages), edits: chatEdits(messages) });
+    }
+    const parts = await this.projectParts(file);
+    const reply = await runOneShot(launch, { system: GUIDE_SYSTEM, prompt: guidePrompt({ name: file.basename, ...parts }, chats), model: this.smallJobModel(), effort: 'low' }, () => undefined, signal);
+    const proposals = readGuideProposals(reply, ids);
+    if (!proposals) throw new Error('Claude did not reply in the form asked for');
+    return proposals;
+  }
+
+  /** Adds the accepted proposals to a project's Guide, each linked to its chat, and stamps when. */
+  private async applyGuide(file: TFile, accepted: GuideProposal[]): Promise<void> {
+    if (accepted.length === 0) return;
+    const date = today();
+    const vault = this.app.vault.getName();
+    const lines = accepted.map((proposal) => guideLine(proposal, { title: this.chatTitleOf(proposal.source), link: chatLink({ vault, chat: proposal.source }) }, date));
+    await this.app.vault.process(file, (text) => withGuideLines(text, lines));
+    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
+      front.guide_updated = date;
+      front.updated = date;
+    });
+    new Notice(`${accepted.length} addition${accepted.length === 1 ? '' : 's'} to the Guide of “${file.basename}”.`);
+    this.projectsChanged();
   }
 
   /** Pick up where you left off: Claude's suggestions of chats to carry on (see pickUp.ts, PickUpModal). */
@@ -1819,6 +2545,9 @@ export default class VaultClaudePlugin extends Plugin {
       skipped: pickUp?.skipped && typeof pickUp.skipped === 'object' ? pickUp.skipped : {},
       kept: pickUp?.kept && typeof pickUp.kept === 'object' && Array.isArray(pickUp.kept.suggestions) ? pickUp.kept : undefined,
     };
+    this.chatProjects = raw.chatProjects && typeof raw.chatProjects === 'object' ? raw.chatProjects : {};
+    this.chatLinks = raw.chatLinks && typeof raw.chatLinks === 'object' ? raw.chatLinks : {};
+    this.chatSummaries = raw.chatSummaries && typeof raw.chatSummaries === 'object' ? raw.chatSummaries : {};
     this.models = Array.isArray(raw.models) ? raw.models : [];
     this.modelsFetchedAt = typeof raw.modelsFetchedAt === 'number' ? raw.modelsFetchedAt : 0;
     this.commands = Array.isArray(raw.commands) ? raw.commands : [];
@@ -1867,6 +2596,9 @@ export default class VaultClaudePlugin extends Plugin {
       ticks: this.ticks,
       sideSessions: this.sideSessions,
       pickUp: this.pickUp,
+      chatProjects: this.chatProjects,
+      chatLinks: this.chatLinks,
+      chatSummaries: this.chatSummaries,
     };
   }
 }

@@ -46,7 +46,7 @@ import { chipFor, closeImage, renderChip } from './chip';
 import { hintAbove } from './hint';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
-import { BOOKMARK_TAG, cleanTags, freeMemoTitle, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
+import { BOOKMARK_TAG, chatLink, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -61,7 +61,11 @@ import { HistoryModal, RenameModal, confirmDelete } from './historyModal';
 import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
-import type { ChatDraft } from './main';
+import type { ChatDraft, ChatProjectState } from './main';
+import { contextHash, linkedChatsBlock, projectContextBlock } from './projects';
+import { LinksModal } from './linksModal';
+import { ChatProjectModal, ProjectPicker } from './projectModals';
+import { renderSafely } from './safeRender';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
 import { SCRATCH_IDLE_CHOICES, chatModel, denyRuleList, idleLabel, modeShort, permissionModes, type ToolDisplay } from './settings';
@@ -103,6 +107,9 @@ import {
   turnStats,
   usageWindows,
 } from './usageDisplay';
+
+/** How many projects the chip's offer lists by name; the rest are found with Other project…. */
+const RECENT_PROJECTS = 5;
 
 export const VIEW_TYPE = 'vault-claude-chat';
 /** A chat opened from the history with more turns than this opens on its last ones; the rest are drawn when needed. */
@@ -472,6 +479,13 @@ export class ChatView extends ItemView {
   private quoteTracking = false;
   /** What the chips above the input last showed, so an unchanged selection does not redraw them. */
   private contextKey = '';
+  /**
+   * A chat not started yet: its project as chosen (a project note's path; null, none), or undefined
+   * for the one its attached note's folder belongs to; and what it chose to send (see ChatProjectState).
+   * Both go to the plugin's record once the chat has an id.
+   */
+  private projectPick: string | null | undefined = undefined;
+  private projectLocal: ChatProjectState = {};
   private noteChatsEl!: HTMLElement;
   private draftEl!: HTMLElement;
   /** The note this chat's message is being written in, while one is open. */
@@ -482,6 +496,8 @@ export class ChatView extends ItemView {
   private noteChatsText: string | null = null;
   /** Notes sent before the chat had an id; they are linked to it once Claude Code gives it one. */
   private notesToLink: string[] = [];
+  /** Chats linked from messages sent before the chat had an id (see linkSentChats). */
+  private chatsToLink: string[] = [];
   /** Set once the panel starts closing: another closing panel must not hand it chats. */
   private closing = false;
   /** Drafts of chats with no id yet (a new chat, a new scratch chat): they exist only in this panel. */
@@ -710,6 +726,9 @@ export class ChatView extends ItemView {
       menu.addItem((item) => item.setTitle('Save summary as note').setIcon('file-text').onClick(() => void this.saveSummaryAsNote()));
       menu.showAtMouseEvent(evt);
     });
+    const mapButton = titleActions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Connections: its notes, its project and the chats that share them' } });
+    setIcon(mapButton, 'waypoints');
+    this.registerDomEvent(mapButton, 'click', () => this.openConnections());
     const sideChatButton = titleActions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Side chat: ask about this chat without changing it' } });
     setIcon(sideChatButton, 'messages-square');
     // Minimised, it opens again; open, it closes.
@@ -1316,6 +1335,8 @@ export class ChatView extends ItemView {
     this.growInput();
     const fresh = draft === undefined && isLocalDraft(key);
     this.attachedNote = draft?.note ?? (fresh && this.plugin.settings.attachActiveNote ? (this.activeNote()?.file.path ?? null) : null);
+    this.projectPick = undefined;
+    this.projectLocal = {};
     this.updateContextChip();
   }
 
@@ -1484,6 +1505,398 @@ export class ChatView extends ItemView {
     }
     this.updateBackgroundIndicator();
     return count;
+  }
+
+  /** The id of the chat on screen; null for a chat not started, or the scratch chat. */
+  currentChatId(): string | null {
+    return this.scratch ? null : this.chatId;
+  }
+
+  /** The chat's home project: its own once started, else the one chosen or its attached note's (see projectPick); none for the scratch chat. */
+  private homeProjectFile(): TFile | null {
+    if (this.scratch) return null;
+    if (this.chatId) return this.plugin.homeProject(this.chatId);
+    if (this.projectPick === null) return null;
+    if (this.projectPick !== undefined) {
+      const file = this.app.vault.getAbstractFileByPath(this.projectPick);
+      return file instanceof TFile ? file : null;
+    }
+    return this.attachedNote ? this.plugin.projectForPath(this.attachedNote) : null;
+  }
+
+  private projectStateNow(): ChatProjectState {
+    return this.chatId ? this.plugin.projectState(this.chatId) : this.projectLocal;
+  }
+
+  private setProjectStateNow(state: ChatProjectState): void {
+    if (this.chatId) this.plugin.setProjectState(this.chatId, state);
+    else this.projectLocal = state;
+  }
+
+  /** What goes with the next message from the chat's projects (see projectContextBlock), and which projects it holds. */
+  private async projectContext(): Promise<{ block: string; paths: string[]; hashes: Record<string, string> }> {
+    const home = this.homeProjectFile();
+    const state = this.projectStateNow();
+    const sent = new Set(state.sent ?? []);
+    const parts: Parameters<typeof projectContextBlock>[0] = [];
+    // What went is marked by key: a project's path; `parent:` and its path for an enclosing project's Instructions; `chat:` and an id.
+    const paths: string[] = [];
+    const hashes: Record<string, string> = {};
+    // The Instructions of the projects holding its home project's folder, the outermost first.
+    for (const parent of home ? this.plugin.enclosingProjects(home) : []) {
+      const key = `parent:${parent.path}`;
+      if (sent.has(key)) continue;
+      const read = await this.plugin.projectParts(parent);
+      if (!read.instructions) continue;
+      parts.push({ name: parent.basename, note: parent.path, instructions: read.instructions, role: 'parent' });
+      paths.push(key);
+      hashes[key] = contextHash(read);
+    }
+    if (home && !sent.has(home.path)) {
+      const read = await this.plugin.projectParts(home);
+      if (read.instructions || (read.guide && !state.noGuide)) {
+        parts.push({ name: home.basename, note: home.path, instructions: read.instructions, guide: state.noGuide ? '' : read.guide, role: 'home' });
+        paths.push(home.path);
+        hashes[home.path] = contextHash(read);
+      }
+    }
+    for (const path of state.guides ?? []) {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile) || sent.has(path) || file === home) continue;
+      const read = await this.plugin.projectParts(file);
+      if (!read.guide) continue;
+      parts.push({ name: file.basename, note: file.path, guide: read.guide, role: 'connected' });
+      paths.push(path);
+      hashes[path] = contextHash(read);
+    }
+    // The chats it links to and includes: each one's digest, once.
+    const chats: Parameters<typeof linkedChatsBlock>[0] = [];
+    for (const id of this.includedChats()) {
+      const key = `chat:${id}`;
+      if (sent.has(key)) continue;
+      chats.push({ id, title: this.plugin.chatTitleOf(id), digest: await this.plugin.linkedChatDigest(id) });
+      paths.push(key);
+      hashes[key] = this.chatStamp(id);
+    }
+    return { block: [projectContextBlock(parts), linkedChatsBlock(chats)].filter(Boolean).join('\n\n'), paths, hashes };
+  }
+
+  /** Whether what went under `key` (see projectContext) changed since: a project's Instructions or Guide, or a linked chat. */
+  private sentChanged(key: string): boolean {
+    const state = this.projectStateNow();
+    const was = state.sentHash?.[key];
+    if (!(state.sent?.includes(key) ?? false) || was === undefined) return false;
+    if (key.startsWith('chat:')) return this.chatStamp(key.slice('chat:'.length)) !== was;
+    const now = this.plugin.projectHashNow(key.replace(/^parent:/, ''));
+    return now !== null && now !== was;
+  }
+
+  /** Whether project `path`'s context (its own, or an enclosing project's Instructions) went with this chat and changed since. */
+  private projectUpdated(path: string): boolean {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    const parents = file instanceof TFile ? this.plugin.enclosingProjects(file).map((parent) => `parent:${parent.path}`) : [];
+    return [path, ...parents].some((key) => this.sentChanged(key));
+  }
+
+  /** When chat `id` last changed, as what went of it is marked: its last activity, and its summary's. */
+  private chatStamp(id: string): string {
+    const item = this.plugin.listedChats()?.find((each) => each.id === id);
+    return `${item?.updatedAt ?? 0}|${this.plugin.chatSummaries[id]?.at ?? 0}`;
+  }
+
+  /** The chats this one links to: those recorded, and those linked in the message being typed (recorded when it is sent). */
+  private linksTo(): { id: string; pending: boolean }[] {
+    const recorded = this.chatId && !this.scratch ? (this.plugin.chatLinks[this.chatId] ?? []) : [];
+    const typed = linkedChatIds(this.inputEl.value).filter((id) => id !== this.chatId && !recorded.includes(id));
+    return [...recorded.map((id) => ({ id, pending: false })), ...typed.map((id) => ({ id, pending: true }))];
+  }
+
+  /** The chats that link to this one. */
+  private linksFrom(): string[] {
+    const id = this.chatId;
+    if (!id || this.scratch) return [];
+    return Object.keys(this.plugin.chatLinks).filter((other) => other !== id && this.plugin.chatLinks[other].includes(id));
+  }
+
+  /** The chats this one links to whose digests are to go with it (see ChatProjectState.includeChats). */
+  private includedChats(): string[] {
+    const include = this.projectStateNow().includeChats ?? [];
+    return this.linksTo()
+      .map((link) => link.id)
+      .filter((id) => include.includes(id));
+  }
+
+  /** Links this chat to chat `id`: at once once it has started; before, by adding a link to it to the input (recorded when sent). */
+  private linkChatHere(id: string): void {
+    if (this.scratch || id === this.chatId) return;
+    if (this.chatId) {
+      this.plugin.linkChats(this.chatId, [id]);
+      this.projectsChanged();
+    } else this.addToInput(this.chatMarkdownLink(id), 'Chat linked: recorded when the message is sent');
+  }
+
+  /** A Markdown link to chat `id`, titled by it (see chatLink). */
+  private chatMarkdownLink(id: string): string {
+    return `[${this.plugin.chatTitleOf(id).replace(/[[\]]/g, '')}](${chatLink({ vault: this.app.vault.getName(), chat: id })})`;
+  }
+
+  /** The chat's links (see LinksModal): those it links to, each to include or not, and those linking to it. */
+  openLinks(): void {
+    if (this.scratch) {
+      new Notice('The scratch chat has no links.');
+      return;
+    }
+    const titleOf = (id: string) => this.plugin.chatTitleOf(id);
+    const when = (id: string) => {
+      const item = this.plugin.listedChats()?.find((each) => each.id === id);
+      return item ? formatDate(item.updatedAt) : 'not found';
+    };
+    const update = (change: (state: ChatProjectState) => ChatProjectState) => {
+      this.setProjectStateNow(change({ ...this.projectStateNow() }));
+      this.projectsChanged();
+    };
+    new LinksModal(this.app, {
+      rows: () => {
+        const state = this.projectStateNow();
+        return [
+          ...this.linksTo().map(({ id, pending }) => ({
+            id,
+            title: titleOf(id),
+            when: when(id),
+            direction: 'to' as const,
+            pending,
+            include: state.includeChats?.includes(id) ?? false,
+            sent: state.sent?.includes(`chat:${id}`) ?? false,
+            updated: this.sentChanged(`chat:${id}`),
+            summarised: this.plugin.chatSummaries[id] !== undefined,
+          })),
+          ...this.linksFrom().map((id) => ({ id, title: titleOf(id), when: when(id), direction: 'from' as const, pending: false, include: false, sent: false, updated: false, summarised: false })),
+        ];
+      },
+      digest: (id) => this.plugin.linkedChatDigest(id),
+      setInclude: (id, on) => update((state) => ({ ...state, includeChats: [...(state.includeChats ?? []).filter((each) => each !== id), ...(on ? [id] : [])] })),
+      sendAgain: (id) => update((state) => ({ ...state, sent: state.sent?.filter((key) => key !== `chat:${id}`) })),
+      unlink: (id) => {
+        if (this.chatId && (this.plugin.chatLinks[this.chatId] ?? []).includes(id)) this.plugin.unlinkChat(this.chatId, id);
+        // Linked in the message being typed: its link there goes.
+        const value = removeChatLinks(this.inputEl.value, id);
+        if (value !== this.inputEl.value) {
+          this.inputEl.value = value;
+          this.inputEdited();
+        }
+        update((state) => ({ ...state, includeChats: state.includeChats?.filter((each) => each !== id), sent: state.sent?.filter((key) => key !== `chat:${id}`) }));
+      },
+      open: (id) => void this.plugin.openChatById(id, titleOf(id)),
+      summarise: async (id, signal) => {
+        await this.plugin.summariseLinkedChat(id, signal);
+        this.projectsChanged();
+      },
+      forgetSummary: (id) => {
+        this.plugin.forgetLinkedSummary(id);
+        this.projectsChanged();
+      },
+      candidates: () => (this.plugin.listedChats() ?? []).filter((item) => !item.scratch && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title })),
+      link: (id) => this.linkChatHere(id),
+    }).open();
+  }
+
+  /** Why the chat is in its project, in a few words (see homeOf). */
+  private projectWhy(): string {
+    const home = this.homeProjectFile();
+    if (!home) return '';
+    const reason = this.chatId ? this.plugin.homeReason(this.chatId)?.reason : null;
+    if (!this.chatId) return this.projectPick ? `Project “${home.basename}”, chosen by you.` : `Project “${home.basename}”: the attached note is in its folder.`;
+    if (!reason || reason.why === 'added') return `Project “${home.basename}”, chosen by you.`;
+    if (reason.why === 'start') return `Project “${home.basename}”: it started with ${reason.note}, in its folder.`;
+    return `Project “${home.basename}”: ${reason.count} of the notes it worked on are in its folder.`;
+  }
+
+  /** For a chat offered a project, the project of a chat it links to or that links to it (the most recent link first), if any. */
+  private linkedProjectSuggestion(): TFile | null {
+    if (!this.chatId) return null;
+    for (const id of [...this.linksTo().map((link) => link.id), ...this.linksFrom()]) {
+      const home = this.plugin.homeProject(id);
+      if (home) return home;
+    }
+    return null;
+  }
+
+  /** What the links chip shows, to tell when it must be drawn again. */
+  private linksChipKey(): string {
+    const to = this.linksTo();
+    return JSON.stringify([to, this.linksFrom().length, this.includedChats(), this.includedChats().filter((id) => this.sentChanged(`chat:${id}`))]);
+  }
+
+  /** The links chip: how many chats this one is linked with, marked when one included changed since it went. */
+  private drawLinksChip(): void {
+    const to = this.linksTo();
+    const count = to.length + this.linksFrom().length;
+    if (count === 0) return;
+    const included = this.includedChats();
+    const chip = this.contextRow.createDiv({ cls: 'vc-context-chip vc-links-chip' });
+    setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'link');
+    chip.createSpan({ cls: 'vc-context-name', text: String(count) });
+    const updated = included.some((id) => this.sentChanged(`chat:${id}`));
+    if (updated) chip.createSpan({ cls: 'vc-project-updated', attr: { 'aria-hidden': 'true' } });
+    const waiting = included.filter((id) => !(this.projectStateNow().sent ?? []).includes(`chat:${id}`)).length;
+    chip.setAttr(
+      'aria-label',
+      `Linked with ${count} chat${count === 1 ? '' : 's'}${waiting > 0 ? `; ${waiting} included, to go with your next message` : ''}${updated ? '; an included chat changed since it went' : ''}. Click to see them.`,
+    );
+  }
+
+  /** Whether the chip row offers a project: a started chat without one, unless its project was removed by hand. */
+  private offersProject(): boolean {
+    return !this.scratch && this.chatId !== null && !this.homeProjectFile() && !this.projectStateNow().declined;
+  }
+
+  /** The offer's menu: the projects most recently changed, any other, or a new one from this chat. */
+  private offerProjects(evt: MouseEvent): void {
+    const id = this.chatId;
+    if (!id) return;
+    const join = async (file: TFile) => {
+      await this.plugin.setHomeProject(id, file);
+      this.setProjectStateNow({ ...this.projectStateNow(), declined: false });
+      this.projectsChanged();
+      new Notice(`This chat is now in “${file.basename}”: its Instructions and Guide go with your next message.`);
+    };
+    const projects = this.plugin.projectNotes().sort((a, b) => b.stat.mtime - a.stat.mtime);
+    const menu = new Menu();
+    // The folder its notes suggest, made a project.
+    const suggestion = this.plugin.folderSuggestionFor(id);
+    if (suggestion) {
+      menu.addItem((item) => item.setTitle(`Make “${suggestion.folder}” a project…`).setIcon('folder-plus').onClick(() => void this.plugin.openCreateProject({ folder: suggestion.folder, chatId: id })));
+      menu.addSeparator();
+    }
+    for (const file of projects.slice(0, RECENT_PROJECTS)) menu.addItem((item) => item.setTitle(file.basename).setIcon('folder-kanban').onClick(() => void join(file)));
+    if (projects.length > RECENT_PROJECTS) {
+      menu.addItem((item) =>
+        item.setTitle('Other project…').onClick(() =>
+          new ProjectPicker(this.app, projects.map((file) => ({ path: file.path, name: file.basename })), 'Add this chat to…', (chosen) => {
+            const file = this.app.vault.getAbstractFileByPath(chosen.path);
+            if (file instanceof TFile) void join(file);
+          }).open(),
+        ),
+      );
+    }
+    if (projects.length > 0) menu.addSeparator();
+    menu.addItem((item) => item.setTitle('New project…').setIcon('plus').onClick(() => void this.plugin.openCreateProject({ chatId: id })));
+    menu.showAtMouseEvent(evt);
+  }
+
+  /**
+   * After a memo or note is saved from a chat with no project: saved notes go to the plugin's own
+   * folders, which give a chat no project, so a notice offers the projects to add it to, the most
+   * recent first. Nothing when its project was removed by hand (see offersProject).
+   */
+  private offerProjectAfterSave(): void {
+    const id = this.chatId;
+    if (!id || !this.offersProject()) return;
+    const projects = this.plugin.projectNotes().sort((a, b) => b.stat.mtime - a.stat.mtime);
+    if (projects.length === 0) return;
+    const add = (file: TFile) => void this.plugin.setHomeProject(id, file).then(() => new Notice(`This chat is now in “${file.basename}”.`));
+    const notice = new Notice(
+      createFragment((frag) => {
+        frag.appendText('This chat has no project. Add it to: ');
+        projects.slice(0, 3).forEach((file, i) => {
+          if (i > 0) frag.appendText(' · ');
+          frag.createEl('a', { text: file.basename, href: '#' }).addEventListener('click', (evt) => {
+            evt.preventDefault();
+            notice.hide();
+            add(file);
+          });
+        });
+        if (projects.length > 3) {
+          frag.appendText(' · ');
+          frag.createEl('a', { text: 'Other…', href: '#' }).addEventListener('click', (evt) => {
+            evt.preventDefault();
+            notice.hide();
+            new ProjectPicker(this.app, projects.map((file) => ({ path: file.path, name: file.basename })), 'Add this chat to…', (chosen) => {
+              const file = this.app.vault.getAbstractFileByPath(chosen.path);
+              if (file instanceof TFile) add(file);
+            }).open();
+          });
+        }
+      }),
+      12000,
+    );
+  }
+
+  /** The chat's connections map (see ChatMapModal): only once it has started. */
+  openConnections(): void {
+    const id = this.currentChatId();
+    if (!id) {
+      new Notice(this.scratch ? 'The scratch chat has no connections.' : 'Send a message first: a chat has connections once it has started.');
+      return;
+    }
+    void this.plugin.openChatMap(this, id);
+  }
+
+  /** Projects changed (a chat joined or left one, its Guide grew): the chip shows it. */
+  projectsChanged(): void {
+    this.contextKey = '';
+    this.updateContextChip();
+  }
+
+  /** What the chat's projects send with it, and the choices about it (see ChatProjectModal). */
+  openProjectContext(): void {
+    if (this.scratch) {
+      new Notice('The scratch chat has no project.');
+      return;
+    }
+    const ref = (file: TFile) => ({ path: file.path, name: file.basename });
+    const fileAt = (path: string) => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      return file instanceof TFile ? file : null;
+    };
+    const update = (change: (state: ChatProjectState) => ChatProjectState) => {
+      this.setProjectStateNow(change({ ...this.projectStateNow() }));
+      this.projectsChanged();
+    };
+    new ChatProjectModal(this.app, {
+      started: this.chatId !== null,
+      home: () => {
+        const home = this.homeProjectFile();
+        return home && ref(home);
+      },
+      connections: () => (this.chatId ? this.plugin.connectedProjects(this.chatId).map(ref) : []),
+      projects: () => this.plugin.projectNotes().map(ref),
+      parts: async (path) => {
+        const file = fileAt(path);
+        return file ? this.plugin.projectParts(file) : { instructions: '', guide: '' };
+      },
+      includeGuide: () => !this.projectStateNow().noGuide,
+      setIncludeGuide: (on) => update((state) => ({ ...state, noGuide: !on })),
+      usesGuide: (path) => this.projectStateNow().guides?.includes(path) ?? false,
+      setUsesGuide: (path, on) => update((state) => ({ ...state, guides: [...(state.guides ?? []).filter((each) => each !== path), ...(on ? [path] : [])] })),
+      sent: (path) => this.projectStateNow().sent?.includes(path) ?? false,
+      updated: (path) => this.projectUpdated(path),
+      // Its own context, and its enclosing projects' Instructions, go again.
+      sendAgain: (path) => update((state) => ({ ...state, sent: state.sent?.filter((each) => each !== path && !each.startsWith('parent:')) })),
+      parents: (path) => {
+        const file = fileAt(path);
+        return file ? this.plugin.enclosingProjects(file).map((parent) => parent.basename) : [];
+      },
+      setHome: async (path) => {
+        const file = path === null ? null : fileAt(path);
+        if (this.chatId) await this.plugin.setHomeProject(this.chatId, file);
+        else this.projectPick = file ? file.path : null;
+        // A new home's context goes with the next message; a chat whose project is removed is not offered one again.
+        update((state) => (file ? { ...state, declined: false, sent: state.sent?.filter((each) => each !== file.path) } : { ...state, declined: true }));
+      },
+      connect: async (path, on) => {
+        const file = fileAt(path);
+        if (file && this.chatId) await this.plugin.connectProject(this.chatId, file, on);
+      },
+      homeWhy: () => this.projectWhy(),
+      openMap: (path) => {
+        const file = fileAt(path);
+        if (file) void this.plugin.openProjectMap(file, this);
+      },
+      createProject: () => void this.plugin.openCreateProject({ chatId: this.chatId }),
+      open: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
+      render: (markdown, el, component) => renderSafely(this.app, markdown, el, component),
+    }).open();
   }
 
   /** Whether chat `id` is on screen here or running in this panel's background. */
@@ -2046,6 +2459,8 @@ export class ChatView extends ItemView {
     this.suggest.update();
     this.growInput();
     this.scheduleDraftSave();
+    // A chat linked in the text shows on the links chip.
+    this.updateContextChip();
   }
 
   /** The text the chat came back with, below which undo does not go (see the beforeinput listener). */
@@ -2135,6 +2550,10 @@ export class ChatView extends ItemView {
         stopTasks: (item) => void this.plugin.stopChatTasks(item.id),
         noteLinks: () => ({ changed: this.plugin.noteChats, sent: this.plugin.noteRefs, mentioned: this.plugin.noteMentions }),
         openNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
+        projectOf: (folder) => this.plugin.projectOfFolder(folder)?.path ?? null,
+        createProject: (folder) => void this.plugin.openCreateProject({ folder }),
+        link: this.scratch ? undefined : (item) => this.linkChatHere(item.id),
+        isLinked: (item) => item.id === this.chatId || this.linksTo().some((link) => link.id === item.id),
       },
     );
     modal.open();
@@ -2855,6 +3274,7 @@ export class ChatView extends ItemView {
       const file = await this.app.vault.create(path, chatToMarkdown(title, id, transcript, date, this.plugin.ticks[id]));
       await this.app.workspace.getLeaf('tab').openFile(file);
       new Notice(`Saved to ${path}.`);
+      this.offerProjectAfterSave();
     } catch (error) {
       log('saving the chat failed', error);
       new Notice(`Could not save the chat: ${errorText(error)}`);
@@ -2892,6 +3312,7 @@ export class ChatView extends ItemView {
       const file = await this.app.vault.create(path, summaryNote(answer, { date, sessionId: id }));
       await this.app.workspace.getLeaf('tab').openFile(file);
       new Notice(`Saved the summary to ${path}.`);
+      this.offerProjectAfterSave();
     } catch (error) {
       // Cancelled (from the notice, or by closing the panel): already reported, nothing saved.
       if (controller.signal.aborted) return;
@@ -2935,8 +3356,10 @@ export class ChatView extends ItemView {
       evt.preventDefault();
       const start = this.inputEl.selectionStart;
       const end = this.inputEl.selectionEnd;
-      new NotePicker(this.app, (item) => {
-        const text = item ? `@[[${this.mentionTarget(item)}]] ` : '@';
+      const chats = this.scratch ? [] : (this.plugin.listedChats() ?? []).filter((item) => !item.scratch && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title }));
+      new NotePicker(this.app, chats, (item) => {
+        // A chat: a link to it, which links the chats once the message is sent.
+        const text = item === null ? '@' : 'id' in item ? `${this.chatMarkdownLink(item.id)} ` : `@[[${this.mentionTarget(item)}]] `;
         this.inputEl.setRangeText(text, start, end, 'end');
         this.inputEl.focus();
         this.inputEdited();
@@ -3300,8 +3723,11 @@ export class ChatView extends ItemView {
     // The chat it was typed in, for its draft should another chat be opened while it is prepared.
     const draftKey = this.draftKey();
     let built: { content: UserContent; notes: string[] };
+    // The chat's projects' context, once (see projectContext); never with a slash command.
+    let project: Awaited<ReturnType<ChatView['projectContext']>> = { block: '', paths: [], hashes: {} };
     try {
-      built = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly);
+      if (!slash) project = await this.projectContext();
+      built = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly, project.block);
     } catch (error) {
       // A mentioned note could not be read: nothing is sent, and the message goes back to the input.
       log('the message could not be prepared', error);
@@ -3326,6 +3752,12 @@ export class ChatView extends ItemView {
     // Claude Code queues it and folds it into the running reply at its next pause.
     session.send(content, undefined, uuid);
     this.linkSentNotes(notes);
+    this.linkSentChats(linkedChatIds(text));
+    if (project.paths.length > 0) {
+      const state = this.projectStateNow();
+      this.setProjectStateNow({ ...state, sent: [...new Set([...(state.sent ?? []), ...project.paths])], sentHash: { ...state.sentHash, ...project.hashes } });
+      this.projectsChanged();
+    }
   }
 
   /**
@@ -3399,13 +3831,28 @@ export class ChatView extends ItemView {
     this.notesToLink = [];
   }
 
+  /**
+   * The chats a message linked to (as "Use what it found" quotes them) are linked to this chat: shown
+   * on its map, and their projects offered. Before the chat has an id they wait, as notes do.
+   */
+  private linkSentChats(ids: string[]): void {
+    if (this.scratch) return;
+    this.chatsToLink.push(...ids);
+    if (!this.chatId || this.chatsToLink.length === 0) return;
+    this.plugin.linkChats(this.chatId, this.chatsToLink);
+    this.chatsToLink = [];
+  }
+
   /** The message for Claude Code, and the vault notes it carries. */
   /** `pathOnly`: mentioned notes sent by their path only, not with their text (see renderTray). */
-  private async buildContent(text: string, attachments: Attachment[], pathOnly: ReadonlySet<string> = new Set()): Promise<{ content: UserContent; notes: string[] }> {
+  /** `project`: what the chat's projects send with it (see projectContext), before the rest. */
+  private async buildContent(text: string, attachments: Attachment[], pathOnly: ReadonlySet<string> = new Set(), project = ''): Promise<{ content: UserContent; notes: string[] }> {
     const files = attachments.filter((attachment): attachment is FileAttachment => attachment.kind === 'file');
     const images = attachments.filter((attachment): attachment is ImageAttachment => attachment.kind === 'image');
     const selections = attachments.filter((attachment): attachment is SelectionAttachment => attachment.kind === 'selection');
-    const { prompt, notes } = await this.buildPrompt(text, files, selections, pathOnly);
+    const built = await this.buildPrompt(text, files, selections, pathOnly);
+    const notes = built.notes;
+    const prompt = project ? `${project}\n\n${built.prompt}` : built.prompt;
     if (images.length === 0) return { content: prompt, notes };
     const blocks: Exclude<UserContent, string> = images.map(toImageBlock);
     if (prompt) blocks.push({ type: 'text', text: prompt });
@@ -3590,10 +4037,47 @@ export class ChatView extends ItemView {
     const attached = this.attachedContext();
     // Called on every selection change — each keystroke in a note moves the cursor — so the DOM is
     // left alone unless what the chips show has changed.
-    const key = JSON.stringify([attached && [attached.file.path, contextLabel(attached), contextWhat(attached)], active && [active.file.path, contextLabel(active)]]);
+    const project = this.homeProjectFile();
+    const state = project ? this.projectStateNow() : null;
+    const key = JSON.stringify([
+      attached && [attached.file.path, contextLabel(attached), contextWhat(attached)],
+      active && [active.file.path, contextLabel(active)],
+      project && [project.path, state?.sent?.includes(project.path), state?.guides?.length, this.projectUpdated(project.path)],
+      this.offersProject() && this.linkedProjectSuggestion()?.path,
+      this.linksChipKey(),
+    ]);
     if (key === this.contextKey) return;
     this.contextKey = key;
     this.contextRow.empty();
+    if (project) {
+      const chip = this.contextRow.createDiv({ cls: 'vc-context-chip vc-project-chip' });
+      setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'folder-kanban');
+      chip.createSpan({ cls: 'vc-context-name', text: project.basename });
+      const guides = state?.guides?.length ?? 0;
+      if (guides > 0) chip.createSpan({ cls: 'vc-project-more', text: `+${guides}` });
+      const sent = state?.sent?.includes(project.path);
+      const updated = this.projectUpdated(project.path);
+      if (updated) chip.createSpan({ cls: 'vc-project-updated', attr: { 'aria-hidden': 'true' } });
+      chip.toggleClass('is-updated', updated);
+      chip.setAttr(
+        'aria-label',
+        `${this.projectWhy()} ${updated ? 'Its Instructions or Guide changed since they went with this chat: click to send them again.' : sent ? 'Its context went with this chat.' : 'Its Instructions and Guide go with your next message.'} Click to see what goes.`,
+      );
+    } else if (this.offersProject()) {
+      // A singleton linked with a chat in a project: that project, offered in one click.
+      const suggested = this.linkedProjectSuggestion();
+      if (suggested) {
+        const chip = this.contextRow.createDiv({ cls: 'vc-context-chip vc-project-suggestion' });
+        setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'folder-kanban');
+        chip.createSpan({ cls: 'vc-context-name', text: `Add to ${suggested.basename}?` });
+        chip.setAttr('aria-label', `A chat linked with this one is in “${suggested.basename}”: click to add this chat to it`);
+      }
+      const offer = this.contextRow.createDiv({ cls: 'vc-context-chip vc-context-offer vc-project-offer' });
+      setIcon(offer.createSpan({ cls: 'vc-context-clip' }), 'folder-kanban');
+      offer.createSpan({ cls: 'vc-context-name', text: 'Project' });
+      offer.setAttr('aria-label', 'Add this chat to a project, or make one from it');
+    }
+    this.drawLinksChip();
     if (attached) {
       const chip = this.contextRow.createDiv({ cls: 'vc-context-chip is-attached' });
       setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'paperclip');
@@ -3621,7 +4105,14 @@ export class ChatView extends ItemView {
 
   private onContextClick(evt: MouseEvent): void {
     const target = evt.target as HTMLElement;
-    if (target.closest('.vc-context-remove')) this.attachNote(null);
+    if (target.closest('.vc-project-chip')) this.openProjectContext();
+    else if (target.closest('.vc-links-chip')) this.openLinks();
+    else if (target.closest('.vc-project-suggestion')) {
+      const suggested = this.linkedProjectSuggestion();
+      if (suggested && this.chatId) void this.plugin.setHomeProject(this.chatId, suggested).then(() => new Notice(`This chat is now in “${suggested.basename}”.`));
+    }
+    else if (target.closest('.vc-project-offer')) this.offerProjects(evt);
+    else if (target.closest('.vc-context-remove')) this.attachNote(null);
     else if (target.closest('.vc-context-offer')) this.attachNote(this.activeNote()?.file.path ?? null);
     else if (target.closest('.vc-context-chip') && this.attachedNote) void this.app.workspace.openLinkText(this.attachedNote, '', Keymap.isModEvent(evt));
   }
@@ -4433,12 +4924,27 @@ export class ChatView extends ItemView {
           // A fork has its own id now; resuming it later (after a crash) must not fork again.
           this.forkOnResume = false;
           if (this.chatId !== message.session_id) {
+            // What its projects sent and its choices, kept under its id (a fork keeps its original's); a
+            // new chat's project chosen by hand is recorded, and one from its attached note follows from it.
+            const started = this.chatId === null;
+            const picked = this.projectPick;
+            const projectState: ChatProjectState = { ...this.projectStateNow() };
+            if (started && picked === null) projectState.declined = true;
+            else if (started && this.attachedNote) projectState.start = this.attachedNote;
             this.chatId = message.session_id;
             if (this.scratch) this.plugin.setScratch(message.session_id);
-            else this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf);
+            else {
+              this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf);
+              this.plugin.setProjectState(message.session_id, projectState);
+              const file = started && typeof picked === 'string' ? this.app.vault.getAbstractFileByPath(picked) : null;
+              if (file instanceof TFile) void this.plugin.setHomeProject(message.session_id, file);
+            }
+            this.projectPick = undefined;
+            this.projectLocal = {};
           }
           this.moveDraft(draftWas);
           this.linkSentNotes([]);
+          this.linkSentChats([]);
           this.updateChatButtons();
           this.plugin.checkClaudeVersion(message.claude_code_version);
           this.currentModel = message.model;
@@ -5775,7 +6281,7 @@ export class ChatView extends ItemView {
         titleProblem: (title) => this.memoTitleProblem(title),
         suggest: (signal) => this.plugin.suggestMemo(sources.chatTitle, passages, signal),
       },
-      (choice) => void this.saveMemo(choice, sources),
+      (choice) => void this.saveMemo(choice, sources).then((saved) => saved && this.offerProjectAfterSave()),
     ).open();
   }
 
@@ -5866,15 +6372,17 @@ export class ChatView extends ItemView {
     this.growInput();
   }
 
-  /** Adds `text` to the input, on a line after anything already there, which stays (a suggested step to pick a chat up by). */
-  addToInput(text: string): void {
+  /** Adds `text` to the input, on a line after anything already there, which stays (a suggested step to pick a chat up by, what another chat found). */
+  addToInput(text: string, hint?: string): void {
     const typed = this.inputEl.value.trimEnd();
     this.inputEl.value = typed ? `${typed}\n\n${text}` : text;
     this.inputEdited();
     this.focusInput();
     this.inputEl.setSelectionRange(this.inputEl.value.length, this.inputEl.value.length);
     this.growInput();
-    if (typed) hintAbove(this.inputEl, 'Suggested step added after your draft');
+    // `hint` names what was added; without one, a draft there says the step went after it.
+    if (hint) hintAbove(this.inputEl, typed ? `${hint}, after your draft` : hint);
+    else if (typed) hintAbove(this.inputEl, 'Suggested step added after your draft');
   }
 
   /** Puts `text` in the input as a quote, to carry on from it (a link from a memo note). */

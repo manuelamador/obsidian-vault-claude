@@ -31,7 +31,7 @@ export interface PickUpHost {
   /** Opens note or memo `path`. */
   openNote?(path: string): void;
   /** Shows note `path`'s preview, as hovering a link does (with the key the setting asks for). */
-  previewNote?(path: string, event: MouseEvent, target: HTMLElement, parent: unknown): void;
+  previewNote?(path: string, event: MouseEvent | KeyboardEvent, target: HTMLElement, parent: unknown): void;
   /** Chat `id` never to be suggested again (until the reset command). */
   hide(id: string): void;
   /** Chat `id` left out for SKIP_DAYS, then suggested again if it still looks left open. */
@@ -76,6 +76,8 @@ export class PickUpModal extends Modal {
   private readonly component = new Component();
   private readonly drawnFor = new Map<HTMLElement, Component>();
   private status!: HTMLElement;
+  /** The note name the pointer is over, for a preview when ⌘ is pressed there. */
+  private over: { path: string; el: HTMLElement } | null = null;
   /** The fades on their way, cleared when the list closes. */
   private readonly timers = new Set<number>();
   /** The pane of the row clicked, beside the list; and the row it shows. */
@@ -101,6 +103,9 @@ export class PickUpModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     this.component.load();
+    this.component.registerDomEvent(contentEl.ownerDocument, 'keydown', (evt) => {
+      if (this.over?.el.isConnected && (evt.key === 'Meta' || evt.key === 'Control')) this.host.previewNote?.(this.over.path, evt, this.over.el, this);
+    });
     this.titleEl.setText('Pick up where you left off');
     contentEl.addClass('vc-pick-up');
     // The list on the left; a row clicked, its details in a pane on the right, the window widened for it.
@@ -443,6 +448,9 @@ export class PickUpModal extends Modal {
           this.host.openNote?.(path);
         });
         el.addEventListener('mouseover', (event) => this.host.previewNote?.(path, event, el, this));
+        // ⌘ pressed while over it: its preview too.
+        el.addEventListener('mouseenter', () => (this.over = { path, el }));
+        el.addEventListener('mouseleave', () => (this.over = null));
       }
     };
     // Tags as small pills, on a line of their own.

@@ -32,7 +32,7 @@ export interface HistoryItem {
   copies?: HistoryItem[];
 }
 
-const CONTEXT_BLOCK = /^<obsidian_context>[\s\S]*?<\/obsidian_context>\s*/;
+const CONTEXT_BLOCK = /^(?:<project_context>[\s\S]*?<\/project_context>\s*)?(?:<linked_chats>[\s\S]*?<\/linked_chats>\s*)?(?:<obsidian_context>[\s\S]*?<\/obsidian_context>\s*)?/;
 
 /** Removes the note context the panel prepends to prompts. */
 export function stripContext(text: string): string {
@@ -122,7 +122,7 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
   await eachInParallel(unread, async ({ sessionId }) => {
     const first = await firstUserText(sessionId, dir);
     if (first === null) empty.add(sessionId);
-    else unrecorded.set(sessionId, first.startsWith('<obsidian_context>') ? chatTitle(first) : false);
+    else unrecorded.set(sessionId, /^<(obsidian_context|project_context|linked_chats)>/.test(first) ? chatTitle(first) : false);
   });
   const listed: { item: HistoryItem; stamp: string }[] = [];
   for (const session of sessions) {

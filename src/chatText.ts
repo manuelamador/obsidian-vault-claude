@@ -157,7 +157,12 @@ export function selectionLabel(name: string, lines: string): string {
 
 /** A prompt as the panel shows it: its text without the context block, and chips for what it attached. */
 function displayPrompt(raw: string): { text: string; attachments: Chip[] } {
+  // The projects and linked chats whose context went with it, from their blocks only.
+  const projects = /^<project_context>[\s\S]*?<\/project_context>/.exec(raw)?.[0] ?? '';
+  const linked = /^(?:<project_context>[\s\S]*?<\/project_context>\s*)?<linked_chats>[\s\S]*?<\/linked_chats>/.exec(raw)?.[0] ?? '';
   const attachments: Chip[] = [
+    ...[...projects.matchAll(/^<project name="([^"]+)" role="(?:home|parent|connected)"(?: note="[^"]*")?>$/gm)].map((match) => ({ label: match[1], icon: 'folder-kanban' })),
+    ...[...linked.matchAll(/^<linked_chat title="([^"]*)" id="[^"]*">$/gm)].map((match) => ({ label: match[1], icon: 'link' })),
     ...[...raw.matchAll(/<selection note="([^"]+)" lines="([^"]+)">/g)].map((match) => ({
       label: selectionLabel(baseName(match[1]).replace(/\.md$/, ''), match[2]),
       icon: 'text-select',

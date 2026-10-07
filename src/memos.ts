@@ -57,6 +57,25 @@ export function chatLink(params: { vault: string; chat: string; msg?: string; fi
   return `obsidian://${PROTOCOL_ACTION}?${query}`;
 }
 
+/** The chats that links made by chatLink in `text` open, each once. */
+export function linkedChatIds(text: string): string[] {
+  const ids = [...text.matchAll(new RegExp(`obsidian://${PROTOCOL_ACTION}\\?([^)\\s>]*)`, 'g'))].flatMap((match) => {
+    try {
+      return new URLSearchParams(match[1]).get('chat') ?? [];
+    } catch {
+      return [];
+    }
+  });
+  return [...new Set(ids)];
+}
+
+/** `text` without its Markdown links to chat `id` (made by chatLink). */
+export function removeChatLinks(text: string, id: string): string {
+  return text
+    .replace(new RegExp(`\\[[^\\]]*\\]\\(obsidian://${PROTOCOL_ACTION}\\?[^)\\s]*\\)[ \\t]?`, 'g'), (link) => (linkedChatIds(link).includes(id) ? '' : link))
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 /**
  * `value` encoded for a link written in Markdown: as encodeURIComponent, and its parentheses too,
  * since one left unmatched (words cut inside one, an interval like [0,1)) would end the link early.
