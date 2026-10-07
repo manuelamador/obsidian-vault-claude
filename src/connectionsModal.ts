@@ -416,6 +416,7 @@ const LEGEND: [string, string, string][] = [
   ['linked', 'is-linked', 'linked chat'],
   ['arc-is-home', 'is-home', "the project's folder"],
   ['arc-is-other', 'is-other', "another project's folder"],
+  ['same', 'is-same', 'chat in this project'],
   ['badge', 'is-badge', 'chat in another project'],
 ];
 
@@ -498,7 +499,10 @@ export class ChatMapModal extends Pane {
       const at = chatAt(chat.id);
       const project = host.projectOfChat(chat.id);
       const other = project !== null && project !== host.project?.name;
-      const group = drawing.chat(chat.id, at, 10, chat.linked ? 'is-linked' : '');
+      // A chat in this chat's project takes the project's colour.
+      const same = project !== null && project === host.project?.name;
+      if (same) drawing.drawn.add('same');
+      const group = drawing.chat(chat.id, at, 10, `${chat.linked ? 'is-linked' : ''}${same ? ' is-same-project' : ''}`);
       if (other) {
         projectBadge(group, at, 10);
         drawing.drawn.add('badge');
@@ -747,7 +751,8 @@ export class ProjectMapModal extends Pane {
       noteNode(group, path, host, this);
     }
     for (const [id, at] of chatAt) {
-      const group = drawing.chat(id, at, 11, '');
+      // Every chat here is in the project: its colour.
+      const group = drawing.chat(id, at, 11, 'is-same-project');
       const touched = host.links.filter(([chat]) => chat === id).length;
       tooltip(group, `${host.titleOf(id)} · ${touched} note${touched === 1 ? '' : 's'} here\nClick to open or mention it${host.linked(id) === null ? '' : ', or link it'}`);
       chatNode(group, id, host, () => undefined);

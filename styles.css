@@ -3170,3 +3170,22 @@ body:has(.vc-map-modal) .popover.hover-popover {
   flex-direction: column;
   gap: var(--size-4-3);
 }
+
+/* A chat in the project of the map: the project's colour. */
+.vc-map-node.is-chat.is-same-project circle {
+  fill: rgba(var(--color-purple-rgb), 0.22);
+  stroke: var(--interactive-accent);
+  stroke-width: 1.5;
+}
+
+.vc-map-node.is-chat.is-same-project .vc-map-bubble {
+  fill: var(--interactive-accent);
+}
+
+.vc-map-swatch.is-same {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--interactive-accent);
+  border-radius: 50%;
+  background: rgba(var(--color-purple-rgb), 0.22);
+}
