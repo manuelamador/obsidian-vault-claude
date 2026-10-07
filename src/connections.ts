@@ -1,6 +1,7 @@
-// The connections maps: a chat with its notes and the chats that share them (radial), and a project
-// with its chats and their notes (two columns). What is shown is worked out here, and where; the
-// panel draws it (see connectionsModal.ts). Kept free of `obsidian` imports so the tests can use it.
+// The connections maps: a chat with its notes and the chats that share them, and a project with its
+// chats and their notes; both radial, notes grouped by folder under arcs. What is shown is worked out
+// here, and where; the panel draws it (see connectionsModal.ts). Kept free of `obsidian` imports so the
+// tests can use it.
 import { folderOf } from './chatFolders';
 
 /** The most notes and chats one map shows; the rest are counted. */
@@ -22,15 +23,15 @@ export interface MapChat {
 
 /**
  * What a chat's map shows: its notes, the strongest links first (then by path), at most MAP_NOTES;
- * and the chats that share the most of them, or that it linked to, at most MAP_CHATS, those linked
- * first. `recent` orders chats on a tie, the most recent first.
+ * the chats that share the most of them, or that it linked to, at most MAP_CHATS, those linked first
+ * (`recent` orders a tie, the most recent first); and the folders of all its notes, the busiest first.
  */
 export function chatMap(
   id: string,
   weighted: Map<string, Map<string, number>>,
   linked: string[],
   recent: (id: string) => number,
-): { notes: MapNote[]; chats: MapChat[]; moreNotes: number; moreChats: number } {
+): { notes: MapNote[]; chats: MapChat[]; moreNotes: number; moreChats: number; folders: { folder: string; count: number }[] } {
   const own = [...(weighted.get(id) ?? new Map<string, number>())].map(([path, weight]) => ({ path, weight }));
   own.sort((a, b) => b.weight - a.weight || a.path.localeCompare(b.path));
   const notes = own.slice(0, MAP_NOTES);
@@ -44,7 +45,10 @@ export function chatMap(
   }
   for (const other of links) if (!weighted.has(other) && other !== id) others.push({ id: other, shared: [], linked: true });
   others.sort((a, b) => Number(b.linked) - Number(a.linked) || b.shared.length - a.shared.length || recent(b.id) - recent(a.id));
-  return { notes, chats: others.slice(0, MAP_CHATS), moreNotes: own.length - notes.length, moreChats: Math.max(0, others.length - MAP_CHATS) };
+  const counts = new Map<string, number>();
+  for (const note of own) counts.set(folderOf(note.path), (counts.get(folderOf(note.path)) ?? 0) + 1);
+  const folders = [...counts].map(([folder, count]) => ({ folder, count })).sort((a, b) => b.count - a.count || a.folder.localeCompare(b.folder));
+  return { notes, chats: others.slice(0, MAP_CHATS), moreNotes: own.length - notes.length, moreChats: Math.max(0, others.length - MAP_CHATS), folders };
 }
 
 /** A point on a map, in its own units (the centre is 0, 0). */
@@ -53,30 +57,95 @@ export interface Point {
   y: number;
 }
 
+/** A point at `angle` (radians clockwise from the top) and `radius` from the centre. */
+export function polar(angle: number, radius: number): Point {
+  return { x: radius * Math.sin(angle), y: -radius * Math.cos(angle) };
+}
+
+/** A folder's group on a ring: the folder (by `group`), and the angles its notes span. */
+export interface RingArc {
+  folder: string;
+  start: number;
+  end: number;
+}
+
 /**
- * Where a chat's map puts things: its notes on a ring round it, those of a folder side by side (by
- * path); each other chat on an outer ring, towards the notes it shares, spread so that none is
- * nearer another than `gap` radians. Angles start at the top and go clockwise.
+ * Notes on a ring, grouped by `group` (their folder, by default): the groups in order of name, the
+ * notes in a group side by side, a gap of `gap` note places between groups. Each note's angle, and
+ * each group's arc, padded by half a place either side.
  */
-export function radialLayout(notes: string[], chats: { id: string; shared: string[] }[], inner: number, outer: number, gap = 0.45): { notes: Map<string, Point>; chats: Map<string, Point> } {
-  const at = (angle: number, radius: number): Point => ({ x: radius * Math.sin(angle), y: -radius * Math.cos(angle) });
-  const ordered = [...notes].sort((a, b) => folderOf(a).localeCompare(folderOf(b)) || a.localeCompare(b));
-  const angles = new Map(ordered.map((path, i) => [path, (2 * Math.PI * i) / Math.max(1, ordered.length)]));
-  const notePoints = new Map([...angles].map(([path, angle]) => [path, at(angle, inner)]));
-  // Each chat towards the mean of its shared notes' angles; one sharing none (linked only) goes in the first free place.
+export function ringLayout(notes: string[], group: (path: string) => string = folderOf, gap = 0.8): { angles: Map<string, number>; arcs: RingArc[] } {
+  const groups = new Map<string, string[]>();
+  for (const path of [...notes].sort((a, b) => group(a).localeCompare(group(b)) || a.localeCompare(b))) {
+    const key = group(path);
+    groups.set(key, [...(groups.get(key) ?? []), path]);
+  }
+  const gaps = groups.size > 1 ? groups.size : 0;
+  const places = notes.length + gaps * gap;
+  const step = (2 * Math.PI) / Math.max(1, places);
+  const angles = new Map<string, number>();
+  const arcs: RingArc[] = [];
+  let at = 0;
+  for (const [folder, paths] of groups) {
+    const start = at;
+    for (const path of paths) {
+      angles.set(path, at);
+      at += step;
+    }
+    arcs.push({ folder, start: start - step / 2, end: at - step / 2 });
+    if (gaps > 0) at += gap * step;
+  }
+  return { angles, arcs };
+}
+
+/**
+ * Where each other chat goes on the outer ring: towards the mean of the angles of the notes it shares
+ * (one sharing none, opposite the top, in turn), spread so that none is nearer the one before than
+ * `gap` radians (less when there are many).
+ */
+export function chatAngles(chats: { id: string; shared: string[] }[], noteAngles: Map<string, number>, gap = 0.45): Map<string, number> {
   const wanted = chats.map((chat, i) => {
-    const vectors = chat.shared.flatMap((path) => (angles.has(path) ? [angles.get(path) ?? 0] : []));
+    const angles = chat.shared.flatMap((path) => (noteAngles.has(path) ? [noteAngles.get(path) ?? 0] : []));
     const angle =
-      vectors.length > 0
-        ? Math.atan2(vectors.reduce((sum, a) => sum + Math.sin(a), 0), vectors.reduce((sum, a) => sum + Math.cos(a), 0))
+      angles.length > 0
+        ? Math.atan2(angles.reduce((sum, a) => sum + Math.sin(a), 0), angles.reduce((sum, a) => sum + Math.cos(a), 0))
         : Math.PI + (2 * Math.PI * i) / Math.max(1, chats.length);
     return { id: chat.id, angle: (angle + 2 * Math.PI) % (2 * Math.PI) };
   });
   wanted.sort((a, b) => a.angle - b.angle);
-  // Spread: each at least `gap` after the one before it (the gap shrinks when there are many).
   const step = Math.min(gap, (2 * Math.PI) / Math.max(1, wanted.length));
   for (let i = 1; i < wanted.length; i++) wanted[i].angle = Math.max(wanted[i].angle, wanted[i - 1].angle + step);
-  return { notes: notePoints, chats: new Map(wanted.map(({ id, angle }) => [id, at(angle, outer)])) };
+  return new Map(wanted.map(({ id, angle }) => [id, angle]));
+}
+
+/** A label placed outside its ring: at `at`, on the `right` or left of its node, `text` already cut to fit. */
+export interface PlacedLabel {
+  key: string;
+  at: Point;
+  side: 'right' | 'left';
+  text: string;
+}
+
+/**
+ * Labels on the outside of a ring of `radius`, for nodes at `angles`: each `max` characters at most;
+ * where two on the same side would come nearer than `line` units up or down, the shorter is cut to
+ * `tight` characters (the full name shows on hover).
+ */
+export function placeLabels(labels: { key: string; angle: number; text: string }[], radius: number, max: number, tight = 10, line = 14): PlacedLabel[] {
+  const placed = labels.map((label) => {
+    const at = polar(label.angle, radius);
+    return { key: label.key, at, side: at.x >= -0.5 ? ('right' as const) : ('left' as const), text: shortLabel(label.text, max), full: label.text };
+  });
+  for (const side of ['right', 'left'] as const) {
+    const column = placed.filter((label) => label.side === side).sort((a, b) => a.at.y - b.at.y);
+    for (let i = 1; i < column.length; i++) {
+      const [a, b] = [column[i - 1], column[i]];
+      if (Math.abs(a.at.y - b.at.y) >= line) continue;
+      const shorter = a.full.length <= b.full.length ? a : b;
+      shorter.text = shortLabel(shorter.full, tight);
+    }
+  }
+  return placed.map(({ key, at, side, text }) => ({ key, at, side, text }));
 }
 
 /**

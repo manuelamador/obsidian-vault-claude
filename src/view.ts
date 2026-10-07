@@ -108,8 +108,8 @@ import {
   usageWindows,
 } from './usageDisplay';
 
-/** How many projects the chip's offer lists by name; the rest are found with Other project…. */
-const RECENT_PROJECTS = 5;
+/** The most chats the back arrow goes through. */
+const NAV_DEPTH = 50;
 
 export const VIEW_TYPE = 'vault-claude-chat';
 /** A chat opened from the history with more turns than this opens on its last ones; the rest are drawn when needed. */
@@ -431,9 +431,14 @@ export class ChatView extends ItemView {
   /** How many notes the chat changed or mentioned, on the notes button; kept current by countNotesSoon. */
   private notesCount!: HTMLElement;
   private notesCountTimer: number | null = null;
-  private backEl!: HTMLElement;
   /** The chat this panel left when a note sent it to another one, so it can go back. */
-  private backChat: { id: string; title: string } | null = null;
+  /** The chats this panel showed, to go back and forward through (see navigate); not saved. */
+  private navBack: { id: string; title: string }[] = [];
+  private navForward: { id: string; title: string }[] = [];
+  /** Set while the arrows open a chat, which is then not remembered as a move of its own. */
+  private navigating = false;
+  private backButton!: HTMLElement;
+  private forwardButton!: HTMLElement;
   /** Fast mode for this chat, and what the session last reported about it. */
   private fastMode = false;
   private fastState: { state?: string; reason?: string } | null = null;
@@ -715,6 +720,14 @@ export class ChatView extends ItemView {
 
     // Top row: the chat title with its save and notes buttons, then phone, history and new chat.
     const header = root.createDiv({ cls: 'vc-header' });
+    // Back and forward through the chats shown in this panel, as Obsidian's arrows go through notes.
+    const nav = header.createDiv({ cls: 'vc-nav' });
+    this.backButton = nav.createEl('button', { cls: 'clickable-icon' });
+    setIcon(this.backButton, 'arrow-left');
+    this.registerDomEvent(this.backButton, 'click', () => void this.navigate('back'));
+    this.forwardButton = nav.createEl('button', { cls: 'clickable-icon' });
+    setIcon(this.forwardButton, 'arrow-right');
+    this.registerDomEvent(this.forwardButton, 'click', () => void this.navigate('forward'));
     this.chatTitleEl = header.createDiv({ cls: 'vc-chat-title' });
     this.registerDomEvent(this.chatTitleEl, 'click', () => this.renameCurrentChat());
     const titleActions = header.createDiv({ cls: 'vc-chat-title-actions' });
@@ -789,7 +802,7 @@ export class ChatView extends ItemView {
     });
     this.registerDomEvent(newButton, 'click', (evt) => {
       if (Keymap.isModEvent(evt)) void this.plugin.openChatTab(this.leaf).then((view) => view?.focusInput());
-      else this.newChat();
+      else this.startNewChat();
     });
     this.setChatTitle(null);
 
@@ -950,16 +963,6 @@ export class ChatView extends ItemView {
     this.noteChatsEl = footer.createDiv({ cls: 'vc-note-chats' });
     this.noteChatsEl.hide();
     this.registerDomEvent(this.noteChatsEl, 'click', (evt) => this.openNoteChats(evt));
-    this.backEl = footer.createDiv({ cls: 'vc-note-chats vc-back-line' });
-    this.backEl.hide();
-    this.registerDomEvent(this.backEl, 'click', (evt) => {
-      if ((evt.target as HTMLElement).closest('.vc-back-close')) {
-        this.backChat = null;
-        this.updateChatButtons();
-        return;
-      }
-      void this.goBack();
-    });
     this.contextRow = footer.createDiv({ cls: 'vc-context-row' });
     this.registerDomEvent(this.contextRow, 'click', (evt) => this.onContextClick(evt));
     this.draftEl = footer.createDiv({ cls: 'vc-note-chats vc-draft-line' });
@@ -1237,7 +1240,6 @@ export class ChatView extends ItemView {
     this.openApprovals = [];
     this.resumeId = null;
     this.chatId = null;
-    this.backChat = null;
     this.notesToLink = [];
     this.tasks = new Set();
     this.updateStopButton();
@@ -1640,6 +1642,21 @@ export class ChatView extends ItemView {
     return `[${this.plugin.chatTitleOf(id).replace(/[[\]]/g, '')}](${chatLink({ vault: this.app.vault.getName(), chat: id })})`;
   }
 
+  /** Mentions chat `id` in the message being typed: a link to it, which links the chats once sent. */
+  mentionChat(id: string): void {
+    if (this.scratch) {
+      new Notice('The scratch chat does not link to other chats.');
+      return;
+    }
+    this.addToInput(this.chatMarkdownLink(id), `“${this.plugin.chatTitleOf(id)}” mentioned: linked when the message is sent`);
+  }
+
+  /** @-mentions note `path` in the message being typed. */
+  mentionNote(path: string): void {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) this.addToInput(`@[[${this.mentionTarget(file)}]] `, `“${file.basename}” mentioned`);
+  }
+
   /** The chat's links (see LinksModal): those it links to, each to include or not, and those linking to it. */
   openLinks(): void {
     if (this.scratch) {
@@ -1745,53 +1762,19 @@ export class ChatView extends ItemView {
     );
   }
 
-  /** Whether the chip row offers a project: a started chat without one, unless its project was removed by hand. */
+  /** Whether the chip row offers a project: a started chat without one (its project removed by hand too: its notes no longer place it, but it can be added again). */
   private offersProject(): boolean {
-    return !this.scratch && this.chatId !== null && !this.homeProjectFile() && !this.projectStateNow().declined;
-  }
-
-  /** The offer's menu: the projects most recently changed, any other, or a new one from this chat. */
-  private offerProjects(evt: MouseEvent): void {
-    const id = this.chatId;
-    if (!id) return;
-    const join = async (file: TFile) => {
-      await this.plugin.setHomeProject(id, file);
-      this.setProjectStateNow({ ...this.projectStateNow(), declined: false });
-      this.projectsChanged();
-      new Notice(`This chat is now in “${file.basename}”: its Instructions and Guide go with your next message.`);
-    };
-    const projects = this.plugin.projectNotes().sort((a, b) => b.stat.mtime - a.stat.mtime);
-    const menu = new Menu();
-    // The folder its notes suggest, made a project.
-    const suggestion = this.plugin.folderSuggestionFor(id);
-    if (suggestion) {
-      menu.addItem((item) => item.setTitle(`Make “${suggestion.folder}” a project…`).setIcon('folder-plus').onClick(() => void this.plugin.openCreateProject({ folder: suggestion.folder, chatId: id })));
-      menu.addSeparator();
-    }
-    for (const file of projects.slice(0, RECENT_PROJECTS)) menu.addItem((item) => item.setTitle(file.basename).setIcon('folder-kanban').onClick(() => void join(file)));
-    if (projects.length > RECENT_PROJECTS) {
-      menu.addItem((item) =>
-        item.setTitle('Other project…').onClick(() =>
-          new ProjectPicker(this.app, projects.map((file) => ({ path: file.path, name: file.basename })), 'Add this chat to…', (chosen) => {
-            const file = this.app.vault.getAbstractFileByPath(chosen.path);
-            if (file instanceof TFile) void join(file);
-          }).open(),
-        ),
-      );
-    }
-    if (projects.length > 0) menu.addSeparator();
-    menu.addItem((item) => item.setTitle('New project…').setIcon('plus').onClick(() => void this.plugin.openCreateProject({ chatId: id })));
-    menu.showAtMouseEvent(evt);
+    return !this.scratch && this.chatId !== null && !this.homeProjectFile();
   }
 
   /**
    * After a memo or note is saved from a chat with no project: saved notes go to the plugin's own
    * folders, which give a chat no project, so a notice offers the projects to add it to, the most
-   * recent first. Nothing when its project was removed by hand (see offersProject).
+   * recent first. Nothing when its project was removed by hand (the + Project chip still offers one).
    */
   private offerProjectAfterSave(): void {
     const id = this.chatId;
-    if (!id || !this.offersProject()) return;
+    if (!id || !this.offersProject() || this.projectStateNow().declined) return;
     const projects = this.plugin.projectNotes().sort((a, b) => b.stat.mtime - a.stat.mtime);
     if (projects.length === 0) return;
     const add = (file: TFile) => void this.plugin.setHomeProject(id, file).then(() => new Notice(`This chat is now in “${file.basename}”.`));
@@ -1889,6 +1872,7 @@ export class ChatView extends ItemView {
         if (file && this.chatId) await this.plugin.connectProject(this.chatId, file, on);
       },
       homeWhy: () => this.projectWhy(),
+      manage: () => void this.plugin.openManageProjects(),
       openMap: (path) => {
         const file = fileAt(path);
         if (file) void this.plugin.openProjectMap(file, this);
@@ -2381,12 +2365,7 @@ export class ChatView extends ItemView {
     const hasSession = (this.chatId ?? this.resumeId) !== null;
     this.notesButton?.toggle(hasSession);
     this.countNotesSoon();
-    this.backEl?.toggle(this.backChat !== null);
-    if (this.backChat) {
-      this.backEl.empty();
-      this.backEl.createSpan({ text: `← Back to “${this.backChat.title}”` });
-      this.backEl.createSpan({ cls: 'vc-back-close', text: '×', attr: { 'aria-label': 'Stay in this chat' } });
-    }
+    this.updateNavButtons();
     this.saveButton.toggle(hasSession);
     this.chatTitleEl.toggleClass('is-renamable', this.chatId !== null && !this.scratch);
     this.deleteButton?.toggle(this.scratch || hasSession);
@@ -2610,6 +2589,13 @@ export class ChatView extends ItemView {
    * holding it, or gave way to a chat picked meanwhile.
    */
   async openChat(item: HistoryItem, branch?: BranchSource): Promise<boolean> {
+    const from = this.navPlace();
+    const opened = await this.openChatHere(item, branch);
+    if (opened) this.remember(from);
+    return opened;
+  }
+
+  private async openChatHere(item: HistoryItem, branch?: BranchSource): Promise<boolean> {
     // The latest pick wins: an open still reading its file gives way (see showSavedChat).
     this.chatGeneration += 1;
     // Already on screen: reopening would start a second process on the same session.
@@ -4075,7 +4061,7 @@ export class ChatView extends ItemView {
       const offer = this.contextRow.createDiv({ cls: 'vc-context-chip vc-context-offer vc-project-offer' });
       setIcon(offer.createSpan({ cls: 'vc-context-clip' }), 'folder-kanban');
       offer.createSpan({ cls: 'vc-context-name', text: 'Project' });
-      offer.setAttr('aria-label', 'Add this chat to a project, or make one from it');
+      offer.setAttr('aria-label', 'Add this chat to a project, or make one: opens its connections map');
     }
     this.drawLinksChip();
     if (attached) {
@@ -4111,7 +4097,7 @@ export class ChatView extends ItemView {
       const suggested = this.linkedProjectSuggestion();
       if (suggested && this.chatId) void this.plugin.setHomeProject(this.chatId, suggested).then(() => new Notice(`This chat is now in “${suggested.basename}”.`));
     }
-    else if (target.closest('.vc-project-offer')) this.offerProjects(evt);
+    else if (target.closest('.vc-project-offer')) this.openConnections();
     else if (target.closest('.vc-context-remove')) this.attachNote(null);
     else if (target.closest('.vc-context-offer')) this.attachNote(this.activeNote()?.file.path ?? null);
     else if (target.closest('.vc-context-chip') && this.attachedNote) void this.app.workspace.openLinkText(this.attachedNote, '', Keymap.isModEvent(evt));
@@ -4330,14 +4316,57 @@ export class ChatView extends ItemView {
     return this.openChat({ id, title, updatedAt: Date.now(), fromPanel: this.plugin.isPanelChat(id) });
   }
 
-  /** Returns to the chat this panel was showing before a note sent it to another one. */
-  private async goBack(): Promise<void> {
-    const back = this.backChat;
-    if (!back) return;
-    // The open clears it through newChat; a failed open leaves nothing to go back to either.
-    this.backChat = null;
-    await this.openChatId(back.id, back.title);
-    this.updateChatButtons();
+  /** The chat on screen as the back and forward arrows hold it: none for a new chat or the scratch chat. */
+  private navPlace(): { id: string; title: string } | null {
+    const id = this.chatId ?? this.resumeId;
+    return id && !this.scratch ? { id, title: this.chatName ?? 'Chat' } : null;
+  }
+
+  /** After a move from `from` to another chat, not by the arrows: `from` goes on the back list and the forward list empties. */
+  private remember(from: { id: string; title: string } | null): void {
+    const now = this.navPlace();
+    if (this.navigating || !from || from.id === now?.id) return;
+    this.navBack.push(from);
+    if (this.navBack.length > NAV_DEPTH) this.navBack.shift();
+    this.navForward = [];
+    this.updateNavButtons();
+  }
+
+  /** Back to the chat shown before, or forward again; the chat left goes on the other list. A chat that cannot be opened is passed over. */
+  private async navigate(way: 'back' | 'forward'): Promise<void> {
+    const [from, to] = way === 'back' ? [this.navBack, this.navForward] : [this.navForward, this.navBack];
+    const here = this.navPlace();
+    while (from.length > 0) {
+      const target = from.pop();
+      if (!target || target.id === here?.id) continue;
+      this.navigating = true;
+      try {
+        if (!(await this.openChatId(target.id, this.plugin.chatTitleOf(target.id) === 'Chat' ? target.title : this.plugin.chatTitleOf(target.id)))) continue;
+      } finally {
+        this.navigating = false;
+      }
+      if (here) to.push(here);
+      break;
+    }
+    this.updateNavButtons();
+  }
+
+  /** The arrows: each on only when there is somewhere to go, naming it. */
+  private updateNavButtons(): void {
+    if (!this.backButton) return;
+    const back = this.navBack[this.navBack.length - 1];
+    const forward = this.navForward[this.navForward.length - 1];
+    this.backButton.toggleClass('is-disabled', !back);
+    this.backButton.setAttr('aria-label', back ? `Back to “${back.title}”` : 'No chat to go back to');
+    this.forwardButton.toggleClass('is-disabled', !forward);
+    this.forwardButton.setAttr('aria-label', forward ? `Forward to “${forward.title}”` : 'No chat to go forward to');
+  }
+
+  /** New chat, as its button and command start one: the chat left can be gone back to. */
+  startNewChat(): void {
+    const from = this.navPlace();
+    this.newChat();
+    this.remember(from);
   }
 
   /** Opens the chat offered for the note in front, or a menu of them. */
@@ -4345,17 +4374,12 @@ export class ChatView extends ItemView {
     const entries = this.noteChatList;
     if (entries.length === 0) return;
     const open = (entry: { id: string; title: string }) => {
-      const from = this.chatId ?? this.resumeId;
-      const fromTitle = this.chatName;
       const note = this.activeNote()?.file.path ?? null;
       void this.openChatId(entry.id, entry.title).then(() => {
         // Only when this panel shows it: a chat already open elsewhere is shown in its own panel.
         if (this.chatId !== entry.id && this.resumeId !== entry.id) return;
         // The chat was opened from this note, so the note is attached to it.
         if (note) this.attachNote(note);
-        if (from === null || from === entry.id) return;
-        this.backChat = { id: from, title: fromTitle ?? 'the previous chat' };
-        this.updateChatButtons();
       });
     };
     // ⌥-click takes a chat off the note instead.

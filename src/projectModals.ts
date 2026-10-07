@@ -1,6 +1,7 @@
 // The dialogs of projects (see projects.ts): making one of a folder, what a chat's projects send with
 // it, and adding to a project's Guide from its chats after reviewing what Claude proposes.
-import { Component, FuzzySuggestModal, Modal, setIcon, type App } from 'obsidian';
+import { Component, FuzzySuggestModal, Modal, Notice, setIcon, type App } from 'obsidian';
+import { ConfirmModal, RenameModal } from './historyModal';
 import { estimateTokens, formatTokens } from './contextSize';
 import { errorText } from './log';
 import { folderOf, type FolderSuggestion } from './chatFolders';
@@ -67,23 +68,62 @@ function chatChecklist(el: HTMLElement, chats: ChatChoice[], changed: () => void
   return () => chats.map((chat) => chat.id).filter((id) => ticked.has(id));
 }
 
-export interface CreateProjectHost {
-  /** Folders of the vault that may be projects. */
-  folders: string[];
+export interface CreateProjectHost extends FolderSource {
   /** The folder chosen to start with (from the history's folders view). */
   folder?: string;
   /** The folder the chat it is made for suggests (see suggestFolder). */
   suggestion: FolderSuggestion | null;
-  /** How many chats worked on notes in a folder, and when the latest was last active. */
-  preview(folder: string): { count: number; latest: string };
-  /** The project a folder is already, if any. */
-  projectOf(folder: string): string | null;
   /** Makes it; false when it could not be (said in a notice). */
   create(name: string, folder: string): Promise<boolean>;
   /** Why a project note cannot be called `name` (note names are unique in the vault), or null. */
   nameProblem(name: string): string | null;
   /** A free name for the project of folder `folder`: `Claude Project — <folder's name>`, numbered when taken. */
   defaultName(folder: string): string;
+}
+
+/** What a folder browser needs: the vault's folders, which are projects, and how many chats worked in each. */
+interface FolderSource {
+  folders: string[];
+  projectOf(folder: string): string | null;
+  preview(folder: string): { count: number; latest: string };
+}
+
+/**
+ * A browser of the vault's folders in `el`: the path to the folder shown, each part going back to it;
+ * a button (`label`) to choose it; the folders in it, each marked when a project and with how many
+ * chats worked in it, a click going into it. The function returned shows a folder.
+ */
+function folderBrowser(el: HTMLElement, source: FolderSource, chosen: () => string, choose: (folder: string) => void, label: string): (at: string) => void {
+  const browseAt = (at: string) => {
+    el.empty();
+    const crumbs = el.createDiv({ cls: 'vc-project-crumbs' });
+    const parts = at ? at.split('/') : [];
+    const crumb = (text: string, path: string, last: boolean) => {
+      const part = crumbs.createEl(last ? 'span' : 'a', { text });
+      if (!last) part.addEventListener('click', () => browseAt(path));
+    };
+    crumb('Vault', '', parts.length === 0);
+    parts.forEach((part, i) => {
+      crumbs.appendText(' › ');
+      crumb(part, parts.slice(0, i + 1).join('/'), i === parts.length - 1);
+    });
+    if (at && at !== chosen()) crumbs.createEl('button', { cls: 'mod-cta', text: label }).addEventListener('click', () => choose(at));
+    const children = source.folders.filter((folder) => folderOf(folder) === at);
+    const rows = el.createDiv({ cls: 'vc-project-browser-rows' });
+    if (children.length === 0) rows.createDiv({ cls: 'vc-project-empty', text: 'No folders in it.' });
+    for (const child of children) {
+      const row = rows.createDiv({ cls: 'vc-project-browser-row' });
+      const project = source.projectOf(child);
+      setIcon(row.createSpan({ cls: 'vc-project-group-icon' }), project ? 'folder-kanban' : 'folder');
+      row.createSpan({ text: child.slice(child.lastIndexOf('/') + 1) });
+      const { count } = source.preview(child);
+      const detail = [project ? 'project' : '', count > 0 ? `${count} chat${count === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+      if (detail) row.createSpan({ cls: 'vc-project-size', text: detail });
+      if (source.folders.some((folder) => folderOf(folder) === child)) setIcon(row.createSpan({ cls: 'vc-project-group-icon vc-project-into' }), 'chevron-right');
+      row.addEventListener('click', () => browseAt(child));
+    }
+  };
+  return browseAt;
 }
 
 /**
@@ -146,36 +186,7 @@ export class CreateProjectModal extends Modal {
         hint.createEl('a', { text: 'Use' }).addEventListener('click', () => choose(folder));
       }
     };
-    // The browser at `at`: the path to it, each part going back there; Choose this folder; the folders in it.
-    const browseAt = (at: string) => {
-      browser.empty();
-      const crumbs = browser.createDiv({ cls: 'vc-project-crumbs' });
-      const parts = at ? at.split('/') : [];
-      const crumb = (label: string, path: string, last: boolean) => {
-        const el = crumbs.createEl(last ? 'span' : 'a', { text: label });
-        if (!last) el.addEventListener('click', () => browseAt(path));
-      };
-      crumb('Vault', '', parts.length === 0);
-      parts.forEach((part, i) => {
-        crumbs.appendText(' › ');
-        crumb(part, parts.slice(0, i + 1).join('/'), i === parts.length - 1);
-      });
-      if (at && at !== chosen) crumbs.createEl('button', { cls: 'mod-cta', text: 'Choose this folder' }).addEventListener('click', () => choose(at));
-      const children = host.folders.filter((folder) => folderOf(folder) === at);
-      const rows = browser.createDiv({ cls: 'vc-project-browser-rows' });
-      if (children.length === 0) rows.createDiv({ cls: 'vc-project-empty', text: 'No folders in it.' });
-      for (const child of children) {
-        const row = rows.createDiv({ cls: 'vc-project-browser-row' });
-        const project = host.projectOf(child);
-        setIcon(row.createSpan({ cls: 'vc-project-group-icon' }), project ? 'folder-kanban' : 'folder');
-        row.createSpan({ text: child.slice(child.lastIndexOf('/') + 1) });
-        const { count } = host.preview(child);
-        const detail = [project ? 'project' : '', count > 0 ? `${count} chat${count === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-        if (detail) row.createSpan({ cls: 'vc-project-size', text: detail });
-        if (host.folders.some((folder) => folderOf(folder) === child)) setIcon(row.createSpan({ cls: 'vc-project-group-icon vc-project-into' }), 'chevron-right');
-        row.addEventListener('click', () => browseAt(child));
-      }
-    };
+    const browseAt = folderBrowser(browser, host, () => chosen, choose, 'Choose this folder');
     button.addEventListener('click', async () => {
       button.disabled = true;
       if (await host.create(name.value.trim(), chosen)) this.close();
@@ -218,6 +229,8 @@ export interface ChatProjectHost {
   homeWhy(): string;
   /** Shows a project's map (see ProjectMapModal). */
   openMap(path: string): void;
+  /** Opens Manage projects (see ManageProjectsModal). */
+  manage(): void;
   /** The projects holding a project's folder, the outermost first, whose Instructions go too. */
   parents(path: string): string[];
   connect(path: string, on: boolean): Promise<void>;
@@ -248,6 +261,11 @@ export class ChatProjectModal extends Modal {
     const parts = this.parts;
     contentEl.empty();
     const home = host.home();
+    const manageLink = (el: HTMLElement) =>
+      el.createEl('a', { cls: 'vc-project-manage', text: 'Manage projects…' }).addEventListener('click', () => {
+        this.close();
+        host.manage();
+      });
     if (!home) {
       contentEl.createDiv({ cls: 'vc-project-status', text: 'This chat has no project.' });
       const row = contentEl.createDiv({ cls: 'vc-project-foot' });
@@ -256,6 +274,7 @@ export class ChatProjectModal extends Modal {
         this.close();
         host.createProject();
       });
+      manageLink(contentEl.createDiv({ cls: 'vc-project-foot' }));
       return;
     }
     const head = contentEl.createDiv({ cls: 'vc-project-head' });
@@ -269,8 +288,10 @@ export class ChatProjectModal extends Modal {
       this.close();
       host.openMap(home.path);
     });
-    actions.createEl('button', { text: 'Change…' }).addEventListener('click', () => this.chooseHome());
-    actions.createEl('button', { text: 'Remove' }).addEventListener('click', async () => {
+    actions.createEl('button', { text: 'Move chat…' }).addEventListener('click', () => this.chooseHome());
+    const leave = actions.createEl('button', { text: 'Take chat out' });
+    leave.setAttr('aria-label', 'This chat leaves the project; the project and its note stay');
+    leave.addEventListener('click', async () => {
       await host.setHome(null);
       await this.draw();
     });
@@ -314,6 +335,7 @@ export class ChatProjectModal extends Modal {
       });
     }
     this.drawConnections(contentEl);
+    manageLink(contentEl.createDiv({ cls: 'vc-project-foot' }));
   }
 
   /** The projects this chat is connected to, behind a fold: each opens, and its Guide goes when chosen. */
@@ -488,6 +510,148 @@ export class GuideModal extends Modal {
 
   onClose(): void {
     this.abort?.abort();
+    this.contentEl.empty();
+  }
+}
+
+/** A project as Manage projects lists it. */
+export interface ManagedProject {
+  path: string;
+  name: string;
+  folder: string;
+  /** How many chats are in it, and when its Guide was last updated ('' for never). */
+  chats: number;
+  guideUpdated: string;
+}
+
+export interface ManageProjectsHost extends FolderSource {
+  projects(): ManagedProject[];
+  open(path: string): void;
+  map(path: string): void;
+  updateGuide(path: string): void;
+  setFolder(path: string, folder: string): Promise<boolean>;
+  /** Renames a project's note; false when it could not be (said in a notice). */
+  rename(path: string, name: string): Promise<boolean>;
+  nameProblem(name: string): string | null;
+  /** Moves a project's note to the trash: its chats stay, without it. */
+  remove(path: string): Promise<void>;
+  create(): void;
+}
+
+/** The vault's projects, each with its folder, chats and Guide, and what can be done to it: open, map, update its Guide, change its folder, rename, delete. */
+export class ManageProjectsModal extends Modal {
+  constructor(app: App, private readonly host: ManageProjectsHost) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.modalEl.addClass('vc-project-modal');
+    this.setTitle('Projects');
+    this.draw();
+  }
+
+  private draw(): void {
+    const { contentEl, host } = this;
+    contentEl.empty();
+    const projects = host.projects();
+    if (projects.length === 0) contentEl.createDiv({ cls: 'vc-project-empty', text: 'No projects yet. A project is a folder: chats that work on its notes share its Instructions and Guide.' });
+    for (const project of projects) {
+      const box = contentEl.createDiv({ cls: 'vc-project-section' });
+      const top = box.createDiv({ cls: 'vc-project-section-head' });
+      setIcon(top.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
+      const name = top.createEl('a', { text: project.name, attr: { 'aria-label': 'Open its note' } });
+      name.addEventListener('click', () => {
+        this.close();
+        host.open(project.path);
+      });
+      const facts = box.createDiv({ cls: 'vc-project-size' });
+      facts.setText(
+        `${project.folder || 'No folder'} · ${project.chats} chat${project.chats === 1 ? '' : 's'} · ${project.guideUpdated ? `Guide updated ${project.guideUpdated}` : 'Guide never updated'}`,
+      );
+      const actions = box.createDiv({ cls: 'vc-project-manage-actions' });
+      const action = (label: string, icon: string, run: () => void, warning = false) => {
+        const button = actions.createEl('button', { cls: warning ? 'mod-warning' : '' });
+        setIcon(button.createSpan({ cls: 'vc-project-group-icon' }), icon);
+        button.appendText(label);
+        button.addEventListener('click', run);
+      };
+      action('Map', 'waypoints', () => {
+        this.close();
+        host.map(project.path);
+      });
+      action('Update Guide…', 'list-plus', () => {
+        this.close();
+        host.updateGuide(project.path);
+      });
+      action('Change folder…', 'folder-input', () =>
+        new ChooseFolderModal(this.app, host, project.folder, project.name, async (folder) => {
+          if (await host.setFolder(project.path, folder)) this.draw();
+        }).open(),
+      );
+      action('Rename…', 'pencil', () =>
+        new RenameModal(
+          this.app,
+          project.name,
+          (next) => {
+            const problem = next.trim() === project.name ? null : host.nameProblem(next);
+            if (problem) return void new Notice(problem);
+            if (next.trim() !== project.name) void host.rename(project.path, next).then((done) => done && this.draw());
+          },
+          'Rename project',
+        ).open(),
+      );
+      action(
+        'Delete…',
+        'trash-2',
+        () =>
+          new ConfirmModal(
+            this.app,
+            'Delete project',
+            `The project note “${project.name}” goes to the trash, with its Instructions and Guide. Its ${project.chats} chat${project.chats === 1 ? '' : 's'} and the notes in ${project.folder || 'its folder'} stay as they are; the chats no longer get the project's context.`,
+            'Delete',
+            () => void host.remove(project.path).then(() => this.draw()),
+          ).open(),
+        true,
+      );
+    }
+    const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
+    foot.createEl('button', { cls: 'mod-cta', text: 'New project…' }).addEventListener('click', () => {
+      this.close();
+      host.create();
+    });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+/** Chooses a new folder for project `name`, in the folder browser, starting at its folder now. */
+class ChooseFolderModal extends Modal {
+  constructor(
+    app: App,
+    private readonly source: FolderSource,
+    private readonly current: string,
+    private readonly name: string,
+    private readonly chosen: (folder: string) => void,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.modalEl.addClass('vc-project-modal');
+    this.setTitle(`Folder of “${this.name}”`);
+    this.contentEl.createDiv({ cls: 'vc-project-label', text: `Now: ${this.current || 'no folder'}. Its chats are those working on notes in the folder chosen.` });
+    const browser = this.contentEl.createDiv({ cls: 'vc-project-browser' });
+    folderBrowser(browser, this.source, () => this.current, (folder) => {
+      const taken = this.source.projectOf(folder);
+      if (taken) return void new Notice(`“${folder}” is the folder of “${taken}” already.`);
+      this.close();
+      this.chosen(folder);
+    }, 'Use this folder')(this.current ? folderOf(this.current) : '');
+  }
+
+  onClose(): void {
     this.contentEl.empty();
   }
 }

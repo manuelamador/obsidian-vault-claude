@@ -1,13 +1,24 @@
 // The connections maps, drawn (see connections.ts): a chat with its notes and the chats that share
-// them, and a project with its chats and their notes. Plain SVG; a note opens on a click and shows
-// Obsidian's page preview on ⌘-hover; a chat opens, or is linked to (see ChatView.openLinks).
-import { Keymap, Menu, Modal, setIcon, type App } from 'obsidian';
+// them, and a project with its chats and their notes. Plain SVG. Notes are squares with a page glyph,
+// chats circles with a speech bubble, folders arcs behind their notes. A note opens in a new tab on a
+// click and shows Obsidian's page preview on ⌘-hover; a chat offers to open, mention, link or unlink
+// it; a folder's arc offers its project, or to make it one. The map stays open through all of these,
+// drawn again when what it shows changed; Esc, its close button or a click outside closes it.
+import { Menu, Modal, setIcon, type App } from 'obsidian';
 import { folderOf } from './chatFolders';
-import { radialLayout, shortLabel, type MapChat, type MapNote, type Point } from './connections';
+import { chatAngles, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 
 const SVG = 'http://www.w3.org/2000/svg';
+/** What Link does, said where it is offered. */
+const LINK_TIP = 'Link: both chats list each other. Nothing is sent unless you tick Include on the links chip; then a digest of it goes once.';
+/** What Connect does, said where it is offered. */
+const CONNECT_TIP = "Connect: this project's Guide can then go with this chat when you choose (in the project dialog). This chat stays in its own project.";
 /** How a note is linked, by weight (see LINK_WEIGHTS). */
 const LINK_KINDS: Record<number, string> = { 3: 'edited', 2: 'sent', 1: 'mentioned' };
+/** The rings: notes, their labels, the arcs behind them, and the other chats. */
+const NOTE_RING = 150;
+const ARC_WIDTH = 26;
+const CHAT_RING = 245;
 
 /** What the maps need from the panel. */
 interface MapActions {
@@ -18,6 +29,20 @@ interface MapActions {
   /** Whether the chat the map is from links to chat `id`; null when there is none (a project's map with no chat on screen). */
   linked(id: string): boolean | null;
   link(id: string, on: boolean): void;
+  /** The project each chat is in, by name, if any. */
+  projectOfChat(id: string): string | null;
+  /** Adds a link to chat `id`, or an @-mention of note `path`, to the message being typed in the panel. */
+  mentionChat(id: string): void;
+  mentionNote(path: string): void;
+}
+
+/** What the map's search finds: chats, projects and notes whose names hold the words typed. */
+export interface SearchHit {
+  kind: 'chat' | 'project' | 'note';
+  /** A chat's id, or a project's or note's path. */
+  key: string;
+  label: string;
+  detail: string;
 }
 
 export interface ChatMapHost extends MapActions {
@@ -26,56 +51,105 @@ export interface ChatMapHost extends MapActions {
   chats: MapChat[];
   moreNotes: number;
   moreChats: number;
-  /** The chat's home project: its name and folder. */
-  project: { name: string; folder: string } | null;
-  /** The project each other chat is in, by name, if any. */
-  projectOfChat(id: string): string | null;
-  /** The project a folder is, if any: its note's path and name. */
-  folderProject(folder: string): { path: string; name: string } | null;
-  makeProject(folder: string): void;
-  connect(path: string): void;
+  /** The folders of all its notes, the busiest first. */
+  folders: { folder: string; count: number }[];
+  /** The chat's home project: its name, folder and note. */
+  project: { name: string; folder: string; path: string } | null;
+  /** Create project for `folder`; `created` runs once it is made. */
+  makeProject(folder: string, created: () => void): void;
+  connect(path: string): Promise<void>;
+  openProjectNote(path: string): void;
+  search(query: string): SearchHit[];
+  /** Makes project `path` the chat's home (null: takes it out). */
+  setHome(path: string | null): Promise<void>;
+  /** The project whose folder holds `folder` (the deepest), if any: what its notes count toward. */
+  projectHolding(folder: string): { path: string; name: string; folder: string } | null;
+  /** The map's data again, after something it shows changed. */
+  reload(): Promise<ChatMapHost>;
+  /** For a chat without a project: the project of a chat it is linked with, and the folder its notes suggest. */
+  linkedProject: { path: string; name: string } | null;
+  folderSuggestion: { folder: string; count: number; total: number } | null;
 }
 
 /** An SVG element of `tag` with `attrs`, added to `parent`. */
-function svg<K extends keyof SVGElementTagNameMap>(parent: Element, tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
+function svg<K extends keyof SVGElementTagNameMap>(parent: Element, tag: K, attrs: Record<string, string | number> = {}): SVGElementTagNameMap[K] {
   const el = document.createElementNS(SVG, tag);
   for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value));
   parent.appendChild(el);
   return el;
 }
 
-/** Draws a map: lines first, then nodes; pointing at a node lights it and its lines (`ties` names, for each line, the two nodes it joins). */
+/** A hover tooltip on `el`: SVG's own `<title>`. */
+function tooltip(el: Element, text: string): void {
+  svg(el, 'title').textContent = text;
+}
+
+/** The path of a ring segment between radii `inner` and `outer`, from angle `start` to `end`. */
+function arcPath(start: number, end: number, inner: number, outer: number): string {
+  const large = end - start > Math.PI ? 1 : 0;
+  const [a, b, c, d] = [polar(start, outer), polar(end, outer), polar(end, inner), polar(start, inner)];
+  return `M ${a.x} ${a.y} A ${outer} ${outer} 0 ${large} 1 ${b.x} ${b.y} L ${c.x} ${c.y} A ${inner} ${inner} 0 ${large} 0 ${d.x} ${d.y} Z`;
+}
+
+/** A note's name: its file name without `.md`. */
+function noteName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '');
+}
+
+/** Draws a map in layers: arcs, lines, nodes; pointing at a node lights it and its lines and dims the rest. */
 class MapDrawing {
   readonly root: SVGSVGElement;
+  readonly arcs: SVGGElement;
   private readonly lines: SVGGElement;
   private readonly nodes: SVGGElement;
   private readonly ties: { line: SVGLineElement; ends: [string, string] }[] = [];
   private readonly groups = new Map<string, SVGGElement>();
+  /** The kinds drawn, for the legend to list only those. */
+  readonly drawn = new Set<string>();
 
   constructor(parent: HTMLElement, width: number, height: number) {
     this.root = svg(parent, 'svg', { viewBox: `${-width / 2} ${-height / 2} ${width} ${height}`, class: 'vc-map' });
-    this.lines = svg(this.root, 'g', {});
-    this.nodes = svg(this.root, 'g', {});
+    this.arcs = svg(this.root, 'g');
+    this.lines = svg(this.root, 'g');
+    this.nodes = svg(this.root, 'g');
   }
 
-  line(from: Point, to: Point, ends: [string, string], cls: string): void {
-    this.ties.push({ line: svg(this.lines, 'line', { x1: from.x, y1: from.y, x2: to.x, y2: to.y, class: `vc-map-line ${cls}` }), ends });
+  line(from: Point, to: Point, ends: [string, string], kind: string): void {
+    this.drawn.add(kind);
+    this.ties.push({ line: svg(this.lines, 'line', { x1: from.x, y1: from.y, x2: to.x, y2: to.y, class: `vc-map-line is-${kind}` }), ends });
   }
 
-  /** A node at `at`: a dot (`r`), its label beside it (`side`: where the label goes), lit with its lines when pointed at. */
-  node(key: string, at: Point, r: number, cls: string, label: string, side: 'left' | 'right' | 'below'): SVGGElement {
+  /** A node's group, lit with its lines when pointed at. */
+  node(key: string, cls: string): SVGGElement {
     const group = svg(this.nodes, 'g', { class: `vc-map-node ${cls}`, tabindex: 0 });
-    svg(group, 'circle', { cx: at.x, cy: at.y, r });
-    const text = svg(group, 'text', {
-      x: side === 'below' ? at.x : at.x + (side === 'right' ? r + 4 : -r - 4),
-      y: side === 'below' ? at.y + r + 13 : at.y + 4,
-      'text-anchor': side === 'below' ? 'middle' : side === 'right' ? 'start' : 'end',
-    });
-    text.textContent = label;
     group.addEventListener('mouseenter', () => this.light(key));
     group.addEventListener('mouseleave', () => this.light(null));
     this.groups.set(key, group);
     return group;
+  }
+
+  /** A note: a page with a folded corner. */
+  note(key: string, at: Point, kind: string): SVGGElement {
+    this.drawn.add(`note-${kind}`);
+    const group = this.node(key, `is-note is-${kind}`);
+    svg(group, 'path', { d: `M ${at.x - 6} ${at.y - 7} h 8 l 4 4 v 10 h -12 z`, class: 'vc-map-page' });
+    svg(group, 'path', { d: `M ${at.x + 2} ${at.y - 7} v 4 h 4`, class: 'vc-map-fold' });
+    return group;
+  }
+
+  /** A chat: a circle with a speech bubble. */
+  chat(key: string, at: Point, r: number, cls: string): SVGGElement {
+    const group = this.node(key, `is-chat ${cls}`);
+    svg(group, 'circle', { cx: at.x, cy: at.y, r });
+    const s = r / 10;
+    svg(group, 'path', { d: `M ${at.x - 5 * s} ${at.y - 4 * s} h ${10 * s} v ${6 * s} h ${-6 * s} l ${-3 * s} ${3 * s} v ${-3 * s} h ${-1 * s} z`, class: 'vc-map-bubble' });
+    return group;
+  }
+
+  /** A label beside a node, on its outer side. */
+  label(group: Element, at: Point, side: 'right' | 'left', text: string, gap = 10): void {
+    const label = svg(group, 'text', { x: at.x + (side === 'right' ? gap : -gap), y: at.y + 4, 'text-anchor': side === 'right' ? 'start' : 'end' });
+    label.textContent = text;
   }
 
   private light(key: string | null): void {
@@ -90,148 +164,349 @@ class MapDrawing {
   }
 }
 
-/** Makes a node open its note on a click (⌘: in a new tab) and show Obsidian's preview on ⌘-hover. */
+/** Makes a note open in a new tab on a click and show Obsidian's preview on ⌘-hover, its path in its tooltip. */
 function noteNode(group: SVGGElement, path: string, actions: MapActions, parent: unknown): void {
-  group.setAttribute('aria-label', path);
-  group.addEventListener('click', (evt) => actions.openNote(path, Keymap.isModEvent(evt) !== false));
+  tooltip(group, path);
+  group.addEventListener('click', () => actions.openNote(path, true));
   group.addEventListener('mouseover', (evt) => actions.previewNote(path, evt, group, parent));
 }
 
-/** Makes a node offer its chat: open it, or link to it (or not) from the chat the map is from. */
-function chatNode(group: SVGGElement, id: string, actions: MapActions, close: () => void): void {
-  group.addEventListener('click', (evt) => {
-    const menu = new Menu();
-    menu.addItem((item) =>
-      item
-        .setTitle('Open chat')
-        .setIcon('message-square')
-        .onClick(() => {
-          close();
-          actions.openChat(id);
-        }),
-    );
+/**
+ * Makes a chat offer, on a click or a right-click: open it, mention it in the message being typed, or
+ * link (unlink) it from the chat the map is from; `changed` runs after a link changes.
+ */
+function chatNode(group: SVGGElement, id: string, actions: MapActions, changed: () => void): void {
+  const offer = (evt: MouseEvent) => {
+    evt.preventDefault();
     const linked = actions.linked(id);
+    const menu = new Menu();
+    const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
+    add('Open chat', 'message-square', () => actions.openChat(id));
+    add('Mention in your message', 'at-sign', () => actions.mentionChat(id));
     if (linked !== null) {
-      menu.addItem((item) =>
-        item
-          .setTitle(linked ? 'Unlink this chat' : 'Link to this chat')
-          .setIcon(linked ? 'unlink' : 'link')
-          .onClick(() => {
-            close();
-            actions.link(id, !linked);
-          }),
-      );
+      add(linked ? 'Unlink' : 'Link', linked ? 'unlink' : 'link', () => {
+        actions.link(id, !linked);
+        changed();
+      });
+      menu.addItem((item) => item.setTitle(LINK_TIP).setIsLabel(true));
     }
     menu.showAtMouseEvent(evt);
-  });
+  };
+  group.addEventListener('click', offer);
+  group.addEventListener('contextmenu', offer);
 }
 
-/** The ways a note is linked, as the legend shows them. */
-function legend(el: HTMLElement, items: [string, string][]): void {
+/** A chat's small badge for being in another project, top right of its circle (its tooltip names the project). */
+function projectBadge(group: SVGGElement, at: Point, r: number): void {
+  svg(group, 'rect', { x: at.x + r * 0.45, y: at.y - r - 2, width: 7, height: 7, rx: 1.5, class: 'vc-map-badge' });
+}
+
+/**
+ * Folder arcs behind the notes: tinted for `home` (the folder of the chat's or the map's project),
+ * marked for another project's, each labelled inside the ring; `click` acts on one.
+ */
+function drawArcs(drawing: MapDrawing, arcs: RingArc[], label: (folder: string) => { text: string; tip: string; cls: string }, click?: (folder: string, evt: MouseEvent) => void): void {
+  for (const arc of arcs) {
+    const { text, tip, cls } = label(arc.folder);
+    drawing.drawn.add(`arc-${cls}`);
+    const group = svg(drawing.arcs, 'g', { class: `vc-map-arc ${cls}` });
+    svg(group, 'path', { d: arcPath(arc.start, arc.end, NOTE_RING - ARC_WIDTH / 2, NOTE_RING + ARC_WIDTH / 2) });
+    const mid = (arc.start + arc.end) / 2;
+    const at = polar(mid, NOTE_RING - ARC_WIDTH / 2 - 12);
+    const name = svg(group, 'text', { x: at.x, y: at.y + 4, 'text-anchor': Math.abs(at.x) < 20 ? 'middle' : at.x > 0 ? 'end' : 'start' });
+    name.textContent = text;
+    tooltip(group, tip);
+    if (click) {
+      group.addEventListener('click', (evt) => click(arc.folder, evt));
+      group.addClass('is-clickable');
+    }
+  }
+}
+
+/** The legend: only the kinds drawn. */
+function legend(el: HTMLElement, drawn: Set<string>, items: [string, string, string][]): void {
+  const shown = items.filter(([kind]) => drawn.has(kind));
+  if (shown.length === 0) return;
   const row = el.createDiv({ cls: 'vc-map-legend' });
-  for (const [cls, label] of items) {
+  for (const [, cls, label] of shown) {
     const item = row.createSpan({ cls: 'vc-map-legend-item' });
     item.createSpan({ cls: `vc-map-swatch ${cls}` });
     item.appendText(label);
   }
 }
 
+/** Everything the legends may name: what was drawn, its swatch, its words. */
+const LEGEND: [string, string, string][] = [
+  ['edited', 'is-edited', 'edited'],
+  ['sent', 'is-sent', 'sent'],
+  ['mentioned', 'is-mentioned', 'mentioned only'],
+  ['shared', 'is-shared', 'note shared with another chat'],
+  ['linked', 'is-linked', 'linked chat'],
+  ['arc-is-home', 'is-home', "the project's folder"],
+  ['arc-is-other', 'is-other', "another project's folder"],
+  ['badge', 'is-badge', 'chat in another project'],
+];
+
 /**
- * A chat's connections: the chat in the middle; its notes round it, marked by how it is linked to
- * each, those in its project's folder picked out; the chats sharing them, or linked from it, outside.
- * Under it, the folders of its notes, each with its project or the offer to make one or connect.
+ * A chat's connections: the chat in the middle; its notes round it, grouped by folder under arcs, a
+ * line to each marked by how it is linked; the chats sharing them, or linked from it, outside. Under
+ * it, every folder of its notes with the same actions as the arcs.
  */
 export class ChatMapModal extends Modal {
-  constructor(app: App, private readonly host: ChatMapHost) {
+  constructor(app: App, private host: ChatMapHost) {
     super(app);
   }
 
   onOpen(): void {
-    const { host, contentEl } = this;
     this.modalEl.addClass('vc-map-modal');
-    this.setTitle(`Connections: ${shortLabel(host.title, 60)}`);
+    this.setTitle(`Connections: ${shortLabel(this.host.title, 60)}`);
+    this.draw();
+  }
+
+  /** Reads the map's data again and draws it in place: after a change to its project, links or connections. */
+  private async redraw(): Promise<void> {
+    this.host = await this.host.reload();
+    this.contentEl.empty();
+    this.draw();
+  }
+
+  private draw(): void {
+    const { host, contentEl } = this;
     if (host.notes.length === 0 && host.chats.length === 0) {
-      contentEl.createDiv({ cls: 'vc-project-empty', text: 'This chat has worked on no notes yet, and links to no chats. Attach or mention a note, or use what another chat found, to connect it.' });
+      this.drawProjectBar();
+      this.drawSearch();
+      contentEl.createDiv({ cls: 'vc-project-empty', text: 'This chat has worked on no notes yet, and links to no chats. Find a project, chat or note above to add it to, link or mention.' });
       return;
     }
-    const drawing = new MapDrawing(contentEl, 720, 560);
-    const { notes, chats } = radialLayout(
-      host.notes.map((note) => note.path),
-      host.chats.map(({ id, shared }) => ({ id, shared })),
-      150,
-      235,
-    );
+    this.drawProjectBar();
+    this.drawSearch();
+    const drawing = new MapDrawing(contentEl, 820, 620);
+    const { angles, arcs } = ringLayout(host.notes.map((note) => note.path));
+    const placesOfChats = chatAngles(host.chats, angles);
     const centre = { x: 0, y: 0 };
-    const inProject = (path: string) => host.project !== null && (path === host.project.folder || path.startsWith(`${host.project.folder}/`));
-    for (const note of host.notes) {
-      const at = notes.get(note.path);
-      if (at) drawing.line(centre, at, ['chat', note.path], `is-${LINK_KINDS[note.weight] ?? 'mentioned'}`);
-    }
+    const noteAt = (path: string) => polar(angles.get(path) ?? 0, NOTE_RING);
+    const chatAt = (id: string) => polar(placesOfChats.get(id) ?? 0, CHAT_RING);
+    const home = host.project?.folder ?? null;
+    drawArcs(
+      drawing,
+      arcs,
+      (folder) => {
+        const project = host.projectHolding(folder);
+        const own = project !== null && project.folder === home;
+        const name = folder.slice(folder.lastIndexOf('/') + 1) || 'Top of the vault';
+        return {
+          // A project's own folder is named by the project; a folder inside it by its name, in the project's tint.
+          text: project && project.folder === folder ? `◆ ${shortLabel(project.name, 22)}` : shortLabel(name, 22),
+          tip: `${folder || 'Top of the vault'}${project ? ` · in project “${project.name}”` : ''} · click for its project`,
+          cls: own ? 'is-home' : project ? 'is-other' : 'is-plain',
+        };
+      },
+      (folder, evt) => this.folderMenu(folder, evt),
+    );
+    for (const note of host.notes) drawing.line(centre, noteAt(note.path), ['chat', note.path], LINK_KINDS[note.weight] ?? 'mentioned');
     for (const chat of host.chats) {
-      const at = chats.get(chat.id);
-      if (!at) continue;
-      for (const path of chat.shared) {
-        const to = notes.get(path);
-        if (to) drawing.line(at, to, [chat.id, path], 'is-shared');
-      }
-      if (chat.linked) drawing.line(centre, at, ['chat', chat.id], 'is-linked');
+      for (const path of chat.shared) if (angles.has(path)) drawing.line(chatAt(chat.id), noteAt(path), [chat.id, path], 'shared');
+      if (chat.linked) drawing.line(centre, chatAt(chat.id), ['chat', chat.id], 'linked');
     }
+    const noteLabels = new Map(placeLabels(host.notes.map((note) => ({ key: note.path, angle: angles.get(note.path) ?? 0, text: noteName(note.path) })), NOTE_RING + ARC_WIDTH / 2 + 2, 24).map((label) => [label.key, label]));
     for (const note of host.notes) {
-      const at = notes.get(note.path);
-      if (!at) continue;
-      const name = note.path.slice(note.path.lastIndexOf('/') + 1).replace(/\.md$/, '');
-      const group = drawing.node(note.path, at, 5, `is-note is-${LINK_KINDS[note.weight] ?? 'mentioned'}${inProject(note.path) ? ' is-project' : ''}`, shortLabel(name, 24), at.x >= 0 ? 'right' : 'left');
+      const at = noteAt(note.path);
+      const group = drawing.note(note.path, at, LINK_KINDS[note.weight] ?? 'mentioned');
+      const label = noteLabels.get(note.path);
+      if (label) drawing.label(group, label.at, label.side, label.text, 2);
       noteNode(group, note.path, host, this);
     }
+    const chatLabels = new Map(placeLabels(host.chats.map((chat) => ({ key: chat.id, angle: placesOfChats.get(chat.id) ?? 0, text: host.titleOf(chat.id) })), CHAT_RING, 26).map((label) => [label.key, label]));
     for (const chat of host.chats) {
-      const at = chats.get(chat.id);
-      if (!at) continue;
+      const at = chatAt(chat.id);
       const project = host.projectOfChat(chat.id);
-      const group = drawing.node(chat.id, at, 7, `is-chat${chat.linked ? ' is-linked' : ''}`, shortLabel(host.titleOf(chat.id), 22), at.x >= 0 ? 'right' : 'left');
-      group.setAttribute('aria-label', `${host.titleOf(chat.id)}${project ? ` · in ${project}` : ''} · ${chat.shared.length} shared note${chat.shared.length === 1 ? '' : 's'}${chat.linked ? ' · linked from this chat' : ''}`);
-      chatNode(group, chat.id, host, () => this.close());
+      const other = project !== null && project !== host.project?.name;
+      const group = drawing.chat(chat.id, at, 10, chat.linked ? 'is-linked' : '');
+      if (other) {
+        projectBadge(group, at, 10);
+        drawing.drawn.add('badge');
+      }
+      const label = chatLabels.get(chat.id);
+      if (label) drawing.label(group, label.at, label.side, label.text, 14);
+      const shared = `${chat.shared.length} shared note${chat.shared.length === 1 ? '' : 's'}`;
+      tooltip(group, `${host.titleOf(chat.id)}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : ''}\nClick to open, mention or ${host.linked(chat.id) ? 'unlink' : 'link'} it`);
+      chatNode(group, chat.id, host, () => void this.redraw());
     }
-    drawing.node('chat', centre, 12, 'is-centre', host.project ? `${shortLabel(host.title, 30)} · ${host.project.name}` : shortLabel(host.title, 36), 'below');
-    legend(contentEl, [
-      ['is-edited', 'edited'],
-      ['is-sent', 'sent'],
-      ['is-mentioned', 'mentioned'],
-      ['is-project', "in the project's folder"],
-      ['is-chat', 'chat sharing notes'],
-      ['is-linked', 'linked chat'],
-    ]);
+    const centreNode = drawing.chat('chat', centre, 18, 'is-centre');
+    const title = svg(centreNode, 'text', { x: 0, y: 34, 'text-anchor': 'middle' });
+    title.textContent = shortLabel(host.title, 40);
+    if (host.project) {
+      const project = svg(centreNode, 'text', { x: 0, y: 50, 'text-anchor': 'middle', class: 'vc-map-sub' });
+      project.textContent = `◆ ${shortLabel(host.project.name, 36)}`;
+    }
+    tooltip(centreNode, host.project ? `${host.title} · in “${host.project.name}”` : host.title);
+    legend(contentEl, drawing.drawn, LEGEND);
     const more = [host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : '', host.moreChats > 0 ? `${host.moreChats} more chat${host.moreChats === 1 ? '' : 's'}` : ''].filter(Boolean);
-    if (more.length > 0) contentEl.createDiv({ cls: 'vc-project-empty', text: `Not shown: ${more.join(' and ')}.` });
+    if (more.length > 0) contentEl.createDiv({ cls: 'vc-project-empty', text: `Not shown: ${more.join(' and ')}. The folders below count every note.` });
     this.drawFolders();
   }
 
-  /** The folders of the chat's notes, by how many: each its project (Connect, when not the chat's), or Make it a project. */
+  /**
+   * The chat's project, at the top: its name, its note, Move… (to the search) and Take chat out; or,
+   * with none, the project of a chat it is linked with and the folder its notes suggest, each in one click.
+   */
+  private drawProjectBar(): void {
+    const { host, contentEl } = this;
+    const bar = contentEl.createDiv({ cls: 'vc-map-bar' });
+    setIcon(bar.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
+    const act = (label: string, run: () => void, cta = false) => {
+      const button = bar.createEl('button', { cls: `vc-map-action${cta ? ' mod-cta' : ''}`, text: label });
+      button.addEventListener('click', run);
+    };
+    if (host.project) {
+      const { project } = host;
+      bar.createSpan({ cls: 'vc-map-bar-name', text: `In “${project.name}”` });
+      act('Open note', () => host.openProjectNote(project.path));
+      act('Move…', () => this.focusSearch());
+      act('Take chat out', () => void host.setHome(null).then(() => this.redraw()));
+      return;
+    }
+    bar.createSpan({ cls: 'vc-map-bar-name', text: 'No project' });
+    if (host.linkedProject) {
+      const { linkedProject } = host;
+      act(`Add to “${linkedProject.name}”`, () => void host.setHome(linkedProject.path).then(() => this.redraw()), true);
+    }
+    if (host.folderSuggestion) {
+      const { folder } = host.folderSuggestion;
+      act(`Make “${folder}” a project…`, () => host.makeProject(folder, () => void this.redraw()));
+    }
+    act('Find a project…', () => this.focusSearch());
+  }
+
+  private searchInput: HTMLInputElement | null = null;
+
+  /** The search, focused; it finds projects, chats and notes whichever button sent you there. */
+  private focusSearch(): void {
+    this.searchInput?.focus();
+  }
+
+  /** A search above the map: chats, projects and notes by name, each with what can be done with it from this chat. */
+  private drawSearch(): void {
+    const { host, contentEl } = this;
+    const box = contentEl.createDiv({ cls: 'vc-map-search' });
+    const input = box.createEl('input', { type: 'search', attr: { placeholder: 'Find a project, chat or note: add to it, link, mention or connect' } });
+    this.searchInput = input;
+    const results = box.createDiv({ cls: 'vc-map-results' });
+    results.hide();
+    const act = (parent: HTMLElement, label: string, run: () => void, cta = false) => {
+      const button = parent.createEl('button', { cls: `vc-map-action${cta ? ' mod-cta' : ''}`, text: label });
+      button.addEventListener('click', run);
+      return button;
+    };
+    input.addEventListener('input', () => {
+      results.empty();
+      const typed = input.value.trim() !== '';
+      const hits = typed ? host.search(input.value) : [];
+      results.toggle(typed);
+      if (typed && hits.length === 0) results.createDiv({ cls: 'vc-project-empty', text: 'Nothing found.' });
+      for (const hit of hits) {
+        const row = results.createDiv({ cls: 'vc-project-browser-row' });
+        setIcon(row.createSpan({ cls: 'vc-project-group-icon' }), hit.kind === 'chat' ? 'message-square' : hit.kind === 'project' ? 'folder-kanban' : 'file-text');
+        const text = row.createDiv({ cls: 'vc-project-chat-text' });
+        text.createDiv({ cls: 'vc-project-chat-title', text: hit.label });
+        if (hit.detail) text.createDiv({ cls: 'vc-project-chat-when', text: hit.detail });
+        const buttons = row.createDiv({ cls: 'vc-map-hit-actions' });
+        if (hit.kind === 'chat') {
+          const linked = host.linked(hit.key);
+          if (linked !== null)
+            act(buttons, linked ? 'Unlink' : 'Link', () => {
+              host.link(hit.key, !linked);
+              void this.redraw();
+            }).setAttr('aria-label', LINK_TIP);
+          act(buttons, 'Mention', () => host.mentionChat(hit.key)).setAttr('aria-label', 'Mention: puts a link to it in your message; the chats are linked when you send it.');
+          act(buttons, 'Open', () => host.openChat(hit.key));
+        } else if (hit.kind === 'project') {
+          if (hit.key !== host.project?.path) {
+            act(buttons, host.project ? 'Move here' : 'Add to it', () => void host.setHome(hit.key).then(() => this.redraw()), true);
+            act(buttons, 'Connect', () => void host.connect(hit.key).then(() => this.redraw())).setAttr('aria-label', CONNECT_TIP);
+          }
+          act(buttons, 'Open note', () => host.openProjectNote(hit.key));
+        } else {
+          act(buttons, 'Mention', () => host.mentionNote(hit.key)).setAttr('aria-label', 'Mention: adds @[[it]] to your message, which sends the note with it.');
+          act(buttons, 'Open', () => host.openNote(hit.key, true));
+        }
+      }
+    });
+    window.setTimeout(() => input.focus(), 0);
+  }
+
+  /**
+   * What a folder offers, by the project holding it (see projectHolding): this chat's project, its note;
+   * another project, Connect and its note; a folder in no project, Make it a project; a folder inside a
+   * project, nothing of its own (its notes count toward that project).
+   */
+  private folderActions(folder: string): { label: string; tip?: string; run: () => void }[] {
+    const { host } = this;
+    const project = host.projectHolding(folder);
+    if (project && project.folder !== folder) return [];
+    if (project && project.path === host.project?.path) return [{ label: 'Open project note', run: () => host.openProjectNote(project.path) }];
+    if (project)
+      return [
+        { label: `Connect to “${project.name}”`, tip: CONNECT_TIP, run: () => void host.connect(project.path).then(() => this.redraw()) },
+        { label: 'Open project note', run: () => host.openProjectNote(project.path) },
+      ];
+    if (!folder) return [];
+    return [{ label: 'Make it a project…', run: () => host.makeProject(folder, () => void this.redraw()) }];
+  }
+
+  private folderMenu(folder: string, evt: MouseEvent): void {
+    const holding = this.host.projectHolding(folder);
+    // A folder inside a project acts as the project does.
+    const actions = this.folderActions(holding && holding.folder !== folder ? holding.folder : folder);
+    if (actions.length === 0) return;
+    const menu = new Menu();
+    for (const action of actions) menu.addItem((item) => item.setTitle(action.label).onClick(action.run));
+    menu.showAtMouseEvent(evt);
+  }
+
+  /**
+   * The folders this chat worked in: each project first, with all its notes counted (its folders'
+   * too, listed indented under it, with nothing of their own to do), then the folders in no project,
+   * each with Make it a project; the busiest first.
+   */
   private drawFolders(): void {
     const { host, contentEl } = this;
-    const counts = new Map<string, number>();
-    for (const note of host.notes) {
-      const folder = folderOf(note.path);
-      if (folder) counts.set(folder, (counts.get(folder) ?? 0) + 1);
-    }
-    if (counts.size === 0) return;
+    if (host.folders.length === 0) return;
     const box = contentEl.createDiv({ cls: 'vc-map-folders' });
-    box.createDiv({ cls: 'vc-project-label', text: 'Folders of its notes' });
-    for (const [folder, n] of [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
-      const row = box.createDiv({ cls: 'vc-project-browser-row' });
-      const project = host.folderProject(folder);
-      setIcon(row.createSpan({ cls: 'vc-project-group-icon' }), project ? 'folder-kanban' : 'folder');
-      row.createSpan({ cls: 'vc-project-folder-path', text: folder });
-      row.createSpan({ cls: 'vc-project-size', text: `${n} note${n === 1 ? '' : 's'}${project ? ` · project “${project.name}”` : ''}` });
-      const action = (label: string, run: () => void) => {
-        const button = row.createEl('button', { cls: 'vc-map-action', text: label });
-        button.addEventListener('click', () => {
-          this.close();
-          run();
-        });
-      };
-      if (!project) action('Make it a project…', () => host.makeProject(folder));
-      else if (host.project?.name !== project.name) action('Connect', () => host.connect(project.path));
+    box.createDiv({ cls: 'vc-map-folders-title', text: 'Folders this chat worked in' });
+    box.createDiv({ cls: 'vc-project-label', text: 'Make a folder a project to give its chats shared Instructions and a Guide. A project counts the notes in the folders inside it.' });
+    const projects = new Map<string, { project: { path: string; name: string; folder: string }; count: number; inside: { folder: string; count: number }[] }>();
+    const loose: { folder: string; count: number }[] = [];
+    for (const entry of host.folders) {
+      const project = host.projectHolding(entry.folder);
+      if (!project) {
+        loose.push(entry);
+        continue;
+      }
+      const group = projects.get(project.path) ?? { project, count: 0, inside: [] };
+      group.count += entry.count;
+      if (entry.folder !== project.folder) group.inside.push(entry);
+      projects.set(project.path, group);
     }
+    const row = (parent: HTMLElement, icon: string, path: string, detail: string, actions: { label: string; tip?: string; run: () => void }[], cls = '') => {
+      const line = parent.createDiv({ cls: `vc-project-browser-row ${cls}` });
+      setIcon(line.createSpan({ cls: 'vc-project-group-icon' }), icon);
+      const text = line.createDiv({ cls: 'vc-project-chat-text' });
+      text.createDiv({ cls: 'vc-project-folder-path', text: path });
+      text.createDiv({ cls: 'vc-project-chat-when', text: detail });
+      for (const action of actions) {
+        const button = line.createEl('button', { cls: 'vc-map-action', text: action.label });
+        if (action.tip) button.setAttr('aria-label', action.tip);
+        button.addEventListener('click', action.run);
+      }
+    };
+    const notes = (n: number) => `${n} note${n === 1 ? '' : 's'}`;
+    for (const { project, count, inside } of [...projects.values()].sort((a, b) => b.count - a.count)) {
+      const home = project.path === host.project?.path;
+      row(box, 'folder-kanban', project.folder, `${notes(count)} · ${home ? `this chat's project, “${project.name}”` : `project “${project.name}”, not this chat's: Connect sends its Guide with this chat when you choose`}`, this.folderActions(project.folder), home ? 'is-home' : '');
+      for (const entry of inside.sort((a, b) => b.count - a.count)) row(box, 'folder', entry.folder.slice(project.folder.length + 1), `${notes(entry.count)} · in “${project.name}”`, [], 'vc-map-folder-inside');
+    }
+    for (const entry of loose) row(box, 'folder', entry.folder || 'Top of the vault', `${notes(entry.count)} · in no project`, this.folderActions(entry.folder));
   }
 
   onClose(): void {
@@ -241,6 +516,8 @@ export class ChatMapModal extends Modal {
 
 export interface ProjectMapHost extends MapActions {
   name: string;
+  /** The project's folder: its notes are grouped by the folders in it. */
+  folder: string;
   chats: string[];
   notes: string[];
   /** Which chat worked on which note, and how (see LINK_WEIGHTS). */
@@ -249,7 +526,7 @@ export interface ProjectMapHost extends MapActions {
   moreChats: number;
 }
 
-/** A project's map: its chats on the left, the notes they worked on on the right, a line where a chat worked on a note. */
+/** A project's map: its chats in the middle, the notes they worked on round them, grouped by folder within the project, a line where a chat worked on a note. */
 export class ProjectMapModal extends Modal {
   constructor(app: App, private readonly host: ProjectMapHost) {
     super(app);
@@ -263,32 +540,36 @@ export class ProjectMapModal extends Modal {
       contentEl.createDiv({ cls: 'vc-project-empty', text: 'No chats have worked on notes in this project yet.' });
       return;
     }
-    const rows = Math.max(host.chats.length, host.notes.length);
-    const height = Math.max(200, rows * 30 + 40);
-    const drawing = new MapDrawing(contentEl, 720, height);
-    const place = (i: number, count: number, x: number): Point => ({ x, y: -height / 2 + 20 + ((i + 0.5) * (height - 40)) / count });
-    const chatAt = new Map(host.chats.map((id, i) => [id, place(i, host.chats.length, -150)]));
-    const noteAt = new Map(host.notes.map((path, i) => [path, place(i, host.notes.length, 150)]));
+    const drawing = new MapDrawing(contentEl, 820, 560);
+    // Grouped by the folder within the project; notes outside it by their own folder.
+    const within = (path: string) => {
+      const folder = folderOf(path);
+      return folder === host.folder ? '' : folder.startsWith(`${host.folder}/`) ? folder.slice(host.folder.length + 1) : folder;
+    };
+    const { angles, arcs } = ringLayout(host.notes, within);
+    drawArcs(drawing, arcs, (sub) => ({ text: shortLabel(sub || host.name, 22), tip: sub ? `${host.folder}/${sub}` : host.folder, cls: sub === '' ? 'is-home' : 'is-plain' }));
+    const inner = host.chats.length === 1 ? 0 : 60;
+    const chatAt = new Map(host.chats.map((id, i) => [id, polar((2 * Math.PI * i) / host.chats.length, inner)]));
+    const noteAt = (path: string) => polar(angles.get(path) ?? 0, NOTE_RING);
     for (const [id, path, weight] of host.links) {
       const from = chatAt.get(id);
-      const to = noteAt.get(path);
-      if (from && to) drawing.line(from, to, [id, path], `is-${LINK_KINDS[weight] ?? 'mentioned'}`);
+      if (from && angles.has(path)) drawing.line(from, noteAt(path), [id, path], LINK_KINDS[weight] ?? 'mentioned');
+    }
+    const labels = new Map(placeLabels(host.notes.map((path) => ({ key: path, angle: angles.get(path) ?? 0, text: noteName(path) })), NOTE_RING + ARC_WIDTH / 2 + 2, 26).map((label) => [label.key, label]));
+    for (const path of host.notes) {
+      const group = drawing.note(path, noteAt(path), 'project');
+      const label = labels.get(path);
+      if (label) drawing.label(group, label.at, label.side, label.text, 2);
+      noteNode(group, path, host, this);
     }
     for (const [id, at] of chatAt) {
-      const group = drawing.node(id, at, 7, 'is-chat', shortLabel(host.titleOf(id), 30), 'left');
-      group.setAttribute('aria-label', host.titleOf(id));
-      chatNode(group, id, host, () => this.close());
+      const group = drawing.chat(id, at, 11, '');
+      const touched = host.links.filter(([chat]) => chat === id).length;
+      tooltip(group, `${host.titleOf(id)} · ${touched} note${touched === 1 ? '' : 's'} here\nClick to open or mention it${host.linked(id) === null ? '' : ', or link it'}`);
+      chatNode(group, id, host, () => undefined);
     }
-    for (const [path, at] of noteAt) {
-      const name = path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '');
-      noteNode(drawing.node(path, at, 5, 'is-note is-project', shortLabel(name, 30), 'right'), path, host, this);
-    }
-    legend(contentEl, [
-      ['is-edited', 'edited'],
-      ['is-sent', 'sent'],
-      ['is-mentioned', 'mentioned'],
-    ]);
-    if (host.moreChats > 0) contentEl.createDiv({ cls: 'vc-project-empty', text: `Not shown: ${host.moreChats} older chat${host.moreChats === 1 ? '' : 's'}.` });
+    legend(contentEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned'].includes(kind)));
+    contentEl.createDiv({ cls: 'vc-project-empty', text: `Point at a chat to see its notes.${host.moreChats > 0 ? ` Not shown: ${host.moreChats} older chat${host.moreChats === 1 ? '' : 's'}.` : ''}` });
   }
 
   onClose(): void {

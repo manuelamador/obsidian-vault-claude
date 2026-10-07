@@ -2786,22 +2786,21 @@ async function main(): Promise<void> {
       if (!deleteOk) process.exitCode = 1;
     }
 
-    // The back button: shown after a note sends the panel to another chat, gone once a new chat starts.
-    const backView = view as unknown as { backChat: { id: string; title: string } | null; updateChatButtons(): void };
-    const backEl = root.querySelector('.vc-back-line') as HTMLElement;
-    backView.backChat = { id: 'prev', title: 'Earlier chat' };
-    backView.updateChatButtons();
-    const backShown = backEl.isShown() && backEl.textContent === '← Back to “Earlier chat”×';
-    // The × dismisses the line without going anywhere.
-    (backEl.querySelector('.vc-back-close') as HTMLElement).click();
-    const dismissed = !backEl.isShown() && backView.backChat === null;
-    backView.backChat = { id: 'prev', title: 'Earlier chat' };
-    backView.updateChatButtons();
-
+    // The arrows: a move to another chat (not by the arrows) puts the chat left on the back list and empties the forward list.
+    const navView = view as unknown as { navBack: { id: string; title: string }[]; navForward: { id: string; title: string }[]; remember(from: { id: string; title: string } | null): void; updateNavButtons(): void };
+    const backArrow = root.querySelector('.vc-nav .clickable-icon') as HTMLElement;
+    // Earlier steps of this test opened chats, which the arrows remember: start from none.
+    navView.navBack = [];
+    navView.navForward = [{ id: 'later', title: 'Later chat' }];
+    navView.remember({ id: 'prev', title: 'Earlier chat' });
+    const remembered = JSON.stringify(navView.navBack) === '[{"id":"prev","title":"Earlier chat"}]' && navView.navForward.length === 0;
+    const backLabel = backArrow.getAttribute('aria-label') === 'Back to “Earlier chat”' && !backArrow.hasClass('is-disabled');
+    navView.navBack = [];
+    navView.updateNavButtons();
+    const backOff = backArrow.hasClass('is-disabled');
     view.newChat();
-    const backGone = !backEl.isShown() && backView.backChat === null;
-    console.log(`back line: shown after a jump ${backShown}; dismissed by the × ${dismissed}; gone in a new chat ${backGone}`);
-    if (!backShown || !dismissed || !backGone) process.exitCode = 1;
+    console.log(`back arrow: remembers the chat left ${remembered}; names it ${backLabel}; off with nowhere to go ${backOff}`);
+    if (!remembered || !backLabel || !backOff) process.exitCode = 1;
     console.log(`newChat completed; save button: ${internals.saveButton.isShown()}`);
     const clearedOk = !(root.querySelector('.vc-find') as HTMLElement).isShown();
     console.log(`new chat closes find: ${clearedOk}`);

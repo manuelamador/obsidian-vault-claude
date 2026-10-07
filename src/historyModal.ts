@@ -533,7 +533,7 @@ export function confirmDelete(app: App, title: string, fromPanel: boolean, onCon
 }
 
 /** A yes/no dialog; `onConfirm` runs only when the confirming button is clicked. */
-class ConfirmModal extends Modal {
+export class ConfirmModal extends Modal {
   constructor(
     app: App,
     private readonly heading: string,
