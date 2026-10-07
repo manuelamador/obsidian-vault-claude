@@ -70,7 +70,7 @@ import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMar
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
 import { SCRATCH_IDLE_CHOICES, chatModel, denyRuleList, idleLabel, modeShort, permissionModes, type ToolDisplay } from './settings';
 import { summarizeTool, toolLabel, vaultRelative } from './toolSummary';
-import { ChangesCard, agentDiffs, openFileAtLine, savedChangedFiles, toolDiffs, type EditDiff } from './editDiff';
+import { ChangesCard, agentDiffs, isOwnChange, openFileAtLine, savedChangedFiles, toolDiffs, type EditDiff } from './editDiff';
 import { linkFileNames } from './fileLinks';
 import { lineDiff } from './wordDiff';
 import {
@@ -2116,7 +2116,7 @@ export class ChatView extends ItemView {
       if (!call || result.isError || !root || !entry.chatId || entry.chatId === this.plugin.scratch?.id) continue;
       for (const diff of toolDiffs(call.name, call.input, result.structured)) {
         const path = vaultRelative(diff.file, root);
-        if (path && !diff.fromShell) this.plugin.linkNoteChat(path, entry.chatId);
+        if (path && isOwnChange(diff)) this.plugin.linkNoteChat(path, entry.chatId);
       }
     }
   }
@@ -5415,8 +5415,8 @@ export class ChatView extends ItemView {
       // edit seen again in a saved chat only fills in a missing link: it does not make the chat newest.
       // A chat from outside the panel, under its own session until a message makes the panel's copy.
       const chat = this.chatId ?? this.resumeId;
-      // A shell command's reported changes are shown but link nothing (see EditDiff.fromShell).
-      if (vaultPath && chat && !this.scratch && !diff.fromShell) this.plugin.linkNoteChat(vaultPath, chat, !saved);
+      // A shell command's reported changes link only the files it names (see isOwnChange).
+      if (vaultPath && chat && !this.scratch && isOwnChange(diff)) this.plugin.linkNoteChat(vaultPath, chat, !saved);
       const container = this.container();
       let card = this.changeCards.get(container);
       if (!card) {
@@ -5454,7 +5454,7 @@ export class ChatView extends ItemView {
     notice.querySelector(':scope > .vc-tools-header')?.after(card.el);
     for (const diff of diffs) {
       const vaultPath = vaultRelative(diff.file, root);
-      if (link && vaultPath && chatId && chatId === this.chatId && !this.scratch && !diff.fromShell) this.plugin.linkNoteChat(vaultPath, chatId);
+      if (link && vaultPath && chatId && chatId === this.chatId && !this.scratch && isOwnChange(diff)) this.plugin.linkNoteChat(vaultPath, chatId);
       card.add(diff, vaultPath);
     }
     card.fold(true);

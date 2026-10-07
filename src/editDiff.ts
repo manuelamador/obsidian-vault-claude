@@ -90,9 +90,27 @@ export interface EditDiff {
   /**
    * Reported for a shell command: what changed in the vault while it ran, whatever changed it.
    * Claude Code cannot tell a command's own changes from another chat's or program's made meanwhile,
-   * so such a change is shown with the command's but does not link the note to the chat.
+   * so such a change links the note to the chat only when the command names the file (`named`, see
+   * commandNames); the rest are shown with the command's but link nothing (see isOwnChange).
    */
   fromShell?: boolean;
+  named?: boolean;
+}
+
+/**
+ * Whether shell command `command` names file `file`: its path, its name, or its name without the
+ * extension (a script writing it by a path built from parts still names it). Such a change is taken
+ * as the command's own.
+ */
+export function commandNames(command: string, file: string): boolean {
+  const name = file.slice(file.lastIndexOf('/') + 1);
+  const stem = name.replace(/\.[^.]+$/, '');
+  return command.includes(file) || command.includes(name) || (stem.length >= 4 && command.includes(stem));
+}
+
+/** Whether a change is the chat's own, and so links its note to the chat: an edit, or a shell command's change to a file it names. */
+export function isOwnChange(diff: EditDiff): boolean {
+  return !diff.fromShell || diff.named === true;
 }
 
 interface PatchHunk {
@@ -151,7 +169,7 @@ export function editDiff(name: string, input: Record<string, unknown>, structure
 
 /** The changes a tool call made to files: an edit tool's (see editDiff), or a shell command's (see bashEditDiffs). */
 export function toolDiffs(name: string, input: Record<string, unknown>, structured?: unknown): EditDiff[] {
-  if (name === 'Bash') return bashEditDiffs(structured);
+  if (name === 'Bash') return bashEditDiffs(structured, typeof input.command === 'string' ? input.command : '');
   const diff = editDiff(name, input, structured);
   return diff ? [diff] : [];
 }
@@ -179,13 +197,13 @@ function messageDiffs(messages: { type?: string; content?: unknown }[], structur
 }
 
 /**
- * The files a saved chat's own edits changed (not those reported for a shell command, see
- * EditDiff.fromShell), each once, in the order first changed, with `edits`, the structured results
+ * The files a saved chat's own edits changed (with a shell command's changes to files it names, see
+ * isOwnChange), each once, in the order first changed, with `edits`, the structured results
  * by tool_use_id. A subagent's own calls are left out, as the panel leaves them out when drawing.
  */
 export function savedChangedFiles(transcript: SessionMessage[], edits: Map<string, unknown>): string[] {
   const own = transcript.filter((message) => message.parent_tool_use_id === null).map((message) => ({ type: message.type, content: (message.message as { content?: unknown } | null)?.content }));
-  return [...new Set(messageDiffs(own, (id) => edits.get(id)).flatMap((diff) => (diff.fromShell ? [] : [diff.file])))];
+  return [...new Set(messageDiffs(own, (id) => edits.get(id)).flatMap((diff) => (isOwnChange(diff) ? [diff.file] : [])))];
 }
 
 /**
@@ -210,9 +228,10 @@ export function agentDiffs(transcript: string): EditDiff[] {
 
 /**
  * The files a Bash command changed, from the `bashEditDiff` Claude Code adds to its structured
- * result (absent from the SDK's type definitions): each file with its patch.
+ * result (absent from the SDK's type definitions): each file with its patch, marked when `command`
+ * names it (see commandNames).
  */
-export function bashEditDiffs(structured: unknown): EditDiff[] {
+export function bashEditDiffs(structured: unknown, command = ''): EditDiff[] {
   const files = (structured as { bashEditDiff?: { files?: { filePath?: unknown; hunks?: unknown }[] } } | null | undefined)?.bashEditDiff?.files;
   if (!Array.isArray(files)) return [];
   return files.flatMap((file) => {
@@ -222,7 +241,7 @@ export function bashEditDiffs(structured: unknown): EditDiff[] {
     const added = lines.filter((line) => line.kind === 'ins').length;
     const removed = lines.filter((line) => line.kind === 'del').length;
     if (added + removed === 0) return [];
-    return [{ file: file.filePath, lines, added, removed, created: hunks.every((hunk) => hunk.oldLines === 0), fromShell: true }];
+    return [{ file: file.filePath, lines, added, removed, created: hunks.every((hunk) => hunk.oldLines === 0), fromShell: true, named: commandNames(command, file.filePath) }];
   });
 }
 

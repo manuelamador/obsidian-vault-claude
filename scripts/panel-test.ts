@@ -2929,7 +2929,8 @@ async function main(): Promise<void> {
     stoppedTasks.length = 0;
 
     // Edits it finishes off screen link the notes they changed, as the chat on screen does: one it
-    // started on screen too, and a shell command's. A failed edit does not, nor one outside the vault.
+    // started on screen too, and a shell command's to a file it names. A failed edit does not, nor one
+    // outside the vault, nor a shell command's change to a file it does not name.
     const noteLinksBefore = plugin.noteLinks.length;
     const bgSend = (message: unknown) => (handlers as { onMessage(message: unknown): void } | null)?.onMessage(message);
     const toolUse = (id: string, name: string, input: unknown) => ({ type: 'tool_use', id, name, input });
@@ -2945,7 +2946,11 @@ async function main(): Promise<void> {
       type: 'user',
       parent_tool_use_id: null,
       message: { role: 'user', content: [toolResult('b1')] },
-      tool_use_result: { bashEditDiff: { files: [{ filePath: '/tmp/Shell.md', hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }] }] } },
+      tool_use_result: {
+        bashEditDiff: {
+          files: ['/tmp/Shell.md', '/tmp/Meanwhile.md'].map((filePath) => ({ filePath, hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }] })),
+        },
+      },
     });
     // The scratch chat links no notes, off screen as on.
     const scratchWas = plugin.scratch;
@@ -2954,8 +2959,8 @@ async function main(): Promise<void> {
     bgSend({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [toolResult('e4')] } });
     plugin.scratch = scratchWas;
     const bgLinks = plugin.noteLinks.slice(noteLinksBefore);
-    // A shell command's reported change links nothing: it may be another chat's, made meanwhile.
-    const bgLinksOk = JSON.stringify(bgLinks) === JSON.stringify(['Started.md@bg-chat', 'Off Screen.md@bg-chat']);
+    // A shell command's change to a file it does not name links nothing: it may be another chat's, made meanwhile.
+    const bgLinksOk = JSON.stringify(bgLinks) === JSON.stringify(['Started.md@bg-chat', 'Off Screen.md@bg-chat', 'Shell.md@bg-chat']);
     console.log(`notes linked by edits a background chat finishes: ${JSON.stringify(bgLinks)} -> ${bgLinksOk}`);
     if (!bgLinksOk) process.exitCode = 1;
 
