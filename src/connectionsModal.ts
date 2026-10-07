@@ -365,7 +365,6 @@ function chatNode(group: SVGGElement, id: string, actions: MapActions, changed: 
         actions.link(id, !linked);
         changed();
       });
-      menu.addItem((item) => item.setTitle(LINK_TIP).setIsLabel(true));
     }
     menu.showAtMouseEvent(evt);
   };
