@@ -3114,3 +3114,14 @@ body:has(.vc-map-modal) .popover.hover-popover {
   padding-top: var(--size-4-3);
   border-top: 1px solid var(--background-modifier-border);
 }
+
+/* The chat on screen in the map's title: choosing another opens it. */
+.vc-map-title-chat {
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+}
+
+.vc-map-title-chat:hover {
+  color: var(--text-accent);
+}

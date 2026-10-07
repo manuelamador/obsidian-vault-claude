@@ -1709,6 +1709,7 @@ export default class VaultClaudePlugin extends Plugin {
       // Links and mentions act for the chat on screen, wherever the map is centred.
       ...this.mapActions(baseline, view),
       baseline: { id: baseline, title: this.chatTitleOf(baseline) },
+      chatsToOpen: () => (this.lastListing ?? []).filter((item) => !item.scratch).map((item) => ({ id: item.id, title: item.title })),
       centre: id,
       recentre: (centre) => this.chatMapHost(view, baseline, false, centre),
       title: this.chatTitleOf(id),

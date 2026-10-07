@@ -38,11 +38,11 @@ export interface LinksHost {
   link(id: string): void;
 }
 
-/** Picks a chat to link to. */
+/** Picks a chat: to link to, or another named by `placeholder`. */
 export class ChatPicker extends FuzzySuggestModal<{ id: string; title: string }> {
-  constructor(app: App, private readonly chats: { id: string; title: string }[], private readonly chosen: (chat: { id: string; title: string }) => void) {
+  constructor(app: App, private readonly chats: { id: string; title: string }[], private readonly chosen: (chat: { id: string; title: string }) => void, placeholder = 'Link to a chat') {
     super(app);
-    this.setPlaceholder('Link to a chat');
+    this.setPlaceholder(placeholder);
   }
 
   getItems(): { id: string; title: string }[] {

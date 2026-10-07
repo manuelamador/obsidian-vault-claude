@@ -6,6 +6,7 @@
 // drawn again when what it shows changed; Esc, its close button or a click outside closes it.
 import { Menu, Modal, setIcon, type App } from 'obsidian';
 import { folderOf } from './chatFolders';
+import { ChatPicker } from './linksList';
 import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 
 const SVG = 'http://www.w3.org/2000/svg';
@@ -87,6 +88,8 @@ export interface ChatMapHost extends MapActions {
   recentre(centre: string): Promise<ChatMapHost>;
   /** The chat on screen, which links, mentions and its project bar act for. */
   baseline: { id: string; title: string };
+  /** The chats that may be made the chat on screen (see drawTitle), the most recent first. */
+  chatsToOpen(): { id: string; title: string }[];
   /** The chat the map is centred on: the chat on screen, unless moved to another. */
   centre: string;
   /** Whether it shows every note and chat. */
@@ -355,7 +358,7 @@ function chatNode(group: SVGGElement, id: string, actions: MapActions, changed: 
     const menu = new Menu();
     const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
     if (centre) add('Centre the map here', 'locate-fixed', centre);
-    add('Open chat', 'message-square', () => actions.openChat(id));
+    add('Open in panel', 'message-square', () => actions.openChat(id));
     add('Mention in your message', 'at-sign', () => actions.mentionChat(id));
     if (linked !== null) {
       add(linked ? 'Unlink' : 'Link', linked ? 'unlink' : 'link', () => {
@@ -469,7 +472,7 @@ export class ConnectionsMap extends Modal {
 
   onOpen(): void {
     this.modalEl.addClass('vc-map-modal');
-    this.setTitle(`Connections: ${shortLabel(this.host.baseline.title, 60)}`);
+    this.drawTitle();
     this.places = [this.here()];
     if (this.startAt) void this.moveToProject(this.startAt);
     else this.draw();
@@ -482,8 +485,24 @@ export class ConnectionsMap extends Modal {
   rehome(host: ChatMapHost): void {
     this.host = host;
     this.project = null;
-    this.setTitle(`Connections: ${shortLabel(host.baseline.title, 60)}`);
+    this.drawTitle();
     this.visit();
+  }
+
+  /**
+   * The window's title: the chat on screen, ▾ choosing another to open in the panel, which becomes
+   * the map's home (see rehome).
+   */
+  private drawTitle(): void {
+    this.titleEl.empty();
+    this.titleEl.appendText('Connections: ');
+    const name = this.titleEl.createEl('a', { cls: 'vc-map-title-chat', attr: { 'aria-label': 'Choose another chat: it opens in the panel and the map centres on it' } });
+    name.appendText(shortLabel(this.host.baseline.title, 60));
+    setIcon(name.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
+    name.addEventListener('click', () => {
+      const chats = this.host.chatsToOpen().filter((chat) => chat.id !== this.host.baseline.id);
+      new ChatPicker(this.app, chats, (chat) => this.host.openChat(chat.id), 'Open a chat in the panel').open();
+    });
   }
 
   /** Reads the map's data again and draws it in place: after a change to its project, links or connections. */
