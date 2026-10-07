@@ -4,7 +4,8 @@
 // click and shows Obsidian's page preview on ⌘-hover; a chat offers to open, mention, link or unlink
 // it; a folder's arc offers its project, or to make it one. The map stays open through all of these,
 // drawn again when what it shows changed; Esc, its close button or a click outside closes it.
-import { Menu, Modal, setIcon, type App } from 'obsidian';
+import { Menu, setIcon, type App } from 'obsidian';
+import { Pane } from './connectionsWindow';
 import { folderOf } from './chatFolders';
 import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 
@@ -423,7 +424,7 @@ const LEGEND: [string, string, string][] = [
  * line to each marked by how it is linked; the chats sharing them, or linked from it, outside. Under
  * it, every folder of its notes with the same actions as the arcs.
  */
-export class ChatMapModal extends Modal {
+export class ChatMapModal extends Pane {
   constructor(app: App, private host: ChatMapHost) {
     super(app);
   }
@@ -690,7 +691,7 @@ export interface ProjectMapHost extends MapActions {
 }
 
 /** A project's map: its chats in the middle, the notes they worked on round them, grouped by folder within the project, a line where a chat worked on a note. */
-export class ProjectMapModal extends Modal {
+export class ProjectMapModal extends Pane {
   constructor(app: App, private host: ProjectMapHost) {
     super(app);
   }

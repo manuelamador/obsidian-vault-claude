@@ -64,6 +64,7 @@ import type VaultClaudePlugin from './main';
 import type { ChatDraft, ChatProjectState } from './main';
 import { contextHash, linkedChatsBlock, PROJECT_TYPE, projectContextBlock } from './projects';
 import { LinksModal } from './linksModal';
+import type { ConnectionsTab } from './connectionsWindow';
 import { ChatProjectModal, ProjectPicker } from './projectModals';
 import { renderSafely } from './safeRender';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
@@ -1648,12 +1649,8 @@ export class ChatView extends ItemView {
     if (file instanceof TFile) this.addToInput(`@[[${this.mentionTarget(file)}]] `, `“${file.basename}” mentioned`);
   }
 
-  /** The chat's links (see LinksModal): those it links to, each to include or not, and those linking to it. */
-  openLinks(): void {
-    if (this.scratch) {
-      new Notice('The scratch chat has no links.');
-      return;
-    }
+  /** The chat's links (see LinksModal), for the Chat tab of Connections: those it links to, each to include or not, and those linking to it. */
+  linksPane(): LinksModal {
     const titleOf = (id: string) => this.plugin.chatTitleOf(id);
     const when = (id: string) => {
       const item = this.plugin.listedChats()?.find((each) => each.id === id);
@@ -1663,7 +1660,7 @@ export class ChatView extends ItemView {
       this.setProjectStateNow(change({ ...this.projectStateNow() }));
       this.projectsChanged();
     };
-    new LinksModal(this.app, {
+    return new LinksModal(this.app, {
       rows: () => {
         const state = this.projectStateNow();
         return [
@@ -1705,7 +1702,7 @@ export class ChatView extends ItemView {
       },
       candidates: () => (this.plugin.listedChats() ?? []).filter((item) => !item.scratch && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title })),
       link: (id) => this.linkChatHere(id),
-    }).open();
+    });
   }
 
   /** Why the chat is in its project, in a few words (see homeOf). */
@@ -1818,14 +1815,14 @@ export class ChatView extends ItemView {
     );
   }
 
-  /** The chat's connections map (see ChatMapModal): only once it has started. */
-  openConnections(): void {
+  /** The Connections window (see ConnectionsWindow), at tab `tab`: only once the chat has started. */
+  openConnections(tab: ConnectionsTab = 'chat'): void {
     const id = this.currentChatId();
     if (!id) {
       new Notice(this.scratch ? 'The scratch chat has no connections.' : 'Send a message first: a chat has connections once it has started.');
       return;
     }
-    void this.plugin.openChatMap(this, id);
+    void this.plugin.openConnections(this, tab);
   }
 
   /** Projects changed (a chat joined or left one, its Context changed): the chip shows it. */
@@ -1834,12 +1831,8 @@ export class ChatView extends ItemView {
     this.updateContextChip();
   }
 
-  /** What the chat's projects send with it, and the choices about it (see ChatProjectModal). */
-  openProjectContext(): void {
-    if (this.scratch) {
-      new Notice('The scratch chat has no project.');
-      return;
-    }
+  /** What the chat's project sends with it, and the choices about it (see ChatProjectModal), for the Project tab of Connections. */
+  projectPane(): ChatProjectModal {
     const ref = (file: TFile) => ({ path: file.path, name: file.basename });
     const fileAt = (path: string) => {
       const file = this.app.vault.getAbstractFileByPath(path);
@@ -1849,7 +1842,7 @@ export class ChatView extends ItemView {
       this.setProjectStateNow(change({ ...this.projectStateNow() }));
       this.projectsChanged();
     };
-    new ChatProjectModal(this.app, {
+    return new ChatProjectModal(this.app, {
       home: () => {
         const home = this.homeProjectFile();
         return home && ref(home);
@@ -1879,15 +1872,11 @@ export class ChatView extends ItemView {
         update((state) => (file ? { ...state, declined: false, sent: state.sent?.filter((each) => each !== file.path) } : { ...state, declined: true }));
       },
       homeWhy: () => this.projectWhy(),
-      manage: () => void this.plugin.openManageProjects(),
-      openMap: (path) => {
-        const file = fileAt(path);
-        if (file) void this.plugin.openProjectMap(file, this);
-      },
+      manage: () => this.plugin.showConnectionsTab('all'),
       createProject: () => void this.plugin.openCreateProject({ chatId: this.chatId }),
       open: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
       render: (markdown, el, component) => renderSafely(this.app, markdown, el, component),
-    }).open();
+    });
   }
 
   /** Whether chat `id` is on screen here or running in this panel's background. */
@@ -4103,8 +4092,8 @@ export class ChatView extends ItemView {
 
   private onContextClick(evt: MouseEvent): void {
     const target = evt.target as HTMLElement;
-    if (target.closest('.vc-project-chip')) this.openProjectContext();
-    else if (target.closest('.vc-links-chip')) this.openLinks();
+    if (target.closest('.vc-project-chip')) this.openConnections('project');
+    else if (target.closest('.vc-links-chip')) this.openConnections('chat');
     else if (target.closest('.vc-project-suggestion')) {
       const suggested = this.projectSuggestion();
       if (suggested && this.chatId) void this.plugin.setHomeProject(this.chatId, suggested).then(() => new Notice(`This chat is now in “${suggested.basename}”.`));

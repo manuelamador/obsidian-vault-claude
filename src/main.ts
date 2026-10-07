@@ -20,11 +20,12 @@ import { PickUpModal, type ChatDetails } from './pickUpModal';
 import { renderSafely } from './safeRender';
 import { inFolder, notesByChat, suggestFolder, weightedNotes, type FolderSuggestion } from './chatFolders';
 import { CONTEXT_SYSTEM, PROJECT_TYPE, contextHash, contextPrompt, homeOf, chatDigest, noteOpening, projectNoteMarkdown, projectParts, readContext, withContext, withGenerated, type HomeReason } from './projects';
-import { ChooseFolderModal, ContextModal, CreateProjectModal, ManageProjectsModal, ProjectPicker, type FolderSource, type ProjectRef } from './projectModals';
+import { ChooseFolderModal, ContextModal, CreateProjectModal, ManageProjectsModal, type FolderSource } from './projectModals';
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
 import { chatMap, hubNotes, projectMap, withoutHubs } from './connections';
 import { ChatMapModal, ProjectMapModal, type ChatMapHost, type ProjectMapHost, type SearchHit } from './connectionsModal';
+import { ConnectionsWindow, type ConnectionsTab, type TabPanes } from './connectionsWindow';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -99,11 +100,6 @@ function today(): string {
 /** The chat ids in a frontmatter value. */
 function idList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string' && id !== '') : [];
-}
-
-/** A project note as the dialogs show it. */
-function projectRef(file: TFile): ProjectRef {
-  return { path: file.path, name: file.basename };
 }
 
 /**
@@ -181,6 +177,9 @@ export default class VaultClaudePlugin extends Plugin {
   private notesCache: Map<string, Set<string>> | null = null;
   private weightsCache: Map<string, Map<string, number>> | null = null;
   private hubsCache: Set<string> | null = null;
+  /** The Connections window, while open, and the project its Project tab shows when not the chat's own (see openConnections). */
+  private connections: ConnectionsWindow | null = null;
+  private connectionsProject: TFile | null = null;
   /** Projects' fingerprints, by path, once read (see projectHashNow). */
   private readonly projectHashes = new Map<string, string | null>();
   /** Models reported by Claude Code, cached so a new chat can list them before its session starts. */
@@ -280,37 +279,13 @@ export default class VaultClaudePlugin extends Plugin {
         return true;
       },
     });
-    this.addCommand({ id: 'manage-projects', name: 'Manage projects', callback: () => void this.openManageProjects() });
-    this.addCommand({ id: 'rebuild-connections', name: 'Rebuild connections from chat files', callback: () => this.confirmRebuildConnections() });
+    this.addCommand({
+      id: 'open-connections',
+      name: 'Open connections: this chat, its project, all projects',
+      callback: () => void this.openConnections(this.frontChatView(), 'chat'),
+    });
     this.addCommand({ id: 'create-project', name: 'Create project…', callback: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId() }) });
-    this.addCommand({ id: 'refresh-project-context', name: 'Refresh project context…', callback: () => void this.openRefreshContext(this.frontChatView()?.currentChatId()) });
-    this.addCommand({
-      id: 'chat-connections',
-      name: "Show this chat's connections",
-      callback: async () => (this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView()))?.openConnections(),
-    });
-    this.addCommand({
-      id: 'project-map',
-      name: 'Show project map…',
-      callback: () => {
-        const active = this.app.workspace.getActiveFile();
-        const view = this.frontChatView();
-        const id = view?.currentChatId();
-        const project = active && this.isProjectNote(active) ? active : id ? this.homeProject(id) : null;
-        if (project) return void this.openProjectMap(project, view);
-        const projects = this.projectNotes();
-        if (projects.length === 0) return void new Notice('There are no projects yet: create one first.');
-        new ProjectPicker(this.app, projects.map(projectRef), 'Show the map of…', (chosen) => {
-          const file = this.app.vault.getAbstractFileByPath(chosen.path);
-          if (file instanceof TFile) void this.openProjectMap(file, view);
-        }).open();
-      },
-    });
-    this.addCommand({
-      id: 'chat-project',
-      name: "Show this chat's project context",
-      callback: async () => (this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView()))?.openProjectContext(),
-    });
+    this.addCommand({ id: 'rebuild-connections', name: 'Rebuild connections from chat files', callback: () => this.confirmRebuildConnections() });
     this.addCommand({
       id: 'pick-up-reset',
       name: 'Pick up where you left off: show ignored chats again',
@@ -1657,9 +1632,41 @@ export default class VaultClaudePlugin extends Plugin {
     }
   }
 
-  /** A chat's connections map (see ChatMapModal), from panel `view`. */
-  async openChatMap(view: ChatView, id: string): Promise<void> {
-    new ChatMapModal(this.app, await this.chatMapHost(view, id)).open();
+  /**
+   * The Connections window (see ConnectionsWindow), at tab `tab`, for the chat on screen in panel
+   * `view` (none: All projects only, or the Project tab of the project note in front). Chat: its map
+   * and its links. Project: what its project sends, and the project's map (another project's, once
+   * one is chosen in All projects). All projects: every project, to manage.
+   */
+  async openConnections(view: ChatView | null, tab: ConnectionsTab): Promise<void> {
+    const id = view?.currentChatId() ?? null;
+    const active = this.app.workspace.getActiveFile();
+    this.connectionsProject = !id && active && this.isProjectNote(active) ? active : null;
+    const build = async (shown: ConnectionsTab): Promise<TabPanes> => {
+      if (shown === 'all') return [await this.manageProjectsPane()];
+      if (shown === 'chat') {
+        if (!view || !id) return { empty: 'Open a chat to see its connections.', action: { label: 'All projects', tab: 'all' } };
+        return [new ChatMapModal(this.app, await this.chatMapHost(view, id)), view.linksPane()];
+      }
+      const project = this.connectionsProject ?? (id ? this.homeProject(id) : null);
+      if (!project) return { empty: 'This chat has no project. Put it in one from the Chat tab: the bar at its top, or the search.', action: { label: 'Chat', tab: 'chat' } };
+      const map = new ProjectMapModal(this.app, await this.projectMapHost(project, view));
+      // The chat's own project: what goes with it first; another project, its map only.
+      return view && id && project === this.homeProject(id) ? [view.projectPane(), map] : [map];
+    };
+    this.connections?.close();
+    const first: ConnectionsTab = id || (this.connectionsProject && tab === 'project') ? tab : 'all';
+    const window = new ConnectionsWindow(this.app, id ? `Connections: ${this.chatTitleOf(id)}` : 'Connections', build, first, id ? [] : ['chat'], () => {
+      if (this.connections === window) this.connections = null;
+    });
+    this.connections = window;
+    window.open();
+  }
+
+  /** In the Connections window, if open: tab `tab`; with `project`, the Project tab shows that project. */
+  showConnectionsTab(tab: ConnectionsTab, project?: TFile): void {
+    if (project) this.connectionsProject = project;
+    void this.connections?.show(tab);
   }
 
   /** What chat `id`'s map shows, read now, and what it does. */
@@ -1677,15 +1684,12 @@ export default class VaultClaudePlugin extends Plugin {
       hubs: this.hubNotes(),
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
-      openProjectMap: (path) => {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (file instanceof TFile) void this.openProjectMap(file, view);
-      },
+      openProjectMap: () => this.showConnectionsTab('project'),
       refreshContext: (path, saved) => {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (file instanceof TFile) void this.refreshContext(file, saved);
       },
-      manageProjects: () => void this.openManageProjects(),
+      manageProjects: () => this.showConnectionsTab('all'),
       changeFolder: (path, changed) => {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (!(file instanceof TFile)) return;
@@ -1741,11 +1745,6 @@ export default class VaultClaudePlugin extends Plugin {
       .slice(0, MAP_SEARCH_EACH)
       .map((file) => ({ kind: 'note', key: file.path, label: file.basename, detail: file.parent?.path === '/' ? '' : (file.parent?.path ?? '') }));
     return [...chats, ...projects, ...notes];
-  }
-
-  /** A project's map (see ProjectMapModal). */
-  async openProjectMap(file: TFile, view: ChatView | null = null): Promise<void> {
-    new ProjectMapModal(this.app, await this.projectMapHost(file, view)).open();
   }
 
   /** What project `file`'s map shows, read now; with `all`, every chat and note (see projectMap). */
@@ -2099,8 +2098,8 @@ export default class VaultClaudePlugin extends Plugin {
     return true;
   }
 
-  /** Manage projects (see ManageProjectsModal): every project, with its folder, chats and Context, and what can be done to it. */
-  async openManageProjects(): Promise<void> {
+  /** All projects (see ManageProjectsModal), for the Connections window: every project, with its folder, chats and Context, and what can be done to it. */
+  private async manageProjectsPane(): Promise<ManageProjectsModal> {
     await this.listChats().catch(() => []);
     const notes = this.chatNotes();
     const listed = (this.lastListing ?? []).filter((item) => !item.scratch);
@@ -2108,7 +2107,7 @@ export default class VaultClaudePlugin extends Plugin {
       const file = this.app.vault.getAbstractFileByPath(path);
       return file instanceof TFile ? file : null;
     };
-    new ManageProjectsModal(this.app, {
+    return new ManageProjectsModal(this.app, {
       ...this.folderSource(listed, notes),
       projects: () =>
         this.projectNotes()
@@ -2123,7 +2122,7 @@ export default class VaultClaudePlugin extends Plugin {
       open: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
       map: (path) => {
         const file = fileAt(path);
-        if (file) void this.openProjectMap(file, this.frontChatView());
+        if (file) this.showConnectionsTab('project', file);
       },
       refreshContext: (path, saved) => {
         const file = fileAt(path);
@@ -2169,29 +2168,13 @@ export default class VaultClaudePlugin extends Plugin {
         this.projectsChanged();
         new Notice(`Project “${file.basename}” deleted: its note is in the trash.`);
       },
-      create: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId() }),
-    }).open();
+      create: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId(), created: () => this.showConnectionsTab('all') }),
+    });
   }
 
   /** A project's Context and Instructions as they go with a chat. */
   async projectParts(file: TFile): Promise<{ context: string; instructions: string }> {
     return projectParts(await this.app.vault.cachedRead(file));
-  }
-
-  /** Refresh project context: the project of the note in front, else of the chat on screen, else one chosen. */
-  async openRefreshContext(chatId?: string | null): Promise<void> {
-    const active = this.app.workspace.getActiveFile();
-    const project = active && this.isProjectNote(active) ? active : chatId ? this.homeProject(chatId) : null;
-    if (project) return this.refreshContext(project);
-    const projects = this.projectNotes();
-    if (projects.length === 0) {
-      new Notice('There are no projects yet: create one first.');
-      return;
-    }
-    new ProjectPicker(this.app, projects.map(projectRef), 'Refresh the context of…', (chosen) => {
-      const file = this.app.vault.getAbstractFileByPath(chosen.path);
-      if (file instanceof TFile) void this.refreshContext(file);
-    }).open();
   }
 
   /** Writes a project's Context anew and shows it beside the one it has, to save or not (see ContextModal). */

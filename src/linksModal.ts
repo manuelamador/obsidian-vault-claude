@@ -1,7 +1,8 @@
-// The links of a chat (see ChatView.openLinks): the chats it links to, each of which may be included
-// (its digest goes with the next message, once), and the chats that link to it, which send it
-// nothing. What would go is shown before it goes, with its size.
-import { FuzzySuggestModal, Modal, setIcon, type App } from 'obsidian';
+// The links of a chat, in the Chat tab of Connections (see ChatView.linksPane): the chats it links
+// to, each of which may be included (its digest goes with the next message, once), and the chats that
+// link to it, which send it nothing. What would go is shown before it goes, with its size.
+import { FuzzySuggestModal, setIcon, type App } from 'obsidian';
+import { Pane } from './connectionsWindow';
 import { estimateTokens, formatTokens } from './contextSize';
 import { errorText } from './log';
 
@@ -58,7 +59,7 @@ export class ChatPicker extends FuzzySuggestModal<{ id: string; title: string }>
   }
 }
 
-export class LinksModal extends Modal {
+export class LinksModal extends Pane {
   private readonly running = new Set<AbortController>();
 
   constructor(app: App, private readonly host: LinksHost) {
@@ -109,7 +110,6 @@ export class LinksModal extends Modal {
     setIcon(top.createSpan({ cls: 'vc-project-group-icon' }), row.direction === 'to' ? 'link' : 'corner-down-right');
     const name = top.createEl('a', { text: row.title, attr: { 'aria-label': 'Open this chat' } });
     name.addEventListener('click', () => {
-      this.close();
       this.host.open(row.id);
     });
     top.createSpan({ cls: 'vc-project-size', text: row.pending ? `${row.when} · in your message, linked when it is sent` : row.when });

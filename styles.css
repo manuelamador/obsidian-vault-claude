@@ -3134,3 +3134,39 @@ body:has(.vc-map-modal) .popover.hover-popover {
 .vc-map-node.is-hub .vc-map-page {
   stroke-dasharray: 2 2;
 }
+
+/* The Connections window's tabs (see connectionsWindow.ts). */
+.vc-connections-tabs {
+  display: flex;
+  gap: var(--size-4-1);
+  margin-bottom: var(--size-4-3);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.vc-connections-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  box-shadow: none;
+  border-radius: var(--radius-s) var(--radius-s) 0 0;
+  color: var(--text-muted);
+}
+
+.vc-connections-tab.is-active {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  font-weight: var(--font-semibold);
+}
+
+.vc-connections-pane + .vc-connections-pane {
+  margin-top: var(--size-4-4);
+  padding-top: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.vc-connections-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-3);
+}

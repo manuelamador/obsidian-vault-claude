@@ -1,6 +1,7 @@
 // The dialogs of projects (see projects.ts): making one of a folder, what a chat's project sends with
 // it, managing the projects, and writing a project's Context anew beside the one it has.
 import { Component, FuzzySuggestModal, Modal, Notice, setIcon, type App } from 'obsidian';
+import { Pane } from './connectionsWindow';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { estimateTokens, formatTokens } from './contextSize';
 import { errorText } from './log';
@@ -185,8 +186,6 @@ export interface ChatProjectHost {
   setHome(path: string | null): Promise<void>;
   /** Why the chat is in its home project, in a few words (see homeOf). */
   homeWhy(): string;
-  /** Shows a project's map (see ProjectMapModal). */
-  openMap(path: string): void;
   /** Opens Manage projects (see ManageProjectsModal). */
   manage(): void;
   /** The projects holding a project's folder, the outermost first, whose Instructions go too. */
@@ -197,7 +196,7 @@ export interface ChatProjectHost {
 }
 
 /** Shows what goes with the next message from a chat's project, with the choices about it. A chat has at most one project. */
-export class ChatProjectModal extends Modal {
+export class ChatProjectModal extends Pane {
   private parts: Component | null = null;
 
   constructor(app: App, private readonly host: ChatProjectHost) {
@@ -220,7 +219,6 @@ export class ChatProjectModal extends Modal {
     const home = host.home();
     const manageLink = (el: HTMLElement) =>
       el.createEl('a', { cls: 'vc-project-manage', text: 'Manage projects…' }).addEventListener('click', () => {
-        this.close();
         host.manage();
       });
     if (!home) {
@@ -228,7 +226,6 @@ export class ChatProjectModal extends Modal {
       const row = contentEl.createDiv({ cls: 'vc-project-foot' });
       row.createEl('button', { text: 'Choose a project…' }).addEventListener('click', () => this.chooseHome());
       row.createEl('button', { text: 'Create project…' }).addEventListener('click', () => {
-        this.close();
         host.createProject();
       });
       manageLink(contentEl.createDiv({ cls: 'vc-project-foot' }));
@@ -237,14 +234,9 @@ export class ChatProjectModal extends Modal {
     const head = contentEl.createDiv({ cls: 'vc-project-head' });
     const name = head.createEl('a', { cls: 'vc-project-title', text: home.name, attr: { 'aria-label': 'Open project' } });
     name.addEventListener('click', () => {
-      this.close();
       host.open(home.path);
     });
     const actions = head.createDiv({ cls: 'vc-project-actions' });
-    actions.createEl('button', { text: 'Map' }).addEventListener('click', () => {
-      this.close();
-      host.openMap(home.path);
-    });
     actions.createEl('button', { text: 'Move chat…' }).addEventListener('click', () => this.chooseHome());
     const leave = actions.createEl('button', { text: 'Take chat out' });
     leave.setAttr('aria-label', 'This chat leaves the project; the project and its note stay');
@@ -328,7 +320,7 @@ export interface ManageProjectsHost extends FolderSource {
 }
 
 /** The vault's projects, each with its folder, chats and Context, and what can be done to it: open, map, refresh its Context, change its folder, rename, delete. */
-export class ManageProjectsModal extends Modal {
+export class ManageProjectsModal extends Pane {
   constructor(app: App, private readonly host: ManageProjectsHost) {
     super(app);
   }
@@ -350,7 +342,6 @@ export class ManageProjectsModal extends Modal {
       setIcon(top.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
       const name = top.createEl('a', { text: project.name, attr: { 'aria-label': 'Open its note' } });
       name.addEventListener('click', () => {
-        this.close();
         host.open(project.path);
       });
       const facts = box.createDiv({ cls: 'vc-project-size' });
@@ -365,7 +356,6 @@ export class ManageProjectsModal extends Modal {
         button.addEventListener('click', run);
       };
       action('Map', 'waypoints', () => {
-        this.close();
         host.map(project.path);
       });
       action(project.contextUpdated ? 'Refresh context…' : 'Write context…', 'refresh-cw', () => host.refreshContext(project.path, () => this.draw()));
@@ -419,7 +409,6 @@ export class ManageProjectsModal extends Modal {
       });
     }
     foot.createEl('button', { cls: 'mod-cta', text: 'New project…' }).addEventListener('click', () => {
-      this.close();
       host.create();
     });
   }
