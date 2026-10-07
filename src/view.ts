@@ -2468,6 +2468,8 @@ export class ChatView extends ItemView {
         noteLinks: () => ({ changed: this.plugin.noteChats, sent: this.plugin.noteRefs, mentioned: this.plugin.noteMentions }),
         openNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
         projectOf: (folder) => this.plugin.projectOfFolder(folder)?.path ?? null,
+        // Without the prefix new projects are named with, which every one would match.
+        projectName: (item) => this.plugin.homeProject(item.id)?.basename.replace(/^Claude Project — /, '') ?? null,
         createProject: (folder) => void this.plugin.openCreateProject({ folder }),
         link: this.scratch ? undefined : (item) => this.linkChatHere(item.id),
         isLinked: (item) => item.id === this.chatId || this.linksTo().some((link) => link.id === item.id),

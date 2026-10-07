@@ -22,6 +22,8 @@ export interface HistoryActions {
   openNote(path: string): void;
   /** The project folder `folder` is (its note's path), if it is one. */
   projectOf(folder: string): string | null;
+  /** The name of chat `item`'s project, as shown on its row and searched, if it has one. */
+  projectName?(item: HistoryItem): string | null;
   /** Create project, with folder `folder` chosen. */
   createProject(folder: string): void;
   /** Links the chat on screen to `item`; absent where it cannot be (the scratch chat). */
@@ -107,7 +109,7 @@ export class HistoryModal extends SuggestModal<Match> {
     private readonly actions: HistoryActions,
   ) {
     super(app);
-    this.setPlaceholder('Search previous chats: titles, prompts and replies');
+    this.setPlaceholder('Search previous chats: titles, projects, prompts and replies');
     this.emptyStateText = 'No matching chats.';
     // Every chat, and in the notes view every note, rather than Obsidian's first 100 rows.
     this.limit = ROW_LIMIT;
@@ -163,7 +165,10 @@ export class HistoryModal extends SuggestModal<Match> {
         b.updatedAt - a.updatedAt,
     );
     if (!needle) return ordered.map((item) => ({ kind: 'chat', item }));
-    const byTitle: Match[] = ordered.filter((item) => item.title.toLowerCase().includes(needle)).map((item) => ({ kind: 'chat', item }));
+    // Titles first, then the chats of the projects whose names hold it.
+    const inProject = (item: HistoryItem) => this.actions.projectName?.(item)?.toLowerCase().includes(needle) ?? false;
+    const titled = ordered.filter((item) => item.title.toLowerCase().includes(needle));
+    const byTitle: Match[] = [...titled, ...ordered.filter((item) => !titled.includes(item) && inProject(item))].map((item) => ({ kind: 'chat', item }));
     if (needle.length < MIN_CONTENT_QUERY) return byTitle;
     // Titles at once, with the chats whose text is read so far; once the rest is in, the search runs again.
     if (this.items.some((item) => !this.texts.has(item.id))) {
@@ -308,6 +313,12 @@ export class HistoryModal extends SuggestModal<Match> {
     }
     if (item.scratch) meta.appendText(item.updatedAt ? `${formatDate(item.updatedAt)} · starts over when idle` : 'not used yet · starts over when idle');
     else meta.appendText(`${formatDate(item.updatedAt)}${origin(item)}`);
+    const project = item.scratch ? null : (this.actions.projectName?.(item) ?? null);
+    if (project) {
+      meta.appendText(' · ');
+      setIcon(meta.createSpan({ cls: 'vc-history-why' }), 'folder-kanban');
+      meta.appendText(project);
+    }
     if (match.why) {
       meta.appendText(' · ');
       setIcon(meta.createSpan({ cls: 'vc-history-why' }), NOTE_CHAT_ICONS[match.why]);
