@@ -1725,15 +1725,16 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * For a chat with no project, the one to offer in a click: the note in front's (the project note
+   * For a chat with no project, the one to offer in a click: the attached note's (the project note
    * itself, or a note in a project's folder); else that of a chat it is linked with.
    */
   private projectSuggestion(): TFile | null {
     if (!this.chatId) return null;
-    const front = this.activeNote()?.file ?? null;
-    if (front) {
-      if (this.isProjectNote(front)) return front;
-      const holding = this.plugin.projectForPath(front.path);
+    // The attached note, a deliberate choice; not whichever note happens to be in front.
+    const attached = this.attachedNote ? this.app.vault.getAbstractFileByPath(this.attachedNote) : null;
+    if (attached instanceof TFile) {
+      if (this.isProjectNote(attached)) return attached;
+      const holding = this.plugin.projectForPath(attached.path);
       if (holding) return holding;
     }
     return this.linkedProjectSuggestion();
