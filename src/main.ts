@@ -24,7 +24,7 @@ import { ChooseFolderModal, ContextModal, CreateProjectModal, type FolderSource 
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
 import { chatMap, hubNotes, projectMap, withoutHubs } from './connections';
-import { ConnectionsMap, type ChatMapHost, type ProjectMapHost, type SearchHit } from './connectionsModal';
+import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type ProjectMapHost, type SearchHit } from './connectionsView';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -176,11 +176,10 @@ export default class VaultClaudePlugin extends Plugin {
   private notesCache: Map<string, Set<string>> | null = null;
   private weightsCache: Map<string, Map<string, number>> | null = null;
   private hubsCache: Set<string> | null = null;
-  /** The Connections map, while open (see openConnections). */
-  private connections: ConnectionsMap | null = null;
-  /** The panel and chat the Connections window was opened for (see chatShown). */
-  private connectionsView: ChatView | null = null;
-  private connectionsChat: string | null = null;
+  /** The panel whose chat the Connections pane shows (see chatShown): the last to show a chat. */
+  private connectionsPanel: ChatView | null = null;
+  /** The pane's map read again soon, after its data changed (see connectionsSoon). */
+  private connectionsTimer: number | null = null;
   /** Projects' fingerprints, by path, once read (see projectHashNow): of Context and Instructions, and of Instructions alone. */
   private readonly projectHashes = new Map<string, { all: string; instructions: string } | null>();
   /** Models reported by Claude Code, cached so a new chat can list them before its session starts. */
@@ -253,6 +252,8 @@ export default class VaultClaudePlugin extends Plugin {
     });
     await this.loadSettings();
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
+    // Opened again with the workspace: it shows the chat of the first panel.
+    this.registerView(CONNECTIONS_VIEW_TYPE, (leaf) => new ConnectionsView(leaf, (pane) => void this.followPanel(pane, this.connectionsPanel ?? this.chatViews()[0] ?? null)));
     // Links in replies show Obsidian's page preview, with the modifier key held unless the Page preview settings say otherwise.
     this.registerHoverLinkSource(VIEW_TYPE, { display: 'Vault Claude', defaultMod: true });
     this.addRibbonIcon('bot', 'Open Claude', () => void this.activateView());
@@ -699,6 +700,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   onunload(): void {
+    if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
     this.remote.stop();
     void this.flushSave();
   }
@@ -1061,6 +1063,7 @@ export default class VaultClaudePlugin extends Plugin {
   private notesLinked(): void {
     this.membershipChanged();
     this.saveSoon();
+    this.connectionsSoon();
   }
 
   /** Records that a chat changed a note, so the note can offer it later. */
@@ -1657,42 +1660,52 @@ export default class VaultClaudePlugin extends Plugin {
     }
   }
 
-  /**
-   * The Connections map (see ConnectionsMap) for the chat on screen in panel `view`; `atProject`,
-   * centred on its project to start (the project chip's), with the way back to the chat.
-   */
-  async openConnections(view: ChatView, atProject = false): Promise<void> {
-    const id = view.currentChatId();
-    if (!id) {
-      new Notice('Send a message first: a chat has connections once it has started.');
-      return;
-    }
-    this.connections?.close();
-    const home = atProject ? this.homeProject(id) : null;
-    const map = new ConnectionsMap(this.app, await this.chatMapHost(view, id), home?.path ?? null);
-    const close = map.onClose.bind(map);
-    map.onClose = () => {
-      close();
-      if (this.connections === map) this.connections = null;
-    };
-    this.connections = map;
-    this.connectionsView = view;
-    this.connectionsChat = id;
-    map.open();
+  /** The Connections pane, when open. */
+  private connectionsPane(): ConnectionsView | null {
+    const view = this.app.workspace.getLeavesOfType(CONNECTIONS_VIEW_TYPE)[0]?.view;
+    return view instanceof ConnectionsView ? view : null;
   }
 
-  /** Panel `view` shows another chat: a Connections map open for it is drawn again for that chat, which its actions are for. */
+  /**
+   * Shows the Connections pane (see ConnectionsView) for the chat in panel `view`, opening it beside
+   * the notes when it is not open; `atProject`, centred on the chat's project (the project chip's).
+   */
+  async openConnections(view: ChatView, atProject = false): Promise<void> {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(CONNECTIONS_VIEW_TYPE)[0] ?? null;
+    if (!leaf) {
+      // Beside the note in front, in the main area, so that the panel and the pane are side by side.
+      const note = workspace.getMostRecentLeaf(workspace.rootSplit);
+      leaf = note ? workspace.createLeafBySplit(note, 'vertical') : workspace.getLeaf('split', 'vertical');
+      await leaf.setViewState({ type: CONNECTIONS_VIEW_TYPE, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+    if (leaf.view instanceof ConnectionsView) await this.followPanel(leaf.view, view, atProject);
+  }
+
+  /** Shows panel `view`'s chat in pane `pane` (none: no chat); `atProject`, centred on its project. */
+  private async followPanel(pane: ConnectionsView, view: ChatView | null, atProject = false): Promise<void> {
+    this.connectionsPanel = view;
+    const id = view?.currentChatId() ?? null;
+    if (!view || !id) return pane.follow(null);
+    const home = atProject ? this.homeProject(id) : null;
+    await pane.follow(await this.chatMapHost(view, id), home?.path ?? null);
+  }
+
+  /** Panel `view` shows another chat (or a new one): the Connections pane follows it. */
   chatShown(view: ChatView): void {
-    if (!this.connections || this.connectionsView !== view || view.currentChatId() === this.connectionsChat) return;
-    // A new chat, not started yet, has no map: the one open was for the chat before.
-    const id = view.currentChatId();
-    if (!id) return void this.connections.close();
-    // The map stays open, its home moved to the chat now on screen.
-    const map = this.connections;
-    this.connectionsChat = id;
-    void this.chatMapHost(view, id).then((host) => {
-      if (this.connections === map && this.connectionsChat === id) map.rehome(host);
-    });
+    const pane = this.connectionsPane();
+    if (pane) void this.followPanel(pane, view);
+  }
+
+  /** The Connections pane's map read again in a second, once what it shows may have changed (notes linked, projects). */
+  private connectionsSoon(): void {
+    if (!this.connectionsPane()) return;
+    if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
+    this.connectionsTimer = window.setTimeout(() => {
+      this.connectionsTimer = null;
+      void this.connectionsPane()?.refresh();
+    }, 1000);
   }
 
   /** What chat `id`'s map shows, read now, and what it does. */
@@ -1709,7 +1722,6 @@ export default class VaultClaudePlugin extends Plugin {
       // Links and mentions act for the chat on screen, wherever the map is centred.
       ...this.mapActions(baseline, view),
       baseline: { id: baseline, title: this.chatTitleOf(baseline) },
-      chatsToOpen: () => (this.lastListing ?? []).filter((item) => !item.scratch).map((item) => ({ id: item.id, title: item.title })),
       centre: id,
       recentre: (centre) => this.chatMapHost(view, baseline, false, centre),
       title: this.chatTitleOf(id),
@@ -1942,6 +1954,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** The panels draw their project chips again. */
   private projectsChanged(): void {
     for (const view of this.chatViews()) view.projectsChanged();
+    this.connectionsSoon();
   }
 
   /** A chat's title as listed; `Chat` when it is not. */

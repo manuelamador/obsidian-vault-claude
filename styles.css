@@ -2616,11 +2616,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   background: var(--color-orange);
 }
 
-/* Connections maps (see connectionsModal.ts). */
-.vc-map-modal {
-  width: min(880px, 94vw);
-}
-
 .vc-map {
   width: 100%;
   height: auto;
@@ -2855,11 +2850,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   font-size: var(--font-ui-smaller);
 }
 
-/* Page previews of notes on a map show above it. */
-body:has(.vc-map-modal) .popover.hover-popover {
-  z-index: calc(var(--layer-modal, 50) + 1);
-}
-
 /* Links between chats (see linksModal.ts). */
 .vc-links-chip .vc-context-name {
   color: var(--text-normal);
@@ -2947,33 +2937,6 @@ body:has(.vc-map-modal) .popover.hover-popover {
   gap: var(--size-4-1);
 }
 
-.vc-map-search {
-  position: relative;
-}
-
-.vc-map-search input {
-  width: 100%;
-}
-
-.vc-map-results {
-  position: absolute;
-  z-index: 2;
-  left: 0;
-  right: 0;
-  max-height: 50vh;
-  overflow-y: auto;
-  background: var(--background-primary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-  box-shadow: var(--shadow-s);
-}
-
-.vc-map-hit-actions {
-  margin-left: auto;
-  display: flex;
-  gap: var(--size-4-1);
-}
-
 /* The chat's project, at the top of its map. */
 .vc-map-bar {
   display: flex;
@@ -3030,19 +2993,6 @@ body:has(.vc-map-modal) .popover.hover-popover {
   min-height: 40vh;
 }
 
-/* A map full screen: the dialog fills the window, the drawing takes what the bar and search leave. */
-.modal.vc-map-modal.is-full {
-  width: 100vw;
-  height: 100vh;
-  max-width: 100vw;
-  max-height: 100vh;
-  border-radius: 0;
-}
-
-.modal.vc-map-modal.is-full .vc-map {
-  max-height: calc(100vh - 260px);
-}
-
 /* A project's map: its lines faint until a chat or note is pointed at, then that one's in full. */
 .vc-map.is-quiet:not(.is-pointing) .vc-map-line {
   opacity: 0.18;
@@ -3072,20 +3022,6 @@ body:has(.vc-map-modal) .popover.hover-popover {
   background: rgba(var(--color-purple-rgb), 0.22);
 }
 
-/* The map centred on another chat: the way back. */
-.vc-map-trail a {
-  cursor: pointer;
-}
-
-.vc-map-nav.is-disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.vc-map-trail .vc-project-size {
-  flex-basis: 100%;
-}
-
 /* The project in the middle of its map: its note. */
 .vc-map-node.is-project-node rect {
   fill: var(--interactive-accent);
@@ -3108,20 +3044,98 @@ body:has(.vc-map-modal) .popover.hover-popover {
   content: '← ';
 }
 
-/* The chat's links, under its map: set apart from the map's legend. */
+/* The chat's links, under its map: set apart from the map's legend, folded to a line. */
 .vc-map-links {
-  margin-top: var(--size-4-4);
-  padding-top: var(--size-4-3);
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+  padding-top: var(--size-4-2);
   border-top: 1px solid var(--background-modifier-border);
 }
 
-/* The chat on screen in the map's title: choosing another opens it. */
-.vc-map-title-chat {
+.vc-map-links summary {
   cursor: pointer;
-  color: inherit;
-  text-decoration: none;
+  font-weight: var(--font-semibold);
+  font-size: var(--font-ui-small);
 }
 
-.vc-map-title-chat:hover {
-  color: var(--text-accent);
+/* The Connections pane: fixed rows, the map filling what they leave. */
+.vc-map-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  height: 100%;
+  overflow: hidden;
 }
+
+.vc-map-pane > .vc-map-bar,
+.vc-map-pane > .vc-map-actions-row,
+.vc-map-pane > .vc-map-search,
+.vc-map-pane > .vc-map-foot {
+  flex: none;
+}
+
+.vc-map-pane > .vc-map-bar {
+  flex-wrap: nowrap;
+  margin-bottom: 0;
+  min-height: 44px;
+}
+
+.vc-map-pane .vc-map-bar-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-map-bar-name.is-quiet {
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
+.vc-map-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-2);
+  min-height: 32px;
+}
+
+.vc-map-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.vc-map-area > .vc-map-frame {
+  flex: 1;
+  min-height: 0;
+}
+
+.vc-map-area .vc-map {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+}
+
+/* Moving to another map: the nodes on both glide, the rest fades in. */
+.vc-map .vc-map-node {
+  transition: transform 350ms ease;
+}
+
+.vc-map.is-arriving .vc-map-node {
+  transition: none;
+}
+
+.vc-map .vc-map-arc,
+.vc-map .vc-map-line,
+.vc-map .vc-map-node:not(.is-gliding) {
+  transition: opacity 300ms ease;
+}
+
+.vc-map.is-arriving .vc-map-arc,
+.vc-map.is-arriving .vc-map-line,
+.vc-map.is-arriving .vc-map-node:not(.is-gliding) {
+  opacity: 0;
+}
+

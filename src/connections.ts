@@ -1,6 +1,6 @@
 // The connections maps: a chat with its notes and the chats that share them, and a project with its
 // chats and their notes; both radial, notes grouped by folder under arcs. What is shown is worked out
-// here, and where; the panel draws it (see connectionsModal.ts). Kept free of `obsidian` imports so the
+// here, and where; the panel draws it (see connectionsView.ts). Kept free of `obsidian` imports so the
 // tests can use it.
 import { folderOf } from './chatFolders';
 
@@ -106,47 +106,102 @@ export interface RingArc {
   outer: string | null;
 }
 
+/** A direction for group `name` on a ring, the same on every map: radians clockwise from the top. */
+export function groupDirection(name: string): number {
+  let hash = 2166136261;
+  for (const char of name) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
+  return (hash / 2 ** 32) * 2 * Math.PI;
+}
+
+/** The most a note's place on a ring spans with `stable` (see ringLayout), in radians: few notes stay near their folders' directions. */
+const STABLE_STEP = 0.3;
+
 /**
  * Notes on a ring, grouped by `group` (their folder, by default): the groups in order of name, the
  * notes in a group side by side, a gap of `gap` note places between groups. Each note's angle, and
  * each group's arc, padded by half a place either side. `outer` puts groups inside an enclosing one
  * (a project's folder round its subfolders): those are kept side by side, and `spans` gives each
- * enclosing group's extent, a quarter place wider either side than the arcs it holds.
+ * enclosing group's extent, a quarter place wider either side than the arcs it holds. With `stable`,
+ * each top-level group (one, or an enclosing one with those inside it) is centred on its own direction
+ * (see groupDirection), pushed aside only as far as it must be to clear the others, so that a folder
+ * sits on the same side from one map to the next; a place then spans at most STABLE_STEP.
  */
 export function ringLayout(
   notes: string[],
   group: (path: string) => string = folderOf,
   gap = 0.8,
   outer: (path: string) => string | null = () => null,
+  stable = false,
 ): { angles: Map<string, number>; arcs: RingArc[]; spans: RingArc[] } {
   const key = (path: string) => outer(path) ?? group(path);
+  const order = (a: string, b: string) => (stable ? groupDirection(key(a)) - groupDirection(key(b)) : 0) || key(a).localeCompare(key(b));
   const groups = new Map<string, string[]>();
-  for (const path of [...notes].sort((a, b) => key(a).localeCompare(key(b)) || group(a).localeCompare(group(b)) || a.localeCompare(b))) {
+  for (const path of [...notes].sort((a, b) => order(a, b) || group(a).localeCompare(group(b)) || a.localeCompare(b))) {
     const name = group(path);
     groups.set(name, [...(groups.get(name) ?? []), path]);
   }
+  // Top-level blocks: a group, or the groups inside one enclosing group, side by side.
+  const blocks: { key: string; groups: [string, string[]][]; notes: number }[] = [];
+  for (const [folder, paths] of groups) {
+    const last = blocks[blocks.length - 1];
+    if (last && last.key === key(paths[0])) {
+      last.groups.push([folder, paths]);
+      last.notes += paths.length;
+    } else blocks.push({ key: key(paths[0]), groups: [[folder, paths]], notes: paths.length });
+  }
   const gaps = groups.size > 1 ? groups.size : 0;
   const places = notes.length + gaps * gap;
-  const step = (2 * Math.PI) / Math.max(1, places);
+  const step = Math.min((2 * Math.PI) / Math.max(1, places), stable ? STABLE_STEP : Infinity);
+  // Where each block's first note goes: in turn from the top; or with `stable`, as said above.
+  const starts: number[] = [];
+  if (!stable) {
+    let at = 0;
+    for (const block of blocks) {
+      starts.push(at);
+      at += (block.notes + (gaps > 0 ? block.groups.length * gap : 0)) * step;
+    }
+  } else {
+    // From a block's first note to its last.
+    const extent = blocks.map((block) => (block.notes - 1 + (block.groups.length - 1) * gap) * step);
+    const centres = blocks.map((block) => groupDirection(block.key));
+    // Neighbours too near are pushed apart, half each, until none is: they fit, the places spanning
+    // at most the whole ring between them.
+    for (let round = 0; round < 500 && blocks.length > 1; round++) {
+      let moved = false;
+      for (let i = 0; i < blocks.length; i++) {
+        const j = (i + 1) % blocks.length;
+        const next = centres[j] + (j === 0 ? 2 * Math.PI : 0);
+        const over = (extent[i] + extent[j]) / 2 + step * (1 + gap) - (next - centres[i]);
+        if (over <= 1e-9) continue;
+        centres[i] -= over / 2;
+        centres[j] += over / 2;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+    blocks.forEach((_, i) => starts.push(centres[i] - extent[i] / 2));
+  }
   const angles = new Map<string, number>();
   const arcs: RingArc[] = [];
   const spans = new Map<string, RingArc>();
-  let at = 0;
-  for (const [folder, paths] of groups) {
-    const start = at;
-    for (const path of paths) {
-      angles.set(path, at);
-      at += step;
+  blocks.forEach((block, i) => {
+    let at = starts[i];
+    for (const [folder, paths] of block.groups) {
+      const start = at;
+      for (const path of paths) {
+        angles.set(path, at);
+        at += step;
+      }
+      const arc = { folder, start: start - step / 2, end: at - step / 2, outer: outer(paths[0]) };
+      arcs.push(arc);
+      if (arc.outer !== null) {
+        const span = spans.get(arc.outer);
+        if (span) span.end = arc.end + step / 4;
+        else spans.set(arc.outer, { folder: arc.outer, start: arc.start - step / 4, end: arc.end + step / 4, outer: null });
+      }
+      if (gaps > 0) at += gap * step;
     }
-    const arc = { folder, start: start - step / 2, end: at - step / 2, outer: outer(paths[0]) };
-    arcs.push(arc);
-    if (arc.outer !== null) {
-      const span = spans.get(arc.outer);
-      if (span) span.end = arc.end + step / 4;
-      else spans.set(arc.outer, { folder: arc.outer, start: arc.start - step / 4, end: arc.end + step / 4, outer: null });
-    }
-    if (gaps > 0) at += gap * step;
-  }
+  });
   return { angles, arcs, spans: [...spans.values()] };
 }
 

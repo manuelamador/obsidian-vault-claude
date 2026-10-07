@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { HUB_CHATS, HUB_WEIGHT, MAP_NOTES, chatAngles, chatMap, hubNotes, withoutHubs, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
+import { HUB_CHATS, HUB_WEIGHT, MAP_NOTES, chatAngles, chatMap, groupDirection, hubNotes, withoutHubs, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
 import { chatLink, linkedChatIds, removeChatLinks } from '../src/memos';
 
 const weighted = new Map([
@@ -100,4 +100,21 @@ test('hubs: notes linked to many chats join no chats on the map, and weigh littl
   const map = chatMap('c0', many, [], () => 0, false, hubs);
   assert.deepEqual(map.chats.map((chat) => [chat.id, chat.shared]), [['c1', ['Shared.md']]]);
   assert.deepEqual([...(withoutHubs(new Map([['Hub.md', 3], ['A.md', 2]]), hubs) ?? [])], [['Hub.md', 3 * HUB_WEIGHT], ['A.md', 2]]);
+});
+
+test('with stable, a folder sits in its own direction on every map', () => {
+  const near = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+  const mid = (layout: ReturnType<typeof ringLayout>, folder: string) => {
+    const arc = layout.arcs.find((each) => each.folder === folder);
+    return arc ? (arc.start + arc.end) / 2 : NaN;
+  };
+  // One folder: exactly in its direction.
+  const alone = ringLayout(['Research/a.md', 'Research/b.md'], undefined, 0.8, undefined, true);
+  assert.ok(near(mid(alone, 'Research'), groupDirection('Research')) < 1e-9);
+  // Its notes keep their order within it.
+  assert.ok((alone.angles.get('Research/a.md') ?? 0) < (alone.angles.get('Research/b.md') ?? 0));
+  // Two maps sharing folders: each shared folder on the same side (within a quarter turn) on both.
+  const one = ringLayout(['A/x.md', 'B/y.md', 'C/z.md', 'C/w.md'], undefined, 0.8, undefined, true);
+  const two = ringLayout(['A/x.md', 'B/y.md', 'D/v.md'], undefined, 0.8, undefined, true);
+  for (const folder of ['A', 'B']) assert.ok(near(mid(one, folder), mid(two, folder)) < Math.PI / 2, folder);
 });

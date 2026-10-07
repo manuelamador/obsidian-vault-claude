@@ -1803,7 +1803,7 @@ export class ChatView extends ItemView {
     );
   }
 
-  /** The Connections map (see ConnectionsMap), centred on the chat or (`atProject`) its project: only once the chat has started. */
+  /** The Connections pane (see ConnectionsView), showing the chat or (`atProject`) its project: only once the chat has started. */
   openConnections(atProject = false): void {
     const id = this.currentChatId();
     if (!id) {
@@ -4945,6 +4945,8 @@ export class ChatView extends ItemView {
               this.plugin.setProjectState(message.session_id, projectState);
             }
             this.projectLocal = {};
+            // A new chat has connections now: the Connections pane shows it.
+            if (started) this.plugin.chatShown(this);
           }
           this.moveDraft(draftWas);
           this.linkSentNotes([]);

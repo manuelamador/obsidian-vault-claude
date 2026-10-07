@@ -58,7 +58,7 @@ export class ChatPicker extends FuzzySuggestModal<{ id: string; title: string }>
   }
 }
 
-/** The chat's links, drawn under its map (see ConnectionsMap): its own dialogs (pickers) open above. */
+/** The chat's links, drawn under its map in the Connections pane (see ConnectionsView): its own dialogs (pickers) open above. */
 export class LinksList {
   private contentEl!: HTMLElement;
 
