@@ -78,3 +78,15 @@ test('CLAUDE.md files stay off both maps and tie no chats together', () => {
   assert.deepEqual(map.chats, []);
   assert.deepEqual(projectMap(['me', 'w'], both).notes, ['A/one.md']);
 });
+
+test('ringLayout keeps an enclosing folder together and spans its subfolders', () => {
+  const holder = (path: string) => (path.startsWith('P/') ? 'P' : null);
+  const { arcs, spans } = ringLayout(['P/hub.md', 'O/x.md', 'P/T/a.md', 'P/R/b.md', 'Q.md'], undefined, 0.8, holder);
+  const order = arcs.map((arc) => arc.folder);
+  const inP = order.filter((folder) => folder === 'P' || folder.startsWith('P/'));
+  assert.deepEqual(order.slice(order.indexOf(inP[0]), order.indexOf(inP[0]) + 3), inP);
+  assert.equal(spans.length, 1);
+  const held = arcs.filter((arc) => arc.outer === 'P');
+  assert.ok(spans[0].start < Math.min(...held.map((arc) => arc.start)));
+  assert.ok(spans[0].end > Math.max(...held.map((arc) => arc.end)));
+});

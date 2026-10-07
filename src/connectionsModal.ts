@@ -19,6 +19,8 @@ const LINK_KINDS: Record<number, string> = { 3: 'edited', 2: 'sent', 1: 'mention
 const NOTE_RING = 150;
 const ARC_WIDTH = 26;
 const CHAT_RING = 245;
+/** How much wider a folder holding others is drawn than the arcs inside it, either side. */
+const SPAN_EXTRA = 6;
 
 /** What the maps need from the panel. */
 interface MapActions {
@@ -230,16 +232,24 @@ function projectBadge(group: SVGGElement, at: Point, r: number): void {
 
 /**
  * Folder arcs behind the notes: tinted for `home` (the folder of the chat's or the map's project),
- * marked for another project's, each labelled inside the ring; `click` acts on one.
+ * marked for another project's, each labelled inside the ring; `click` acts on one. `spans`, the
+ * folders that hold others (a project's round its subfolders), are drawn wider, behind them, with
+ * their labels further in; a group that is a span's own folder has no arc of its own.
  */
-function drawArcs(drawing: MapDrawing, arcs: RingArc[], label: (folder: string) => { text: string; tip: string; cls: string }, click?: (folder: string, evt: MouseEvent) => void): void {
-  for (const arc of arcs) {
-    const { text, tip, cls } = label(arc.folder);
+function drawArcs(
+  drawing: MapDrawing,
+  arcs: RingArc[],
+  spans: RingArc[],
+  label: (folder: string, outer: string | null) => { text: string; tip: string; cls: string },
+  click?: (folder: string, evt: MouseEvent) => void,
+): void {
+  const band = (arc: RingArc, extra: number, labelGap: number) => {
+    const { text, tip, cls } = label(arc.folder, arc.outer);
     drawing.drawn.add(`arc-${cls}`);
     const group = svg(drawing.arcs, 'g', { class: `vc-map-arc ${cls}` });
-    svg(group, 'path', { d: arcPath(arc.start, arc.end, NOTE_RING - ARC_WIDTH / 2, NOTE_RING + ARC_WIDTH / 2) });
-    const mid = (arc.start + arc.end) / 2;
-    const at = polar(mid, NOTE_RING - ARC_WIDTH / 2 - 12);
+    const inner = NOTE_RING - ARC_WIDTH / 2 - extra;
+    svg(group, 'path', { d: arcPath(arc.start, arc.end, inner, NOTE_RING + ARC_WIDTH / 2 + extra) });
+    const at = polar((arc.start + arc.end) / 2, inner - labelGap);
     const name = svg(group, 'text', { x: at.x, y: at.y + 4, 'text-anchor': Math.abs(at.x) < 20 ? 'middle' : at.x > 0 ? 'end' : 'start' });
     name.textContent = text;
     tooltip(group, tip);
@@ -247,7 +257,9 @@ function drawArcs(drawing: MapDrawing, arcs: RingArc[], label: (folder: string) 
       group.addEventListener('click', (evt) => click(arc.folder, evt));
       group.addClass('is-clickable');
     }
-  }
+  };
+  for (const span of spans) band(span, SPAN_EXTRA, 26);
+  for (const arc of arcs) if (arc.folder !== arc.outer) band(arc, 0, arc.outer === null ? 12 : 12 - SPAN_EXTRA + 2);
 }
 
 /** The legend: only the kinds drawn. */
@@ -308,7 +320,8 @@ export class ChatMapModal extends Modal {
     this.drawProjectBar();
     this.drawSearch();
     const drawing = new MapDrawing(contentEl, 820, 620);
-    const { angles, arcs } = ringLayout(host.notes.map((note) => note.path));
+    // A project's folder holds its subfolders' arcs.
+    const { angles, arcs, spans } = ringLayout(host.notes.map((note) => note.path), folderOf, 0.8, (path) => host.projectHolding(folderOf(path))?.folder ?? null);
     const placesOfChats = chatAngles(host.chats, angles);
     const centre = { x: 0, y: 0 };
     const noteAt = (path: string) => polar(angles.get(path) ?? 0, NOTE_RING);
@@ -317,6 +330,7 @@ export class ChatMapModal extends Modal {
     drawArcs(
       drawing,
       arcs,
+      spans,
       (folder) => {
         const project = host.projectHolding(folder);
         const own = project !== null && project.folder === home;
@@ -543,8 +557,13 @@ export class ProjectMapModal extends Modal {
       const folder = folderOf(path);
       return folder === host.folder ? '' : folder.startsWith(`${host.folder}/`) ? folder.slice(host.folder.length + 1) : folder;
     };
-    const { angles, arcs } = ringLayout(host.notes, within);
-    drawArcs(drawing, arcs, (sub) => ({ text: shortLabel(sub || host.name, 22), tip: sub ? `${host.folder}/${sub}` : host.folder, cls: sub === '' ? 'is-home' : 'is-plain' }));
+    const inside = (path: string) => folderOf(path) === host.folder || folderOf(path).startsWith(`${host.folder}/`);
+    const { angles, arcs, spans } = ringLayout(host.notes, within, 0.8, (path) => (inside(path) ? '' : null));
+    drawArcs(drawing, arcs, spans, (sub, outer) => ({
+      text: shortLabel(sub || host.name, 22),
+      tip: outer === null ? sub : sub ? `${host.folder}/${sub}` : host.folder,
+      cls: outer === '' || sub === '' ? 'is-home' : 'is-plain',
+    }));
     const inner = host.chats.length === 1 ? 0 : 60;
     const chatAt = new Map(host.chats.map((id, i) => [id, polar((2 * Math.PI * i) / host.chats.length, inner)]));
     const noteAt = (path: string) => polar(angles.get(path) ?? 0, NOTE_RING);

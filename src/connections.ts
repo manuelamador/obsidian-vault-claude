@@ -67,29 +67,39 @@ export function polar(angle: number, radius: number): Point {
   return { x: radius * Math.sin(angle), y: -radius * Math.cos(angle) };
 }
 
-/** A folder's group on a ring: the folder (by `group`), and the angles its notes span. */
+/** A folder's group on a ring: the folder (by `group`), the angles its notes span, and the enclosing group it sits in (see ringLayout). */
 export interface RingArc {
   folder: string;
   start: number;
   end: number;
+  outer: string | null;
 }
 
 /**
  * Notes on a ring, grouped by `group` (their folder, by default): the groups in order of name, the
  * notes in a group side by side, a gap of `gap` note places between groups. Each note's angle, and
- * each group's arc, padded by half a place either side.
+ * each group's arc, padded by half a place either side. `outer` puts groups inside an enclosing one
+ * (a project's folder round its subfolders): those are kept side by side, and `spans` gives each
+ * enclosing group's extent, a quarter place wider either side than the arcs it holds.
  */
-export function ringLayout(notes: string[], group: (path: string) => string = folderOf, gap = 0.8): { angles: Map<string, number>; arcs: RingArc[] } {
+export function ringLayout(
+  notes: string[],
+  group: (path: string) => string = folderOf,
+  gap = 0.8,
+  outer: (path: string) => string | null = () => null,
+): { angles: Map<string, number>; arcs: RingArc[]; spans: RingArc[] } {
+  const key = (path: string) => outer(path) ?? group(path);
   const groups = new Map<string, string[]>();
-  for (const path of [...notes].sort((a, b) => group(a).localeCompare(group(b)) || a.localeCompare(b))) {
-    const key = group(path);
-    groups.set(key, [...(groups.get(key) ?? []), path]);
+  for (const path of [...notes].sort((a, b) => key(a).localeCompare(key(b)) || group(a).localeCompare(group(b)) || a.localeCompare(b))) {
+    const name = group(path);
+    groups.set(name, [...(groups.get(name) ?? []), path]);
   }
   const gaps = groups.size > 1 ? groups.size : 0;
   const places = notes.length + gaps * gap;
   const step = (2 * Math.PI) / Math.max(1, places);
   const angles = new Map<string, number>();
   const arcs: RingArc[] = [];
+  const spans = new Map<string, RingArc>();
   let at = 0;
   for (const [folder, paths] of groups) {
     const start = at;
@@ -97,10 +107,16 @@ export function ringLayout(notes: string[], group: (path: string) => string = fo
       angles.set(path, at);
       at += step;
     }
-    arcs.push({ folder, start: start - step / 2, end: at - step / 2 });
+    const arc = { folder, start: start - step / 2, end: at - step / 2, outer: outer(paths[0]) };
+    arcs.push(arc);
+    if (arc.outer !== null) {
+      const span = spans.get(arc.outer);
+      if (span) span.end = arc.end + step / 4;
+      else spans.set(arc.outer, { folder: arc.outer, start: arc.start - step / 4, end: arc.end + step / 4, outer: null });
+    }
     if (gaps > 0) at += gap * step;
   }
-  return { angles, arcs };
+  return { angles, arcs, spans: [...spans.values()] };
 }
 
 /**
