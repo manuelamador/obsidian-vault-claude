@@ -449,8 +449,8 @@ export class ChatMapModal extends Modal {
         const own = project !== null && project.folder === home;
         const name = folder.slice(folder.lastIndexOf('/') + 1) || 'Top of the vault';
         return {
-          // A project's own folder is named by the project; a folder inside it by its name, in the project's tint.
-          text: project && project.folder === folder ? `◆ ${shortLabel(project.name, 22)}` : shortLabel(name, 22),
+          // Every arc by its folder's name, a project's own folder marked ◆ (its project is named in the tooltip, and the bar above).
+          text: project && project.folder === folder ? `◆ ${shortLabel(name, 22)}` : shortLabel(name, 22),
           tip: `${folder || 'Top of the vault'}${project ? ` · in project “${project.name}”` : ''} · click for its project`,
           cls: own ? 'is-home' : project ? 'is-other' : 'is-plain',
         };
@@ -488,11 +488,8 @@ export class ChatMapModal extends Modal {
     }
     const centreNode = drawing.chat('chat', centre, 18, 'is-centre');
     const title = svg(centreNode, 'text', { x: 0, y: 34, 'text-anchor': 'middle' });
+    // The chat's title only: its project is named in the bar above, and its folder's arc is marked ◆.
     title.textContent = shortLabel(host.title, 40);
-    if (host.project) {
-      const project = svg(centreNode, 'text', { x: 0, y: 50, 'text-anchor': 'middle', class: 'vc-map-sub' });
-      project.textContent = `◆ ${shortLabel(host.project.name, 36)}`;
-    }
     tooltip(centreNode, host.project ? `${host.title} · in “${host.project.name}”` : host.title);
     legend(contentEl, drawing.drawn, LEGEND);
     const more = [host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : '', host.moreChats > 0 ? `${host.moreChats} more chat${host.moreChats === 1 ? '' : 's'}` : ''].filter(Boolean);
@@ -692,7 +689,7 @@ export class ProjectMapModal extends Modal {
     const inside = (path: string) => folderOf(path) === host.folder || folderOf(path).startsWith(`${host.folder}/`);
     const { angles, arcs, spans } = ringLayout(host.notes, within, 0.8, (path) => (inside(path) ? '' : null));
     drawArcs(drawing, ring, arcs, spans, (sub, outer) => ({
-      text: shortLabel(sub || host.name, 22),
+      text: shortLabel(sub || `◆ ${host.folder.slice(host.folder.lastIndexOf('/') + 1)}`, 22),
       tip: outer === null ? sub : sub ? `${host.folder}/${sub}` : host.folder,
       cls: outer === '' || sub === '' ? 'is-home' : 'is-plain',
     }));

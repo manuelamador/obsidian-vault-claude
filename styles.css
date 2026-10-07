@@ -2828,11 +2828,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   font-size: 12px;
 }
 
-.vc-map-node.is-centre text.vc-map-sub {
-  fill: var(--text-accent);
-  font-weight: normal;
-  font-size: 11px;
-}
 
 .vc-map-badge {
   fill: var(--color-green);
