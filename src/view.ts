@@ -2529,10 +2529,18 @@ export class ChatView extends ItemView {
    * holding it, or gave way to a chat picked meanwhile.
    */
   async openChat(item: HistoryItem, branch?: BranchSource): Promise<boolean> {
+    const started = performance.now();
     const from = this.navPlace();
     const opened = await this.openChatHere(item, branch);
+    const shown = performance.now();
     if (opened) this.remember(from);
     this.plugin.chatShown(this);
+    // Once the browser has laid out and painted what was drawn: the wait as seen.
+    window.requestAnimationFrame(() =>
+      window.setTimeout(() => {
+        log(`chat opened in ${Math.round(performance.now() - started)} ms: shown after ${Math.round(shown - started)} ms, then laid out and painted`);
+      }, 0),
+    );
     return opened;
   }
 
@@ -2559,7 +2567,10 @@ export class ChatView extends ItemView {
       // A kept side chat whose process is still ending: read once nothing writes to its file, unless
       // another chat was picked meanwhile.
       const generation = this.chatGeneration;
+      const waitStart = performance.now();
       await this.plugin.sessionEnded(item.id);
+      const waited = Math.round(performance.now() - waitStart);
+      if (waited > 50) log(`opening a chat: waited ${waited} ms for its process to end`);
       if (generation !== this.chatGeneration) return true;
       return await this.showSavedChat(item, branch);
     } finally {
@@ -2603,6 +2614,7 @@ export class ChatView extends ItemView {
           : `${item.title} · last active ${formatDate(item.updatedAt)}${item.copied ? ' · a copy of a chat from outside the panel' : ''}`,
     });
     this.renderHistory(chat, false, read.readMs);
+    const afterDraw = performance.now();
     this.recordMentions();
     const end = this.messagesEl.createDiv({
       cls: 'vc-muted vc-resumed',
@@ -2623,9 +2635,12 @@ export class ChatView extends ItemView {
       link.addEventListener('click', () => void this.openChat(latest));
       end.appendText('. New messages here start another copy; the original session is unchanged.');
     }
+    const beforeDraft = performance.now();
     this.restoreDraft();
+    const draft = performance.now();
     this.seeChat();
     this.scrollToBottom(true);
+    log(`opening a chat: mentions ${Math.round(beforeDraft - afterDraw)} ms; draft ${Math.round(draft - beforeDraft)} ms; seen and scrolled ${Math.round(performance.now() - draft)} ms`);
     return true;
   }
 
@@ -2736,6 +2751,18 @@ export class ChatView extends ItemView {
     const added: string[] = [];
     let lastModel: string | null = null;
     let lastPrompt: string | null = null;
+    // How long each kind of part took to draw, for the log.
+    const spent: Record<string, number> = {};
+    const timed = <T>(kind: string, run: () => T): T => {
+      const start = performance.now();
+      try {
+        return run();
+      } finally {
+        spent[kind] = (spent[kind] ?? 0) + performance.now() - start;
+      }
+    };
+    // Each message's errors are caught below, so the flag is always cleared after the loop.
+    this.drawingSaved = true;
     for (const message of transcript) {
       if (message.parent_tool_use_id !== null) continue;
       // One message that cannot be drawn is left out, not the rest of the chat: an error here would
@@ -2754,30 +2781,37 @@ export class ChatView extends ItemView {
           if (Array.isArray(content)) {
             for (const block of content as ContentBlock[]) {
               if (block.type !== 'tool_result' || !block.tool_use_id) continue;
-              this.finishTool(block.tool_use_id, block.is_error === true, edits?.get(block.tool_use_id), true);
+              timed('tool results', () => this.finishTool(block.tool_use_id ?? '', block.is_error === true, edits?.get(block.tool_use_id ?? ''), true));
             }
           }
           const prompt = messagePrompt(message);
-          if (prompt) lastPrompt = this.renderHistoricUser(prompt.text, prompt.images, message.uuid) ?? lastPrompt;
+          if (prompt) lastPrompt = timed('prompts', () => this.renderHistoricUser(prompt.text, prompt.images, message.uuid)) ?? lastPrompt;
         } else if (message.type === 'assistant' && Array.isArray(content)) {
           let textIndex = 0;
           for (const block of content as ContentBlock[]) {
             if (block.type === 'text' && block.text?.trim()) {
-              this.finishText(block.text, replyKey(message.uuid, textIndex));
+              const text = block.text;
+              timed('replies', () => this.finishText(text, replyKey(message.uuid, textIndex)));
               textIndex += 1;
-            } else if (block.type === 'thinking' && block.thinking) this.renderThinking(block.thinking);
+            } else if (block.type === 'thinking' && block.thinking) {
+              const thinking = block.thinking;
+              timed('thinking', () => this.renderThinking(thinking));
+            }
             else if (block.type === 'tool_use' && block.id && block.name) {
               const input = (block.input ?? {}) as Record<string, unknown>;
-              this.addTool(block.id, block.name, input);
+              const [id, name] = [block.id, block.name];
+              timed('tool calls', () => this.addTool(id, name, input));
               added.push(block.id);
             }
           }
-          if (this.draw.turn) this.setBranchPoint(this.draw.turn, content as ContentBlock[], message.uuid);
+          const turn = this.draw.turn;
+          if (turn) timed('branch points', () => this.setBranchPoint(turn, content as ContentBlock[], message.uuid));
         }
       } catch (error) {
         log('drawing a saved message failed', error);
       }
     }
+    this.drawingSaved = false;
     // Tool calls with no recorded result (after an interrupt, or a message that failed to draw) are
     // closed out as done: left running, they would hold the phase on their label.
     for (const id of added) {
@@ -2787,6 +2821,7 @@ export class ChatView extends ItemView {
       entry.lineEl?.removeClass('is-running');
       if (entry.group) this.updateToolGroup(entry.group);
     }
+    if (transcript.length >= 50 && !earlier) log('drawing a chat, by part:', Object.entries(spent).map(([kind, ms]) => `${kind} ${Math.round(ms)} ms`).join('; '));
     const turns = [...this.draw.parent.querySelectorAll<HTMLElement>('.vc-turn')];
     // The turn still running is finished when it ends (see showBackground).
     this.unfinishedTurn = running ? (turns.pop() ?? null) : null;
@@ -4850,6 +4885,8 @@ export class ChatView extends ItemView {
 
   /** When the session file was last read for queued messages taken up (see noticeQueuedTaken). */
   private queuedCheckedAt = 0;
+  /** A saved chat's messages are being drawn (see renderTranscript): not scrolled message by message. */
+  private drawingSaved = false;
 
   /**
    * Queued messages Claude Code has folded into the turn running: their "Queued" mark goes as soon as
@@ -6721,6 +6758,8 @@ export class ChatView extends ItemView {
   private scrollToBottom(force = false): void {
     // Earlier turns are drawn above the view, which their drawing keeps in place (see EarlierDrawing).
     if (!this.drawingLive()) return;
+    // A saved chat being drawn is scrolled once, at its end: each scroll here would lay out all drawn so far again.
+    if (this.drawingSaved) return;
     // New output is appended to the turn; move the activity row back to the end.
     if (this.activityEl && this.draw.turn && this.activityEl.parentElement === this.draw.turn) this.draw.turn.appendChild(this.activityEl);
     if (!force && !this.stickToBottom) return;
