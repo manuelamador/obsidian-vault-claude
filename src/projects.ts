@@ -1,8 +1,8 @@
 // Projects: a folder of the vault, with a note holding Instructions (yours), a Guide (findings you
 // accepted, each with its source chat), and generated lists of its chats and key notes. A chat's home
 // project follows from its notes (see homeOf), or is chosen by hand; its Instructions and Guide go
-// with the chat's first message. A chat may be connected to other projects, whose Guides go only when
-// you choose. Kept free of `obsidian` imports so the tests can use it.
+// with the chat's first message. A chat has at most one project. Kept free of `obsidian` imports so
+// the tests can use it.
 import { inFolder } from './chatFolders';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import { bubbleOf, textBlocks, type ContentBlock } from './chatText';
@@ -28,7 +28,6 @@ export function projectNoteMarkdown(project: { name: string; folder: string; add
     'tags: [project]',
     `folder: ${JSON.stringify(project.folder)}`,
     `added: ${yamlList(project.added)}`,
-    'connected_chats: []',
     `updated: ${project.date}`,
     '---',
     '',
@@ -126,12 +125,11 @@ export function projectParts(note: string): { instructions: string; guide: strin
 }
 
 /**
- * What goes with a chat's message from its projects: the Instructions of the projects holding its home
- * project's folder (`parent`), its home project's Instructions and (if chosen) Guide, and the Guides
- * chosen of others (`connected`); each with its project note's path (`note`), which Claude may open
- * when asked to change the project.
+ * What goes with a chat's message from its project: the Instructions of the projects holding its
+ * project's folder (`parent`), and its project's Instructions and (if chosen) Guide (`home`); each
+ * with its project note's path (`note`), which Claude may open when asked to change the project.
  */
-export function projectContextBlock(parts: { name: string; note: string; instructions?: string; guide?: string; role: 'home' | 'parent' | 'connected' }[]): string {
+export function projectContextBlock(parts: { name: string; note: string; instructions?: string; guide?: string; role: 'home' | 'parent' }[]): string {
   const sections = parts.flatMap((part) => {
     const lines: string[] = [];
     if (part.instructions) lines.push(`Instructions:\n${part.instructions}`);

@@ -2422,10 +2422,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   color: var(--text-normal);
 }
 
-.vc-project-more {
-  opacity: 0.7;
-}
-
 .vc-project-modal {
   width: min(640px, 92vw);
 }
@@ -2532,13 +2528,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
 .vc-project-connections summary {
   cursor: pointer;
   color: var(--text-muted);
-}
-
-.vc-project-connection {
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-2);
-  padding: var(--size-4-1) 0;
 }
 
 .vc-project-connections > button {

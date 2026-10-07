@@ -32,14 +32,14 @@ test('guide lines go at the end of the Guide, before the next section', () => {
   assert.equal(projectParts(added).guide, '- one\n- two');
 });
 
-test('the context block holds the home Instructions and Guide, and connected Guides', () => {
+test('the context block holds an enclosing project\'s Instructions, then the home Instructions and Guide', () => {
   assert.equal(projectContextBlock([{ name: 'A', note: 'P/A.md', role: 'home' }]), '');
   const block = projectContextBlock([
+    { name: 'P', note: 'P.md', instructions: 'Cite sources.', role: 'parent' },
     { name: 'A', note: 'P/A.md', instructions: 'Be brief.', guide: '- g', role: 'home' },
-    { name: 'B', note: 'P/B.md', guide: '- h', role: 'connected' },
   ]);
-  assert.match(block, /^<project_context>\n<project name="A" role="home" note="P\/A.md">\nInstructions:\nBe brief\.\n\nGuide/);
-  assert.match(block, /<project name="B" role="connected" note="P\/B.md">\nGuide/);
+  assert.match(block, /^<project_context>\n<project name="P" role="parent" note="P.md">\nInstructions:\nCite sources\./);
+  assert.match(block, /<project name="A" role="home" note="P\/A.md">\nInstructions:\nBe brief\.\n\nGuide/);
 });
 
 test('a prompt with project context shows its text, with a chip for each project', () => {

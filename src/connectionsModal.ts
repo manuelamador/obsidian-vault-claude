@@ -11,8 +11,8 @@ import { chatAngles, placeLabels, polar, ringLayout, shortLabel, type MapChat, t
 const SVG = 'http://www.w3.org/2000/svg';
 /** What Link does, said where it is offered. */
 const LINK_TIP = 'Link: both chats list each other. Nothing is sent unless you tick Include on the links chip; then a digest of it goes once.';
-/** What Connect does, said where it is offered. */
-const CONNECT_TIP = "Connect: this project's Guide can then go with this chat when you choose (in the project dialog). This chat stays in its own project.";
+/** What putting a chat in a project does, said where it is offered. A chat has at most one project. */
+const HOME_TIP = "This project's Instructions and Guide then go with this chat's next message. A chat is in one project at most.";
 /** How a note is linked, by weight (see LINK_WEIGHTS). */
 const LINK_KINDS: Record<number, string> = { 3: 'edited', 2: 'sent', 1: 'mentioned' };
 /** The rings: notes, their labels, the arcs behind them, and the other chats. */
@@ -57,11 +57,12 @@ export interface ChatMapHost extends MapActions {
   project: { name: string; folder: string; path: string } | null;
   /** Create project for `folder`; `created` runs once it is made. */
   makeProject(folder: string, created: () => void): void;
-  connect(path: string): Promise<void>;
   openProjectNote(path: string): void;
   search(query: string): SearchHit[];
   /** Makes project `path` the chat's home (null: takes it out). */
   setHome(path: string | null): Promise<void>;
+  /** Whether the chat was taken out of a project by hand, so that its notes no longer place it in one. */
+  declined: boolean;
   /** The project whose folder holds `folder` (the deepest), if any: what its notes count toward. */
   projectHolding(folder: string): { path: string; name: string; folder: string } | null;
   /** The map's data again, after something it shows changed. */
@@ -348,7 +349,8 @@ export class ChatMapModal extends Modal {
 
   /**
    * The chat's project, at the top: its name, its note, Move… (to the search) and Take chat out; or,
-   * with none, the project of a chat it is linked with and the folder its notes suggest, each in one click.
+   * with none, the project holding most of its notes, the project of a chat it is linked with and the
+   * folder its notes suggest, each in one click.
    */
   private drawProjectBar(): void {
     const { host, contentEl } = this;
@@ -366,16 +368,32 @@ export class ChatMapModal extends Modal {
       act('Take chat out', () => void host.setHome(null).then(() => this.redraw()));
       return;
     }
-    bar.createSpan({ cls: 'vc-map-bar-name', text: 'No project' });
-    if (host.linkedProject) {
+    bar.createSpan({ cls: 'vc-map-bar-name', text: host.declined ? 'No project (taken out by hand)' : 'No project' });
+    const byNotes = this.projectOfMostNotes();
+    if (byNotes) act(`Put chat in “${byNotes.name}”`, () => void host.setHome(byNotes.path).then(() => this.redraw()), true);
+    if (host.linkedProject && host.linkedProject.path !== byNotes?.path) {
       const { linkedProject } = host;
-      act(`Add to “${linkedProject.name}”`, () => void host.setHome(linkedProject.path).then(() => this.redraw()), true);
+      act(`Put chat in “${linkedProject.name}”`, () => void host.setHome(linkedProject.path).then(() => this.redraw()), !byNotes);
     }
     if (host.folderSuggestion) {
       const { folder } = host.folderSuggestion;
       act(`Make “${folder}” a project…`, () => host.makeProject(folder, () => void this.redraw()));
     }
     act('Find a project…', () => this.focusSearch());
+  }
+
+  /** The project whose folders hold most of the chat's notes, if any. */
+  private projectOfMostNotes(): { path: string; name: string } | null {
+    const counts = new Map<string, { project: { path: string; name: string }; count: number }>();
+    for (const { folder, count } of this.host.folders) {
+      const project = this.host.projectHolding(folder);
+      if (!project) continue;
+      const entry = counts.get(project.path) ?? { project, count: 0 };
+      entry.count += count;
+      counts.set(project.path, entry);
+    }
+    const best = [...counts.values()].sort((a, b) => b.count - a.count)[0];
+    return best ? best.project : null;
   }
 
   private searchInput: HTMLInputElement | null = null;
@@ -389,7 +407,7 @@ export class ChatMapModal extends Modal {
   private drawSearch(): void {
     const { host, contentEl } = this;
     const box = contentEl.createDiv({ cls: 'vc-map-search' });
-    const input = box.createEl('input', { type: 'search', attr: { placeholder: 'Find a project, chat or note: add to it, link, mention or connect' } });
+    const input = box.createEl('input', { type: 'search', attr: { placeholder: 'Find a project, chat or note: put this chat in a project, link a chat, mention a note' } });
     this.searchInput = input;
     const results = box.createDiv({ cls: 'vc-map-results' });
     results.hide();
@@ -422,8 +440,7 @@ export class ChatMapModal extends Modal {
           act(buttons, 'Open', () => host.openChat(hit.key));
         } else if (hit.kind === 'project') {
           if (hit.key !== host.project?.path) {
-            act(buttons, host.project ? 'Move here' : 'Add to it', () => void host.setHome(hit.key).then(() => this.redraw()), true);
-            act(buttons, 'Connect', () => void host.connect(hit.key).then(() => this.redraw())).setAttr('aria-label', CONNECT_TIP);
+            act(buttons, host.project ? 'Move chat here' : 'Put chat here', () => void host.setHome(hit.key).then(() => this.redraw()), true).setAttr('aria-label', HOME_TIP);
           }
           act(buttons, 'Open note', () => host.openProjectNote(hit.key));
         } else {
@@ -437,8 +454,8 @@ export class ChatMapModal extends Modal {
 
   /**
    * What a folder offers, by the project holding it (see projectHolding): this chat's project, its note;
-   * another project, Connect and its note; a folder in no project, Make it a project; a folder inside a
-   * project, nothing of its own (its notes count toward that project).
+   * another project, putting the chat in it, and its note; a folder in no project, Make it a project; a
+   * folder inside a project, nothing of its own (its notes count toward that project).
    */
   private folderActions(folder: string): { label: string; tip?: string; run: () => void }[] {
     const { host } = this;
@@ -447,7 +464,7 @@ export class ChatMapModal extends Modal {
     if (project && project.path === host.project?.path) return [{ label: 'Open project note', run: () => host.openProjectNote(project.path) }];
     if (project)
       return [
-        { label: `Connect to “${project.name}”`, tip: CONNECT_TIP, run: () => void host.connect(project.path).then(() => this.redraw()) },
+        { label: host.project ? 'Move chat here' : 'Put chat here', tip: HOME_TIP, run: () => void host.setHome(project.path).then(() => this.redraw()) },
         { label: 'Open project note', run: () => host.openProjectNote(project.path) },
       ];
     if (!folder) return [];
@@ -503,7 +520,7 @@ export class ChatMapModal extends Modal {
     const notes = (n: number) => `${n} note${n === 1 ? '' : 's'}`;
     for (const { project, count, inside } of [...projects.values()].sort((a, b) => b.count - a.count)) {
       const home = project.path === host.project?.path;
-      row(box, 'folder-kanban', project.folder, `${notes(count)} · ${home ? `this chat's project, “${project.name}”` : `project “${project.name}”, not this chat's: Connect sends its Guide with this chat when you choose`}`, this.folderActions(project.folder), home ? 'is-home' : '');
+      row(box, 'folder-kanban', project.folder, `${notes(count)} · ${home ? `this chat's project, “${project.name}”` : `project “${project.name}”, not this chat's`}`, this.folderActions(project.folder), home ? 'is-home' : '');
       for (const entry of inside.sort((a, b) => b.count - a.count)) row(box, 'folder', entry.folder.slice(project.folder.length + 1), `${notes(entry.count)} · in “${project.name}”`, [], 'vc-map-folder-inside');
     }
     for (const entry of loose) row(box, 'folder', entry.folder || 'Top of the vault', `${notes(entry.count)} · in no project`, this.folderActions(entry.folder));

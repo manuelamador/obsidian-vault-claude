@@ -208,18 +208,12 @@ export class CreateProjectModal extends Modal {
 
 /** What a chat's projects send with it, and the choices about it. */
 export interface ChatProjectHost {
-  /** Whether the chat has started (has an id): connections need one. */
-  started: boolean;
   home(): ProjectRef | null;
-  /** The projects this chat is connected to. */
-  connections(): ProjectRef[];
   projects(): ProjectRef[];
   parts(path: string): Promise<{ instructions: string; guide: string }>;
-  /** Whether the home Guide goes; which connected projects' Guides go; which projects' context went already. */
+  /** Whether the project's Guide goes; whether its context went already. */
   includeGuide(): boolean;
   setIncludeGuide(on: boolean): void;
-  usesGuide(path: string): boolean;
-  setUsesGuide(path: string, on: boolean): void;
   sent(path: string): boolean;
   /** Whether a project's Instructions or Guide changed since they went with the chat. */
   updated(path: string): boolean;
@@ -233,13 +227,12 @@ export interface ChatProjectHost {
   manage(): void;
   /** The projects holding a project's folder, the outermost first, whose Instructions go too. */
   parents(path: string): string[];
-  connect(path: string, on: boolean): Promise<void>;
   createProject(): void;
   open(path: string): void;
   render(markdown: string, el: HTMLElement, component: Component): Promise<void>;
 }
 
-/** Shows what goes with the next message from a chat's home project (and the Guides chosen of its connected ones), with the choices about it. */
+/** Shows what goes with the next message from a chat's project, with the choices about it. A chat has at most one project. */
 export class ChatProjectModal extends Modal {
   private parts: Component | null = null;
 
@@ -334,52 +327,7 @@ export class ChatProjectModal extends Modal {
         await this.draw();
       });
     }
-    this.drawConnections(contentEl);
     manageLink(contentEl.createDiv({ cls: 'vc-project-foot' }));
-  }
-
-  /** The projects this chat is connected to, behind a fold: each opens, and its Guide goes when chosen. */
-  private drawConnections(el: HTMLElement): void {
-    const { host } = this;
-    const connected = host.connections();
-    const fold = el.createEl('details', { cls: 'vc-project-connections' });
-    fold.open = connected.some((project) => host.usesGuide(project.path));
-    fold.createEl('summary', { text: connected.length > 0 ? `Connections (${connected.length})` : 'Connections…' });
-    if (!host.started) {
-      fold.createDiv({ cls: 'vc-project-empty', text: 'A chat can be connected to other projects once it has started.' });
-      return;
-    }
-    for (const project of connected) {
-      const row = fold.createDiv({ cls: 'vc-project-connection' });
-      const name = row.createEl('a', { text: project.name, attr: { 'aria-label': 'Open project' } });
-      name.addEventListener('click', () => {
-        this.close();
-        host.open(project.path);
-      });
-      const toggle = row.createEl('label', { cls: 'vc-project-toggle' });
-      const box = toggle.createEl('input', { type: 'checkbox' });
-      box.checked = host.usesGuide(project.path);
-      toggle.appendText(host.sent(project.path) && box.checked ? 'Use its Guide in this chat (sent)' : 'Use its Guide in this chat');
-      box.addEventListener('change', async () => {
-        host.setUsesGuide(project.path, box.checked);
-        await this.draw();
-      });
-      const remove = row.createSpan({ cls: 'clickable-icon', attr: { 'aria-label': 'Disconnect' } });
-      setIcon(remove, 'x');
-      remove.addEventListener('click', async () => {
-        await host.connect(project.path, false);
-        await this.draw();
-      });
-    }
-    const add = fold.createEl('button', { text: 'Connect to a project…' });
-    add.addEventListener('click', () => {
-      const home = host.home()?.path;
-      const taken = new Set(connected.map((project) => project.path));
-      new ProjectPicker(this.app, host.projects().filter((project) => project.path !== home && !taken.has(project.path)), 'Connect this chat to…', async (project) => {
-        await host.connect(project.path, true);
-        await this.draw();
-      }).open();
-    });
   }
 
   private chooseHome(): void {
@@ -399,9 +347,8 @@ export class ChatProjectModal extends Modal {
 
 export interface GuideHost {
   project: ProjectRef;
-  /** Its own chats, and its connected chats (offered unticked, used only when ticked). */
+  /** Its chats. */
   chats: ChatChoice[];
-  connected: ChatChoice[];
   propose(chats: string[], signal: AbortSignal): Promise<GuideProposal[]>;
   /** Adds the accepted proposals to the Guide. */
   apply(accepted: GuideProposal[]): Promise<void>;
@@ -427,25 +374,20 @@ export class GuideModal extends Modal {
     const { contentEl, host } = this;
     contentEl.empty();
     contentEl.createDiv({ cls: 'vc-project-label', text: 'Claude reads the chats ticked and proposes additions, each linked to its chat. Nothing is added until you accept it.' });
-    if (host.chats.length === 0 && host.connected.length === 0) {
+    if (host.chats.length === 0) {
       contentEl.createDiv({ cls: 'vc-project-empty', text: 'This project has no chats.' });
       return;
     }
     const own = chatChecklist(contentEl, host.chats, () => update());
-    let others = (): string[] => [];
-    if (host.connected.length > 0) {
-      contentEl.createDiv({ cls: 'vc-project-label', text: 'Connected chats (used only when ticked)' });
-      others = chatChecklist(contentEl, host.connected, () => update());
-    }
     const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
     const status = foot.createDiv({ cls: 'vc-project-status' });
     const button = foot.createEl('button', { cls: 'mod-cta', text: 'Propose additions' });
     const update = () => {
-      button.disabled = own().length + others().length === 0;
+      button.disabled = own().length === 0;
     };
     update();
     button.addEventListener('click', async () => {
-      const chosen = [...own(), ...others()];
+      const chosen = own();
       button.disabled = true;
       status.empty();
       setIcon(status.createSpan({ cls: 'vc-pick-up-wheel' }), 'loader-2');

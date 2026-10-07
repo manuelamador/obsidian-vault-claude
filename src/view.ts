@@ -62,7 +62,7 @@ import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
 import type { ChatDraft, ChatProjectState } from './main';
-import { contextHash, linkedChatsBlock, projectContextBlock } from './projects';
+import { contextHash, linkedChatsBlock, PROJECT_TYPE, projectContextBlock } from './projects';
 import { LinksModal } from './linksModal';
 import { ChatProjectModal, ProjectPicker } from './projectModals';
 import { renderSafely } from './safeRender';
@@ -1562,15 +1562,6 @@ export class ChatView extends ItemView {
         hashes[home.path] = contextHash(read);
       }
     }
-    for (const path of state.guides ?? []) {
-      const file = this.app.vault.getAbstractFileByPath(path);
-      if (!(file instanceof TFile) || sent.has(path) || file === home) continue;
-      const read = await this.plugin.projectParts(file);
-      if (!read.guide) continue;
-      parts.push({ name: file.basename, note: file.path, guide: read.guide, role: 'connected' });
-      paths.push(path);
-      hashes[path] = contextHash(read);
-    }
     // The chats it links to and includes: each one's digest, once.
     const chats: Parameters<typeof linkedChatsBlock>[0] = [];
     for (const id of this.includedChats()) {
@@ -1728,7 +1719,27 @@ export class ChatView extends ItemView {
     return `Project “${home.basename}”: ${reason.count} of the notes it worked on are in its folder.`;
   }
 
-  /** For a chat offered a project, the project of a chat it links to or that links to it (the most recent link first), if any. */
+  /** Whether `file` is a project note. */
+  private isProjectNote(file: TFile): boolean {
+    return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === PROJECT_TYPE;
+  }
+
+  /**
+   * For a chat with no project, the one to offer in a click: the note in front's (the project note
+   * itself, or a note in a project's folder); else that of a chat it is linked with.
+   */
+  private projectSuggestion(): TFile | null {
+    if (!this.chatId) return null;
+    const front = this.activeNote()?.file ?? null;
+    if (front) {
+      if (this.isProjectNote(front)) return front;
+      const holding = this.plugin.projectForPath(front.path);
+      if (holding) return holding;
+    }
+    return this.linkedProjectSuggestion();
+  }
+
+  /** The project of a chat this one links to or that links to it (the most recent link first), if any. */
   private linkedProjectSuggestion(): TFile | null {
     if (!this.chatId) return null;
     for (const id of [...this.linksTo().map((link) => link.id), ...this.linksFrom()]) {
@@ -1837,12 +1848,10 @@ export class ChatView extends ItemView {
       this.projectsChanged();
     };
     new ChatProjectModal(this.app, {
-      started: this.chatId !== null,
       home: () => {
         const home = this.homeProjectFile();
         return home && ref(home);
       },
-      connections: () => (this.chatId ? this.plugin.connectedProjects(this.chatId).map(ref) : []),
       projects: () => this.plugin.projectNotes().map(ref),
       parts: async (path) => {
         const file = fileAt(path);
@@ -1850,8 +1859,6 @@ export class ChatView extends ItemView {
       },
       includeGuide: () => !this.projectStateNow().noGuide,
       setIncludeGuide: (on) => update((state) => ({ ...state, noGuide: !on })),
-      usesGuide: (path) => this.projectStateNow().guides?.includes(path) ?? false,
-      setUsesGuide: (path, on) => update((state) => ({ ...state, guides: [...(state.guides ?? []).filter((each) => each !== path), ...(on ? [path] : [])] })),
       sent: (path) => this.projectStateNow().sent?.includes(path) ?? false,
       updated: (path) => this.projectUpdated(path),
       // Its own context, and its enclosing projects' Instructions, go again.
@@ -1866,10 +1873,6 @@ export class ChatView extends ItemView {
         else this.projectPick = file ? file.path : null;
         // A new home's context goes with the next message; a chat whose project is removed is not offered one again.
         update((state) => (file ? { ...state, declined: false, sent: state.sent?.filter((each) => each !== file.path) } : { ...state, declined: true }));
-      },
-      connect: async (path, on) => {
-        const file = fileAt(path);
-        if (file && this.chatId) await this.plugin.connectProject(this.chatId, file, on);
       },
       homeWhy: () => this.projectWhy(),
       manage: () => void this.plugin.openManageProjects(),
@@ -4028,8 +4031,8 @@ export class ChatView extends ItemView {
     const key = JSON.stringify([
       attached && [attached.file.path, contextLabel(attached), contextWhat(attached)],
       active && [active.file.path, contextLabel(active)],
-      project && [project.path, state?.sent?.includes(project.path), state?.guides?.length, this.projectUpdated(project.path)],
-      this.offersProject() && this.linkedProjectSuggestion()?.path,
+      project && [project.path, state?.sent?.includes(project.path), this.projectUpdated(project.path)],
+      this.offersProject() && [this.projectSuggestion()?.path, this.projectStateNow().declined],
       this.linksChipKey(),
     ]);
     if (key === this.contextKey) return;
@@ -4039,8 +4042,6 @@ export class ChatView extends ItemView {
       const chip = this.contextRow.createDiv({ cls: 'vc-context-chip vc-project-chip' });
       setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'folder-kanban');
       chip.createSpan({ cls: 'vc-context-name', text: project.basename });
-      const guides = state?.guides?.length ?? 0;
-      if (guides > 0) chip.createSpan({ cls: 'vc-project-more', text: `+${guides}` });
       const sent = state?.sent?.includes(project.path);
       const updated = this.projectUpdated(project.path);
       if (updated) chip.createSpan({ cls: 'vc-project-updated', attr: { 'aria-hidden': 'true' } });
@@ -4050,18 +4051,24 @@ export class ChatView extends ItemView {
         `${this.projectWhy()} ${updated ? 'Its Instructions or Guide changed since they went with this chat: click to send them again.' : sent ? 'Its context went with this chat.' : 'Its Instructions and Guide go with your next message.'} Click to see what goes.`,
       );
     } else if (this.offersProject()) {
-      // A singleton linked with a chat in a project: that project, offered in one click.
-      const suggested = this.linkedProjectSuggestion();
-      if (suggested) {
-        const chip = this.contextRow.createDiv({ cls: 'vc-context-chip vc-project-suggestion' });
-        setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'folder-kanban');
-        chip.createSpan({ cls: 'vc-context-name', text: `Add to ${suggested.basename}?` });
-        chip.setAttr('aria-label', `A chat linked with this one is in “${suggested.basename}”: click to add this chat to it`);
-      }
+      // One chip says there is none; a second offers the likeliest project in one click.
+      const declined = this.projectStateNow().declined;
       const offer = this.contextRow.createDiv({ cls: 'vc-context-chip vc-context-offer vc-project-offer' });
       setIcon(offer.createSpan({ cls: 'vc-context-clip' }), 'folder-kanban');
-      offer.createSpan({ cls: 'vc-context-name', text: 'Project' });
-      offer.setAttr('aria-label', 'Add this chat to a project, or make one: opens its connections map');
+      offer.createSpan({ cls: 'vc-context-name', text: 'No project' });
+      offer.setAttr(
+        'aria-label',
+        declined
+          ? 'This chat was taken out of its project, so its notes no longer place it in one. Click to choose a project, or make one.'
+          : 'A project’s Instructions and Guide go with every chat in it. Click to choose a project, or make one.',
+      );
+      const suggested = this.projectSuggestion();
+      if (suggested) {
+        const chip = this.contextRow.createDiv({ cls: 'vc-context-chip vc-project-suggestion' });
+        setIcon(chip.createSpan({ cls: 'vc-context-clip' }), 'plus');
+        chip.createSpan({ cls: 'vc-context-name', text: `Add to ${suggested.basename}` });
+        chip.setAttr('aria-label', `Put this chat in “${suggested.basename}”: its Instructions and Guide then go with your next message`);
+      }
     }
     this.drawLinksChip();
     if (attached) {
@@ -4071,7 +4078,8 @@ export class ChatView extends ItemView {
       chip.createSpan({ cls: 'vc-context-remove', text: '×', attr: { 'aria-label': 'Detach this note from the chat' } });
       chip.setAttr('aria-label', `Sent with each message: ${contextWhat(attached)}. Click to open it.`);
     }
-    if (active && active.file.path !== attached?.file.path) {
+    // A project note is never offered as an attachment: the project chips stand for it.
+    if (active && active.file.path !== attached?.file.path && !this.isProjectNote(active.file)) {
       const offer = this.contextRow.createDiv({ cls: 'vc-context-chip vc-context-offer' });
       setIcon(offer.createSpan({ cls: 'vc-context-clip' }), 'plus');
       offer.createSpan({ cls: 'vc-context-name', text: contextLabel(active) });
@@ -4094,7 +4102,7 @@ export class ChatView extends ItemView {
     if (target.closest('.vc-project-chip')) this.openProjectContext();
     else if (target.closest('.vc-links-chip')) this.openLinks();
     else if (target.closest('.vc-project-suggestion')) {
-      const suggested = this.linkedProjectSuggestion();
+      const suggested = this.projectSuggestion();
       if (suggested && this.chatId) void this.plugin.setHomeProject(this.chatId, suggested).then(() => new Notice(`This chat is now in “${suggested.basename}”.`));
     }
     else if (target.closest('.vc-project-offer')) this.openConnections();

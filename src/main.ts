@@ -100,7 +100,7 @@ function projectRef(file: TFile): ProjectRef {
 /**
  * What a chat's projects sent with it and what it chose to send: `sent`, the projects whose context
  * went with a message (it goes once, until sent again by hand); `noGuide`, its home project's Guide
- * left out; `guides`, the connected projects whose Guides go; `declined`, its project removed by
+ * left out; `declined`, its project removed by
  * hand, after which its notes do not give it one and none is offered; `start`, the note attached when
  * it started, whose folder decides its project first (see homeOf).
  */
@@ -109,7 +109,6 @@ export interface ChatProjectState {
   /** Per project sent, a fingerprint of what went (see contextHash), to tell when it changed since. */
   sentHash?: Record<string, string>;
   noGuide?: boolean;
-  guides?: string[];
   declined?: boolean;
   start?: string;
   /** The chats it links to whose digests go with it (see ChatView.openLinks). */
@@ -896,7 +895,7 @@ export default class VaultClaudePlugin extends Plugin {
         else state.start = start;
         changed = true;
       }
-      for (const key of ['sent', 'guides'] as const) {
+      for (const key of ['sent'] as const) {
         const paths = state[key];
         if (!paths?.some((path) => movedPath(path, from, to) !== undefined)) continue;
         state[key] = paths.flatMap((path) => {
@@ -1422,8 +1421,8 @@ export default class VaultClaudePlugin extends Plugin {
     return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === PROJECT_TYPE;
   }
 
-  /** A project note's list of chat ids (`added`, added to it by hand; `connected_chats`, those connected to it). */
-  private projectChatIds(file: TFile, key: 'added' | 'connected_chats'): string[] {
+  /** A project note's list of chat ids added to it by hand (`added`). */
+  private projectChatIds(file: TFile, key: 'added'): string[] {
     return idList(this.app.metadataCache.getFileCache(file)?.frontmatter?.[key]);
   }
 
@@ -1606,13 +1605,8 @@ export default class VaultClaudePlugin extends Plugin {
         return null;
       })(),
       folderSuggestion: home ? null : this.folderSuggestionFor(id),
+      declined: this.projectState(id).declined === true,
       makeProject: (folder, created) => void this.openCreateProject({ folder, chatId: home ? null : id, created }),
-      connect: async (path) => {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (!(file instanceof TFile)) return;
-        await this.connectProject(id, file, true);
-        new Notice(`Connected to “${file.basename}”: its Guide goes with this chat once you choose it in the project dialog.`);
-      },
     };
   }
 
@@ -1665,11 +1659,6 @@ export default class VaultClaudePlugin extends Plugin {
     return (this.lastListing ?? []).filter((item) => !item.scratch && this.homeProject(item.id) === file).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  /** The projects chat `id` is connected to. */
-  connectedProjects(id: string): TFile[] {
-    return this.projectNotes().filter((file) => this.projectChatIds(file, 'connected_chats').includes(id));
-  }
-
   /** The projects whose folders hold project `file`'s folder, the outermost first: their Instructions go with its chats too. */
   enclosingProjects(file: TFile): TFile[] {
     const folder = this.projectFolder(file);
@@ -1702,7 +1691,6 @@ export default class VaultClaudePlugin extends Plugin {
     if (state.sent?.length) kept.sent = state.sent;
     if (state.sent?.length && state.sentHash) kept.sentHash = Object.fromEntries(Object.entries(state.sentHash).filter(([path]) => state.sent?.includes(path)));
     if (state.noGuide) kept.noGuide = true;
-    if (state.guides?.length) kept.guides = state.guides;
     if (state.declined) kept.declined = true;
     if (state.start) kept.start = state.start;
     if (state.includeChats?.length) kept.includeChats = state.includeChats;
@@ -1713,43 +1701,27 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * Makes `file` chat `id`'s home project, added by hand (and no longer only connected to it); null
-   * takes it out of its project, by hand, after which its notes do not give it one.
+   * Makes `file` chat `id`'s project, added by hand; null takes it out of its project, by hand, after
+   * which its notes do not give it one. A chat has at most one project.
    */
   async setHomeProject(id: string, file: TFile | null): Promise<void> {
     for (const project of this.projectNotes()) {
       const isHome = project === file;
       const listed = this.projectChatIds(project, 'added').includes(id);
-      if (isHome ? listed && !this.projectChatIds(project, 'connected_chats').includes(id) : !listed) continue;
+      const stale = this.app.metadataCache.getFileCache(project)?.frontmatter?.connected_chats !== undefined;
+      if ((isHome ? listed : !listed) && !stale) continue;
       // From the frontmatter as written, which the index may not have caught up with.
       await this.app.fileManager.processFrontMatter(project, (front: Record<string, unknown>) => {
         const added = idList(front.added).filter((each) => each !== id);
         front.added = isHome ? [...added, id] : added;
-        if (isHome) front.connected_chats = idList(front.connected_chats).filter((each) => each !== id);
+        // Connections between chats and other projects were dropped (2026-10-07); clear what is left of them.
+        delete front.connected_chats;
         front.updated = today();
       });
       await this.indexed(project);
     }
-    const state = this.projectState(id);
-    // Its connected projects' Guides no longer go when one of them is now its home.
-    this.setProjectState(id, { ...state, declined: file === null, guides: file ? state.guides?.filter((path) => path !== file.path) : state.guides });
+    this.setProjectState(id, { ...this.projectState(id), declined: file === null });
     this.membershipChanged();
-    this.projectsChanged();
-  }
-
-  /** Connects chat `id` to project `file` (or not, `on` false); its Guide goes only once chosen in the chat. */
-  async connectProject(id: string, file: TFile, on: boolean): Promise<void> {
-    if (this.projectChatIds(file, 'connected_chats').includes(id) === on) return;
-    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
-      const connected = idList(front.connected_chats).filter((each) => each !== id);
-      front.connected_chats = on ? [...connected, id] : connected;
-      front.updated = today();
-    });
-    await this.indexed(file);
-    if (!on) {
-      const state = this.projectState(id);
-      this.setProjectState(id, { ...state, guides: state.guides?.filter((path) => path !== file.path) });
-    }
     this.projectsChanged();
   }
 
@@ -1798,19 +1770,13 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * Writes a project's generated lists as they are now: its chats (newest first) and connected chats,
-   * and the notes its chats worked on most. Written only when they changed; done when the note is
+   * Writes a project's generated lists as they are now: its chats (newest first), and the notes its chats worked on most. Written only when they changed; done when the note is
    * opened, as its chats follow from their notes rather than from the note.
    */
   async refreshProjectLists(file: TFile): Promise<void> {
     await this.listChats().catch(() => []);
     const own = this.projectMembers(file).map((item) => item.id);
-    const when = (id: string) => this.lastListing?.find((item) => item.id === id)?.updatedAt ?? 0;
-    const connected = this.projectChatIds(file, 'connected_chats').sort((a, b) => when(b) - when(a));
-    const chats = [
-      ...own.map((id) => `- ${this.chatMarkdownLink(id)}`),
-      ...(connected.length > 0 ? ['', 'Connected:', '', ...connected.map((id) => `- ${this.chatMarkdownLink(id)}`)] : []),
-    ].join('\n');
+    const chats = own.map((id) => `- ${this.chatMarkdownLink(id)}`).join('\n');
     const keyNotes = this.keyNotes(file, own);
     const before = await this.app.vault.read(file);
     const after = withGenerated(withGenerated(before, 'Chats', chats), 'Key notes', keyNotes);
@@ -2076,12 +2042,9 @@ export default class VaultClaudePlugin extends Plugin {
       return { id, title: this.chatTitleOf(id), when: item ? formatDate(item.updatedAt) : 'not found', ticked: tick && !!item && (!since || formatDate(item.updatedAt).slice(0, 10) >= since), item };
     };
     const own = this.projectMembers(file).map((item) => choice(item.id, true));
-    const connected = this.projectChatIds(file, 'connected_chats').map((id) => choice(id, false)).filter((each) => each.item);
-    const newest = (a: { item?: HistoryItem }, b: { item?: HistoryItem }) => (b.item?.updatedAt ?? 0) - (a.item?.updatedAt ?? 0);
     new GuideModal(this.app, {
       project: projectRef(file),
       chats: own,
-      connected: connected.sort(newest),
       propose: (ids, signal) => this.proposeGuide(file, ids, signal),
       apply: (accepted) => this.applyGuide(file, accepted),
       titleOf: (id) => this.chatTitleOf(id),
