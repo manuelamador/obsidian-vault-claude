@@ -2,7 +2,6 @@
 // to, each of which may be included (its digest goes with the next message, once), and the chats that
 // link to it, which send it nothing. What would go is shown before it goes, with its size.
 import { FuzzySuggestModal, setIcon, type App } from 'obsidian';
-import { Pane } from './connectionsWindow';
 import { estimateTokens, formatTokens } from './contextSize';
 import { errorText } from './log';
 
@@ -59,14 +58,20 @@ export class ChatPicker extends FuzzySuggestModal<{ id: string; title: string }>
   }
 }
 
-export class LinksModal extends Pane {
+/** The chat's links, drawn under its map (see ConnectionsMap): its own dialogs (pickers) open above. */
+export class LinksModal {
+  private contentEl!: HTMLElement;
+
   private readonly running = new Set<AbortController>();
 
-  constructor(app: App, private readonly host: LinksHost) {
-    super(app);
-  }
+  constructor(
+    private readonly app: App,
+    private readonly host: LinksHost,
+  ) {}
 
-  onOpen(): void {
+  /** Draws the links into `el`. */
+  mount(el: HTMLElement): void {
+    this.contentEl = el;
     this.draw();
   }
 
