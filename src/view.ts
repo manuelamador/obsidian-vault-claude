@@ -2454,11 +2454,17 @@ export class ChatView extends ItemView {
     // The chats as last listed show at once, and those listed now replace them if anything changed;
     // before the first listing, the modal opens empty and its rows arrive with it.
     const shown = this.plugin.listedChats();
+    // Linking: only the chats that can be linked, not this one, the scratch chat or those linked already.
+    const linked = new Set(linking ? this.linksTo().map((link) => link.id) : []);
+    const rows = (items: HistoryItem[]) => {
+      const all = this.historyRows(items);
+      return linking ? all.filter((item) => !item.scratch && item.id !== this.chatId && !linked.has(item.id)) : all;
+    };
     const modal: HistoryModal = new HistoryModal(
       this.app,
-      shown && this.historyRows(shown),
+      shown && rows(shown),
       this.plugin.listChats().then(
-        (items) => this.historyRows(items),
+        (items) => rows(items),
         (error: unknown) => {
           log('listing history failed', error);
           if (shown) return null;

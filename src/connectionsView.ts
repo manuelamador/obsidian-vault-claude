@@ -998,9 +998,12 @@ export class ConnectionsView extends ItemView {
       const group = drawing.chat(id, at, open ? 14 : 11, `is-same-project${open ? ' is-open-chat' : ''}`);
       const touched = project.links.filter(([chat]) => chat === id).length;
       tooltip(group, `${project.titleOf(id)}${open ? ' · the chat in the panel' : ''} · ${touched} note${touched === 1 ? '' : 's'} here${open ? '' : `\n${CHAT_CLICK}`}`);
-      // Its name beside it, on the side away from the middle, shortened (in full on hover).
-      const title = project.titleOf(id);
-      drawing.label(group, at, at.x >= 0 ? 'right' : 'left', shortLabel(title, 24), 14, title);
+      // Only the panel's chat is named on the map: the chats sit inside the ring of notes, where their
+      // names ran into each other and into the notes'. The others are named in their tooltips.
+      if (open) {
+        const title = project.titleOf(id);
+        drawing.label(group, at, at.x >= 0 ? 'right' : 'left', shortLabel(title, 28), 17, title);
+      }
       chatNode(group, id, project);
     }
     // The project in the middle: its note, previewed on ⌘-hover, opened on a click.
