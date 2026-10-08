@@ -1735,10 +1735,10 @@ export default class VaultClaudePlugin extends Plugin {
   /** Shows panel `view`'s chat in pane `pane` (none: no chat); `atProject`, centred on its project. */
   private async followPanel(pane: ConnectionsView, view: ChatView | null, atProject = false): Promise<void> {
     this.connectionsPanel = view;
-    const id = view?.currentChatId() ?? null;
-    if (!view || !id) return pane.follow(null);
-    const home = atProject ? this.homeProject(id) : null;
-    await pane.follow(await this.chatMapHost(view, id), home?.path ?? null);
+    const shown = view?.connectionsChat() ?? null;
+    if (!view || !shown) return pane.follow(null);
+    const home = atProject ? this.homeProject(shown.id) : null;
+    await pane.follow(await this.chatMapHost(view, shown.id, false, shown.id, shown.lookOnly), home?.path ?? null);
   }
 
   /** Panel `view` is closing: a Connections pane following it follows another panel, or none. */
@@ -1773,7 +1773,8 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** What chat `id`'s map shows, read now, and what it does. */
-  private async chatMapHost(view: ChatView, baseline: string, all = false, id = baseline): Promise<ChatMapHost> {
+  /** `lookOnly`: the chat on screen has no session of its own yet (see ChatView.connectionsChat): its map is looked at, and nothing is changed for it. */
+  private async chatMapHost(view: ChatView, baseline: string, all = false, id = baseline, lookOnly = false): Promise<ChatMapHost> {
     await this.listChats().catch(() => []);
     const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
     const listed = new Set((this.lastListing ?? []).filter((item) => !item.scratch).map((item) => item.id));
@@ -1784,10 +1785,12 @@ export default class VaultClaudePlugin extends Plugin {
     const home = this.homeProject(id);
     return {
       // Links and mentions act for the chat on screen, wherever the map is centred.
-      ...this.mapActions(baseline, view),
+      // Look-only: no chat for links to be made from.
+      ...this.mapActions(lookOnly ? null : baseline, view),
+      lookOnly,
       baseline: { id: baseline, title: this.chatTitleOf(baseline) },
       centre: id,
-      recentre: (centre) => this.chatMapHost(view, baseline, false, centre),
+      recentre: (centre) => this.chatMapHost(view, baseline, false, centre, lookOnly),
       title: this.chatTitleOf(id),
       ...map,
       hubs: this.hubNotes(),
@@ -1826,6 +1829,7 @@ export default class VaultClaudePlugin extends Plugin {
       },
       projects: () => this.projectNotes().map((file) => ({ path: file.path, name: file.basename })),
       setHome: async (path) => {
+        if (lookOnly) return;
         const file = path === null ? null : this.app.vault.getAbstractFileByPath(path);
         await this.setHomeProject(baseline, file instanceof TFile ? file : null);
         new Notice(file instanceof TFile ? `This chat is now in “${file.basename}”.` : 'This chat is out of its project; its notes no longer place it in one.');
@@ -1835,7 +1839,7 @@ export default class VaultClaudePlugin extends Plugin {
         return file && { path: file.path, name: file.basename, folder: this.projectFolder(file) };
       },
       all,
-      reload: (more) => this.chatMapHost(view, baseline, more, id),
+      reload: (more) => this.chatMapHost(view, baseline, more, id, lookOnly),
       linkedProject: home ? null : (() => {
         for (const other of this.linkedChats(id)) {
           const file = this.homeProject(other);

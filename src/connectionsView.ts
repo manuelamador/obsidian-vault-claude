@@ -79,6 +79,8 @@ export interface ChatMapHost extends MapActions {
   reload(all: boolean): Promise<ChatMapHost>;
   /** The map centred on another chat (`centre`), its actions still the chat on screen's (`baseline`). */
   recentre(centre: string): Promise<ChatMapHost>;
+  /** The chat on screen has no session of its own yet (opened from outside the panel): its map is looked at, and the controls that change it are left out. */
+  lookOnly: boolean;
   /** The chat on screen, which links, mentions and its project bar act for. */
   baseline: { id: string; title: string };
   /** The chat the map is centred on: the chat on screen, unless moved to another. */
@@ -639,7 +641,7 @@ export class ConnectionsView extends ItemView {
     if (this.links && this.links.chat !== host?.baseline.id) this.stopLinks();
     if (!host) {
       this.barEl.createSpan({ cls: 'vc-map-bar-name', text: 'No chat' });
-      this.mapEl.createDiv({ cls: 'vc-project-empty', text: 'Open a chat in the Claude panel: its connections show here, and follow it as you change chat. A chat opened from outside the panel shows here once you send it a message.' });
+      this.mapEl.createDiv({ cls: 'vc-project-empty', text: 'Open a chat in the Claude panel: its connections show here, and follow it as you change chat.' });
       return;
     }
     if (this.project) this.drawProjectCentre(this.project);
@@ -648,6 +650,11 @@ export class ConnectionsView extends ItemView {
     // Set by the drawing above, which TypeScript does not follow.
     (this.drawing as MapDrawing | null)?.glide(previous);
     if (this.links) return this.links.redraw();
+    if (host.lookOnly) {
+      this.linksEl.empty();
+      this.linksEl.createDiv({ cls: 'vc-project-empty', text: 'Links between chats can be made once you send this chat a message.' });
+      return;
+    }
     const links = this.linksEl.createEl('details');
     links.open = this.linksOpen;
     links.createEl('summary', { text: `Links of “${shortLabel(host.baseline.title, 50)}”` });
@@ -822,6 +829,15 @@ export class ConnectionsView extends ItemView {
       button.addEventListener('click', run);
     };
     const changed = () => void this.refresh();
+    if (host.lookOnly) {
+      if (host.project) {
+        const { project } = host;
+        const name = bar.createEl('a', { cls: 'vc-map-bar-name', text: project.name, attr: { 'aria-label': 'Show the project’s map' } });
+        name.addEventListener('click', () => void this.moveToProject(project.path));
+      } else bar.createSpan({ cls: 'vc-map-bar-name is-quiet', text: 'No project' });
+      bar.createSpan({ cls: 'vc-project-size', text: 'Look only: send this chat a message to put it in a project or link it.' });
+      return;
+    }
     if (host.project) {
       const { project } = host;
       const name = bar.createEl('a', { cls: 'vc-map-bar-name', text: project.name, attr: { 'aria-label': 'Show the project’s map' } });
@@ -885,6 +901,8 @@ export class ConnectionsView extends ItemView {
     const project = host.projectHolding(folder);
     if (project && project.folder !== folder) return [];
     const show = (path: string) => ({ label: 'Show the project', run: () => void this.moveToProject(path) });
+    // Look-only: a project can be looked at, nothing more.
+    if (host.lookOnly) return project ? [show(project.path)] : [];
     if (project && project.path === host.ownProject?.path) return [show(project.path), { label: 'Open project note', run: () => host.openProjectNote(project.path) }];
     if (project)
       return [
@@ -923,12 +941,12 @@ export class ConnectionsView extends ItemView {
     menuButton.addEventListener('click', (evt) => this.projectMenu(project.path, evt));
     const own = host.ownProject?.path === project.path;
     const chat = `“${shortLabel(host.baseline.title, 32)}”`;
-    const chatAction = this.actionEl.createEl('button', {
+    const chatAction = host.lookOnly ? null : this.actionEl.createEl('button', {
       cls: `vc-map-action${own ? '' : ' mod-cta'}`,
       text: own ? `Take ${chat} out` : host.ownProject ? `Move ${chat} here` : `Put ${chat} here`,
     });
-    chatAction.setAttr('aria-label', own ? `Takes “${host.baseline.title}”, the chat in the panel, out of this project.` : `“${host.baseline.title}”, the chat in the panel. ${HOME_TIP}`);
-    chatAction.addEventListener('click', () => void host.setHome(own ? null : project.path).then(() => this.refresh()));
+    chatAction?.setAttr('aria-label', own ? `Takes “${host.baseline.title}”, the chat in the panel, out of this project.` : `“${host.baseline.title}”, the chat in the panel. ${HOME_TIP}`);
+    chatAction?.addEventListener('click', () => void host.setHome(own ? null : project.path).then(() => this.refresh()));
     if (project.chats.length === 0) {
       mapEl.createDiv({ cls: 'vc-project-empty', text: 'No chats have worked on notes in this project yet.' });
       return;
@@ -977,6 +995,9 @@ export class ConnectionsView extends ItemView {
       const group = drawing.chat(id, at, 11, 'is-same-project');
       const touched = project.links.filter(([chat]) => chat === id).length;
       tooltip(group, `${project.titleOf(id)} · ${touched} note${touched === 1 ? '' : 's'} here\n${CHAT_CLICK}`);
+      // Its name beside it, on the side away from the middle, shortened (in full on hover).
+      const title = project.titleOf(id);
+      drawing.label(group, at, at.x >= 0 ? 'right' : 'left', shortLabel(title, 24), 14, title);
       chatNode(group, id, project, () => void this.peek(id));
     }
     // The project in the middle: its note, previewed on ⌘-hover, opened on a click.

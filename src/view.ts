@@ -1508,6 +1508,17 @@ export class ChatView extends ItemView {
     return this.scratch ? null : this.chatId;
   }
 
+  /**
+   * The chat whose connections the Connections pane shows: this one, or one opened from outside the
+   * panel, its session the original's until a message makes its copy (`lookOnly`: its map is looked
+   * at, nothing changed for it, which would be saved on the original and not reach the copy).
+   */
+  connectionsChat(): { id: string; lookOnly: boolean } | null {
+    if (this.scratch) return null;
+    if (this.chatId) return { id: this.chatId, lookOnly: false };
+    return this.resumeId ? { id: this.resumeId, lookOnly: true } : null;
+  }
+
   /** The chat's home project: its own once started, else its attached note's; none for the scratch chat. */
   private homeProjectFile(): TFile | null {
     if (this.scratch) return null;
@@ -1799,12 +1810,11 @@ export class ChatView extends ItemView {
 
   /**
    * The Connections pane (see ConnectionsView), showing the chat or (`atProject`) its project, and
-   * with `links` the chat's links unfolded under the map (the links chip's). Only once the chat has a
-   * session of its own: one opened from outside the panel has one after its first message.
+   * with `links` the chat's links unfolded under the map (the links chip's). Once the chat has started;
+   * one opened from outside the panel is shown look-only until its first message (see connectionsChat).
    */
   openConnections(atProject = false, links = false): void {
-    const id = this.currentChatId();
-    if (!id) {
+    if (!this.connectionsChat()) {
       new Notice(this.scratch ? 'The scratch chat has no connections.' : 'Send a message first: a chat has connections once it has started.');
       return;
     }
