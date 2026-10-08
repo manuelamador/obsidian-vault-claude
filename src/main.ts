@@ -24,7 +24,7 @@ import { ChooseFolderModal, ContextModal, CreateProjectModal, type FolderSource 
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
 import { chatMap, hubNotes, projectMap, withoutHubs } from './connections';
-import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type ProjectMapHost, type SearchHit } from './connectionsView';
+import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type ProjectMapHost } from './connectionsView';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -73,8 +73,6 @@ const PICK_UP_BYTES = 2_000_000;
 /** The most older chats read, at random, for those with a clue that something was left open. */
 const PICK_UP_OLDER_READS = 30;
 
-/** The most chats, projects and notes each the map's search lists. */
-const MAP_SEARCH_EACH = 6;
 /** How many of a chat's last messages its digest reads, when it has no memos (see linkedChatDigest). */
 const DIGEST_MESSAGES = 16;
 /** The instructions for summarising a chat that is included in another. */
@@ -180,6 +178,8 @@ export default class VaultClaudePlugin extends Plugin {
   private connectionsPanel: ChatView | null = null;
   /** The pane's map read again soon, after its data changed (see connectionsSoon). */
   private connectionsTimer: number | null = null;
+  /** When that read is due, in milliseconds since the epoch. */
+  private connectionsDue = 0;
   /** Projects' fingerprints, by path, once read (see projectHashNow): of Context and Instructions, and of Instructions alone. */
   private readonly projectHashes = new Map<string, { all: string; instructions: string } | null>();
   /** Models reported by Claude Code, cached so a new chat can list them before its session starts. */
@@ -1213,6 +1213,16 @@ export default class VaultClaudePlugin extends Plugin {
     if (planNote) void this.trashNote(planNote.path);
     delete this.unseen[id];
     for (const index of [this.noteChats, this.noteRefs, this.noteMentions, this.noteRemoved]) forgetChat(index, id);
+    // Its project and summary, and its links to and from other chats.
+    delete this.chatProjects[id];
+    delete this.chatSummaries[id];
+    delete this.chatLinks[id];
+    for (const [from, to] of Object.entries(this.chatLinks)) {
+      if (!to.includes(id)) continue;
+      const kept = to.filter((other) => other !== id);
+      if (kept.length > 0) this.chatLinks[from] = kept;
+      else delete this.chatLinks[from];
+    }
   }
 
   /** The positions of reply `replyKey`'s checkboxes that the reader flipped; a fresh set to change and save. */
@@ -1491,6 +1501,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (added.length === 0) return;
     this.chatLinks[from] = [...known, ...added];
     this.saveSoon();
+    this.chatLinksChanged();
   }
 
   /** The chats chat `id` linked to, and those that linked to it. */
@@ -1506,6 +1517,12 @@ export default class VaultClaudePlugin extends Plugin {
     if (kept.length > 0) this.chatLinks[from] = kept;
     else delete this.chatLinks[from];
     this.saveSoon();
+    this.chatLinksChanged();
+  }
+
+  /** A link between chats made or taken away, from wherever: the Connections pane draws it at once (a read the project change that follows shares). */
+  private chatLinksChanged(): void {
+    this.connectionsSoon(0);
   }
 
   /**
@@ -1564,7 +1581,6 @@ export default class VaultClaudePlugin extends Plugin {
     const panel = async () => view ?? this.frontChatView() ?? (await this.activateView());
     return {
       mentionChat: (id: string) => void panel().then((target) => target?.mentionChat(id)),
-      mentionNote: (path: string) => void panel().then((target) => target?.mentionNote(path)),
       titleOf: (id: string) => this.chatTitleOf(id),
       openNote: (path: string, newTab: boolean) => void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false),
       previewNote: (path: string, event: MouseEvent | KeyboardEvent, target: Element, parent: unknown) =>
@@ -1621,14 +1637,6 @@ export default class VaultClaudePlugin extends Plugin {
           log('reading a chat for its connections failed', item.id, error);
         }
       });
-      const inVault = (written: string) => {
-        const path = written.startsWith('/') ? vaultRelative(written, root) : written;
-        return path && !this.isHiddenPath(path) && this.onDisk(path) ? path : null;
-      };
-      const linkTarget = (target: string) => {
-        const file = this.app.metadataCache.getFirstLinkpathDest(target, '') ?? this.app.vault.getAbstractFileByPath(target);
-        return file instanceof TFile && file.extension === 'md' && !this.isHiddenPath(file.path) ? file.path : null;
-      };
       const removed = (path: string, id: string) => this.noteRemoved[path]?.includes(id) === true;
       const indexes: [NoteChats, NoteChats, NoteChats] = [{}, {}, {}];
       for (const item of items) {
@@ -1640,7 +1648,7 @@ export default class VaultClaudePlugin extends Plugin {
           });
           continue;
         }
-        const groups = [links.changed.map(inVault), links.sent.map(inVault), links.mentioned.map(linkTarget)];
+        const groups = this.linkedPaths(links, root);
         groups.forEach((paths, i) => {
           for (const path of paths) if (path && !removed(path, item.id)) linkNote(indexes[i], path, item.id);
         });
@@ -1660,6 +1668,44 @@ export default class VaultClaudePlugin extends Plugin {
     }
   }
 
+  /** A chat's notes as its file names them (see rebuildConnections), as vault paths: changed, sent, mentioned; null for none. */
+  private linkedPaths(links: { changed: string[]; sent: string[]; mentioned: string[] }, root: string): (string | null)[][] {
+    const inVault = (written: string) => {
+      const path = written.startsWith('/') ? vaultRelative(written, root) : written;
+      return path && !this.isHiddenPath(path) && this.onDisk(path) ? path : null;
+    };
+    const linkTarget = (target: string) => {
+      const file = this.app.metadataCache.getFirstLinkpathDest(target, '') ?? this.app.vault.getAbstractFileByPath(target);
+      return file instanceof TFile && file.extension === 'md' && !this.isHiddenPath(file.path) ? file.path : null;
+    };
+    return [links.changed.map(inVault), links.sent.map(inVault), links.mentioned.map(linkTarget)];
+  }
+
+  /**
+   * After part of chat `id` was removed: the notes that part changed (`changed`, vault paths) no longer
+   * list the chat as having changed them, unless what is left of it changed them too (read from its
+   * file). Only edits are taken off; nothing is added. Returns the notes taken off, for Undo to put
+   * back. When the file cannot be read, nothing is taken off.
+   */
+  async unlinkRemovedEdits(id: string, changed: string[]): Promise<string[]> {
+    const root = this.vaultRoot();
+    if (!root || changed.length === 0) return [];
+    let still: Set<string>;
+    try {
+      const { transcript, edits } = await loadChat(id, root);
+      still = new Set(this.linkedPaths({ changed: savedChangedFiles(transcript, edits), sent: [], mentioned: [] }, root)[0].filter((path): path is string => path !== null));
+    } catch (error) {
+      log('reading a chat for its connections failed', id, error);
+      return [];
+    }
+    const dropped = changed.filter((path) => !still.has(path) && unlinkNote(this.noteChats, path, id));
+    if (dropped.length > 0) {
+      this.notesLinked();
+      this.projectsChanged();
+    }
+    return dropped;
+  }
+
   /** The Connections pane, when open. */
   private connectionsPane(): ConnectionsView | null {
     const view = this.app.workspace.getLeavesOfType(CONNECTIONS_VIEW_TYPE)[0]?.view;
@@ -1670,17 +1716,20 @@ export default class VaultClaudePlugin extends Plugin {
    * Shows the Connections pane (see ConnectionsView) for the chat in panel `view`, opening it beside
    * the notes when it is not open; `atProject`, centred on the chat's project (the project chip's).
    */
-  async openConnections(view: ChatView, atProject = false): Promise<void> {
+  async openConnections(view: ChatView, atProject = false, links = false): Promise<void> {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(CONNECTIONS_VIEW_TYPE)[0] ?? null;
     if (!leaf) {
-      // Beside the note in front, in the main area, so that the panel and the pane are side by side.
-      const note = workspace.getMostRecentLeaf(workspace.rootSplit);
-      leaf = note ? workspace.createLeafBySplit(note, 'vertical') : workspace.getLeaf('split', 'vertical');
+      // A tab of its own in the main area, among the notes, rather than a split beside them.
+      leaf = workspace.getLeaf('tab');
       await leaf.setViewState({ type: CONNECTIONS_VIEW_TYPE, active: true });
     }
+    // Made the active tab, not only shown: the notes behind it then stop counting as in front.
+    workspace.setActiveLeaf(leaf, { focus: false });
     await workspace.revealLeaf(leaf);
-    if (leaf.view instanceof ConnectionsView) await this.followPanel(leaf.view, view, atProject);
+    if (!(leaf.view instanceof ConnectionsView)) return;
+    await this.followPanel(leaf.view, view, atProject);
+    if (links) leaf.view.openLinks();
   }
 
   /** Shows panel `view`'s chat in pane `pane` (none: no chat); `atProject`, centred on its project. */
@@ -1692,6 +1741,15 @@ export default class VaultClaudePlugin extends Plugin {
     await pane.follow(await this.chatMapHost(view, id), home?.path ?? null);
   }
 
+  /** Panel `view` is closing: a Connections pane following it follows another panel, or none. */
+  panelClosing(view: ChatView): void {
+    if (this.connectionsPanel !== view) return;
+    const next = this.chatViews().find((other) => other !== view && !other.isClosing()) ?? null;
+    this.connectionsPanel = next;
+    const pane = this.connectionsPane();
+    if (pane) void this.followPanel(pane, next);
+  }
+
   /** Panel `view` shows another chat (or a new one): the Connections pane follows it. */
   chatShown(view: ChatView): void {
     const pane = this.connectionsPane();
@@ -1699,13 +1757,19 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** The Connections pane's map read again in a second, once what it shows may have changed (notes linked, projects). */
-  private connectionsSoon(): void {
+  private connectionsSoon(delay = 1000): void {
     if (!this.connectionsPane()) return;
-    if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
+    // One read for a burst of changes: one already due sooner covers this one too.
+    const due = Date.now() + delay;
+    if (this.connectionsTimer !== null) {
+      if (this.connectionsDue <= due) return;
+      window.clearTimeout(this.connectionsTimer);
+    }
+    this.connectionsDue = due;
     this.connectionsTimer = window.setTimeout(() => {
       this.connectionsTimer = null;
       void this.connectionsPane()?.refresh();
-    }, 1000);
+    }, delay);
   }
 
   /** What chat `id`'s map shows, read now, and what it does. */
@@ -1746,7 +1810,7 @@ export default class VaultClaudePlugin extends Plugin {
       drawLinks: (el) => {
         const links = view.linksPane();
         links.mount(el);
-        return () => links.onClose();
+        return { stop: () => links.onClose(), redraw: () => links.redraw() };
       },
       refreshContext: (path, saved) => {
         const file = this.app.vault.getAbstractFileByPath(path);
@@ -1760,7 +1824,7 @@ export default class VaultClaudePlugin extends Plugin {
           void this.setProjectFolder(file, folder).then(changed);
         }).open();
       },
-      search: (query) => this.mapSearch(query, baseline),
+      projects: () => this.projectNotes().map((file) => ({ path: file.path, name: file.basename })),
       setHome: async (path) => {
         const file = path === null ? null : this.app.vault.getAbstractFileByPath(path);
         await this.setHomeProject(baseline, file instanceof TFile ? file : null);
@@ -1782,30 +1846,6 @@ export default class VaultClaudePlugin extends Plugin {
       folderSuggestion: home ? null : this.folderSuggestionFor(id),
       makeProject: (folder, created) => void this.openCreateProject({ folder, chatId: baseline, created }),
     };
-  }
-
-  /** The map's search: the chats (but `except`), projects and notes whose names, or paths, hold every word of `query`; a few of each. */
-  private mapSearch(query: string, except: string): SearchHit[] {
-    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const matches = (...texts: string[]) => words.every((word) => texts.some((text) => text.toLowerCase().includes(word)));
-    const chats: SearchHit[] = (this.lastListing ?? [])
-      .filter((item) => !item.scratch && item.id !== except && matches(item.title))
-      .slice(0, MAP_SEARCH_EACH)
-      .map((item) => {
-        const home = this.homeProject(item.id);
-        return { kind: 'chat', key: item.id, label: item.title, detail: `${formatDate(item.updatedAt)}${home ? ` · in “${home.basename}”` : ''}` };
-      });
-    const projects: SearchHit[] = this.projectNotes()
-      .filter((file) => matches(file.basename, this.projectFolder(file)))
-      .slice(0, MAP_SEARCH_EACH)
-      .map((file) => ({ kind: 'project', key: file.path, label: file.basename, detail: this.projectFolder(file) }));
-    const notes: SearchHit[] = this.app.vault
-      .getMarkdownFiles()
-      .filter((file) => !this.isHiddenPath(file.path) && !this.isProjectNote(file) && matches(file.path))
-      .sort((a, b) => b.stat.mtime - a.stat.mtime)
-      .slice(0, MAP_SEARCH_EACH)
-      .map((file) => ({ kind: 'note', key: file.path, label: file.basename, detail: file.parent?.path === '/' ? '' : (file.parent?.path ?? '') }));
-    return [...chats, ...projects, ...notes];
   }
 
   /** What project `file`'s map shows, read now; with `all`, every chat and note (see projectMap). */
@@ -2735,6 +2775,8 @@ export default class VaultClaudePlugin extends Plugin {
     this.forgetChatData(id);
     log('chat deleted', { id });
     await this.saveSettings();
+    // The Connections pane drawn again without it, staying where it is unless that was the chat itself.
+    void this.connectionsPane()?.chatGone(id);
     return true;
   }
 

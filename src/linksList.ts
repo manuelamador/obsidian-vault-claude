@@ -5,7 +5,7 @@ import { FuzzySuggestModal, setIcon, type App } from 'obsidian';
 import { estimateTokens, formatTokens } from './contextSize';
 import { errorText } from './log';
 
-/** A link as the dialog shows it. */
+/** A link as the list under the map shows it. */
 export interface LinkRow {
   id: string;
   title: string;
@@ -72,6 +72,11 @@ export class LinksList {
   /** Draws the links into `el`. */
   mount(el: HTMLElement): void {
     this.contentEl = el;
+    this.draw();
+  }
+
+  /** Draws the links again, in place, after they changed; a summary being written goes on. */
+  redraw(): void {
     this.draw();
   }
 

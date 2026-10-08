@@ -183,6 +183,7 @@ async function main(): Promise<void> {
     unseen: {} as Record<string, 'done' | 'error'>,
     // The panel another one hands its running chats to when it closes; none by default.
     heir: null as { adoptBackground(entry: unknown): void } | null,
+    panelClosing: () => undefined,
     otherChatView() {
       return this.heir;
     },

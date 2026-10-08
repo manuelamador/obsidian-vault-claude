@@ -250,9 +250,24 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
   <img src="docs/notes-menu.png" width="510" alt="The notes menu open from the button beside the paperclip, headed “Notes in this chat · ⌥-click to attach”: under Memos, This chat's memos in a table and the chat's one memo; under Changed, the note the chat changed; under Mentioned, a note it mentioned">
 
 - Scratch is first in history. Adjust its idle timeout in settings or clear it with its trash button. Under a reply in the scratch chat, **Continue as a chat** copies the conversation up to that reply into an ordinary chat, which stays in the history when the scratch chat starts over.
-- **Copy from here on**, the arrow beside one of your messages, starts a new chat from that message onward.
+- **The arrow beside one of your messages** opens a menu: **Copy from here on** starts a new chat from that message onward; **Move to a new chat** does the same and removes those messages here; **Send to another chat** puts the message's text in another chat's input, removing it here or not; **Remove from here on** deletes that message and everything after it, with **Undo** in the notice for 10 seconds. The notes those replies changed stay as they are, but no longer list the chat as having changed them.
 
   <img src="docs/copy-from-here.png" width="178" alt="The arrow button to the left of a message of yours, “Add a diagram”, shown when you point at the message">
+
+</details>
+
+### Connections, projects and links
+
+**See how a chat fits with your other work.** The Connections tab maps the chat in the panel: the notes it worked on, grouped by folder, and the other chats that share those notes or are linked with it. It follows the panel as you change chat.
+
+<details>
+<summary>Connections, projects and links between chats</summary>
+
+- Open it with **Open connections**, or from the project and links chips above the input. It opens as a tab among your notes.
+- Click a chat on the map to open it in the panel, or ⌥-click it to look at its map without changing the panel; ← and → in the tab step back and forth through what you looked at. A chat started outside the panel appears once you have sent it a message.
+- **Projects:** a project is a note tied to a folder. A chat belongs to one, from the notes it worked on or put there by hand (**Put in**, **Move…**, **Take out**, **Find a project…**). Its project's context goes with the chat's messages. **Create project…** makes one; **Write every project's context anew** refreshes them.
+- **Links between chats:** **Link a chat…**, in the links under the map, links the chat with another, so you can go from one to the other; both show it. Nothing is sent unless you tick **Include**, which sends a short digest of the other chat once, with your next message.
+- **Rebuild connections from chat files** (also in the settings) reads every chat's file again and rebuilds which notes each chat changed, was sent or mentioned.
 
 </details>
 
@@ -293,7 +308,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 ## Your data
 
 - **Conversations** are Claude Code's own session files, in `~/.claude/projects/` on your computer, outside the vault. Deleting a chat from the history deletes its file.
-- **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings and each chat's title, pin, unsent text, attached note, note links and ticked checkboxes. A chat's entries go when it is deleted. Obsidian Sync copies the file if it syncs plugin settings.
+- **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings and each chat's title, pin, unsent text, attached note, note links and ticked checkboxes. Deleting a chat removes its entries there, including its links to other chats and its project. Obsidian Sync copies the file if it syncs plugin settings.
 - **The diagnostic log** records process starts, stops and errors, with session ids and paths (the vault's and Claude Code's), never message text: `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
 - Nothing is sent anywhere but through Claude Code itself.
 
@@ -323,7 +338,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ## Commands
 
-Open chat · New chat · New chat in a new tab · Edit selection with Claude · Find in chat · Go to previous / next message you sent · List messages you sent · Write this message in a note · Send the draft note · Send this note to Claude as a prompt · Quote the selected chat text in your next message · Open side chat · Open scratch chat · Clear scratch chat · Toggle fast mode · Chat history · Focus chat input · Stop Claude · Rename chat · Branch this chat into a new tab · Save chat as note · Save chat summary as note · Ask Claude about selection · Take all chats off the phone · Toggle phone access (Remote Control) · Pick up where you left off · Pick up where you left off: show ignored chats again
+Open chat · New chat · New chat in a new tab · Chat history · Pick up where you left off · Pick up where you left off: show ignored chats again · Edit selection with Claude · Find in chat · Go to previous / next message you sent · List messages you sent · Write this message in a note · Send the draft note · Send this note to Claude as a prompt · Suggest frontmatter updates for this note · Quote the selected chat text in your next message · Open side chat · Open scratch chat · Clear scratch chat · Toggle fast mode · Focus chat input · Stop Claude · Rename chat · Branch this chat into a new tab · Save chat as note · Save chat summary as note · Ask Claude about selection · Continue from this memo · Open connections · Create project… · Write every project’s context anew · Rebuild connections from chat files · Take all chats off the phone · Toggle phone access (Remote Control)
 
 ## Limitations
 

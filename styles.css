@@ -2433,9 +2433,7 @@ body:has(.vc-pick-up) .popover.hover-popover {
 }
 
 .vc-project-name,
-
 .vc-project-label,
-.vc-project-chat-when,
 .vc-project-size,
 .vc-project-empty {
   color: var(--text-muted);
@@ -2910,33 +2908,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   pointer-events: none;
 }
 
-.vc-map-search {
-  position: relative;
-}
-
-.vc-map-search input {
-  width: 100%;
-}
-
-.vc-map-results {
-  position: absolute;
-  z-index: 2;
-  left: 0;
-  right: 0;
-  max-height: 50vh;
-  overflow-y: auto;
-  background: var(--background-primary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-  box-shadow: var(--shadow-s);
-}
-
-.vc-map-hit-actions {
-  margin-left: auto;
-  display: flex;
-  gap: var(--size-4-1);
-}
-
 /* The chat's project, at the top of its map. */
 .vc-map-bar {
   display: flex;
@@ -3070,7 +3041,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
 
 .vc-map-pane > .vc-map-bar,
 .vc-map-pane > .vc-map-actions-row,
-.vc-map-pane > .vc-map-search,
 .vc-map-pane > .vc-map-foot {
   flex: none;
 }

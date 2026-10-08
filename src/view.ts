@@ -1135,6 +1135,7 @@ export class ChatView extends ItemView {
 
   async onClose(): Promise<void> {
     this.closing = true;
+    this.plugin.panelClosing(this);
     closeImage();
     this.sideChat.close();
     this.saveDraft();
@@ -1634,12 +1635,6 @@ export class ChatView extends ItemView {
     this.addToInput(this.plugin.chatMarkdownLink(id), `“${this.plugin.chatTitleOf(id)}” mentioned: linked when the message is sent`);
   }
 
-  /** @-mentions note `path` in the message being typed. */
-  mentionNote(path: string): void {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (file instanceof TFile) this.addToInput(`@[[${this.mentionTarget(file)}]] `, `“${file.basename}” mentioned`);
-  }
-
   /** The chat's links (see LinksList), drawn under the chat's map in Connections: those it links to, each to include or not, and those linking to it. */
   linksPane(): LinksList {
     const titleOf = (id: string) => this.plugin.chatTitleOf(id);
@@ -1803,14 +1798,18 @@ export class ChatView extends ItemView {
     );
   }
 
-  /** The Connections pane (see ConnectionsView), showing the chat or (`atProject`) its project: only once the chat has started. */
-  openConnections(atProject = false): void {
+  /**
+   * The Connections pane (see ConnectionsView), showing the chat or (`atProject`) its project, and
+   * with `links` the chat's links unfolded under the map (the links chip's). Only once the chat has a
+   * session of its own: one opened from outside the panel has one after its first message.
+   */
+  openConnections(atProject = false, links = false): void {
     const id = this.currentChatId();
     if (!id) {
       new Notice(this.scratch ? 'The scratch chat has no connections.' : 'Send a message first: a chat has connections once it has started.');
       return;
     }
-    void this.plugin.openConnections(this, atProject);
+    void this.plugin.openConnections(this, atProject, links);
   }
 
   /** Projects changed (a chat joined or left one, its Context changed): the chip shows it. */
@@ -3113,6 +3112,8 @@ export class ChatView extends ItemView {
     const root = this.plugin.vaultRoot();
     if (!id || !root) return false;
     const item: HistoryItem = { id, title: this.chatName ?? 'Untitled chat', updatedAt: Date.now(), fromPanel: true };
+    // The notes the part removed changed, read while it is still on screen.
+    const changed = this.removalFrom(uuid)?.notes ?? [];
     // Its process ends first: it holds the conversation and writes to the file as it exits.
     this.newChat();
     this.closeBackgroundChat(id);
@@ -3127,17 +3128,19 @@ export class ChatView extends ItemView {
       return false;
     }
     log('removed from a message', { chat: id, from: uuid });
+    // Notes only the removed part changed no longer list the chat as having changed them.
+    const dropped = await this.plugin.unlinkRemovedEdits(id, changed);
     if (reopen) await this.openChat(item);
     const notice = createFragment((el) => {
       el.appendText(`Removed from “${item.title}”. `);
-      el.createEl('a', { text: 'Undo' }).addEventListener('click', () => void this.undoRemove(item, done));
+      el.createEl('a', { text: 'Undo' }).addEventListener('click', () => void this.undoRemove(item, done, dropped));
     });
     new Notice(notice, 10_000);
     return true;
   }
 
-  /** Puts back what removeFrom took, when nothing was added to the chat since; the chat is shown again. */
-  private async undoRemove(item: HistoryItem, done: { kept: string; cut: string }): Promise<void> {
+  /** Puts back what removeFrom took, when nothing was added to the chat since, and the note links it dropped (`dropped`); the chat is shown again. */
+  private async undoRemove(item: HistoryItem, done: { kept: string; cut: string }, dropped: string[]): Promise<void> {
     const root = this.plugin.vaultRoot();
     if (!root) return;
     if (this.plugin.chatHolder(item.id, this) || (this.chatId === item.id && this.busy)) {
@@ -3151,6 +3154,7 @@ export class ChatView extends ItemView {
       log('undoing a removal failed', error);
       return false;
     });
+    if (put) for (const path of dropped) this.plugin.linkNoteChat(path, item.id, false);
     new Notice(put ? `Put back in “${item.title}”.` : 'It could not be put back: the chat has changed since.');
     await this.openChat(item);
   }
@@ -3162,7 +3166,13 @@ export class ChatView extends ItemView {
     new ConfirmModal(this.app, 'Move to a new chat', `This moves ${this.removalWords(removal)}`, 'Move', async () => {
       const copy = await this.branch(undefined, false, uuid, false);
       if (!copy) return;
-      if (!(await this.removeFrom(uuid, false))) return;
+      if (!(await this.removeFrom(uuid, false))) {
+        // Not cut here: the copy would hold the same messages a second time, and goes.
+        await this.plugin.deleteChat(copy);
+        return;
+      }
+      // The copy holds the part moved: the notes that part changed list it.
+      for (const path of removal.notes) this.plugin.linkNoteChat(path, copy, false);
       await this.openChat({ id: copy, title: this.plugin.chatTitleOf(copy), updatedAt: Date.now(), fromPanel: true });
     }).open();
   }
@@ -4234,7 +4244,7 @@ export class ChatView extends ItemView {
   private onContextClick(evt: MouseEvent): void {
     const target = evt.target as HTMLElement;
     if (target.closest('.vc-project-chip')) this.openConnections(true);
-    else if (target.closest('.vc-links-chip')) this.openConnections();
+    else if (target.closest('.vc-links-chip')) this.openConnections(false, true);
     else if (target.closest('.vc-project-suggestion')) {
       const suggested = this.projectSuggestion();
       if (suggested && this.chatId) void this.plugin.setHomeProject(this.chatId, suggested).then(() => new Notice(`This chat is now in “${suggested.basename}”.`));
