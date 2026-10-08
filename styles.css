@@ -3109,3 +3109,29 @@ body:has(.vc-pick-up) .popover.hover-popover {
   opacity: 0;
 }
 
+/* A map node's tooltip (see MapDrawing.showTip), drawn over the map: Obsidian shows none for SVG. */
+.vc-map-tip {
+  position: absolute;
+  z-index: 3;
+  max-width: 320px;
+  padding: var(--size-2-2) var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary-alt);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: var(--shadow-s);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+  pointer-events: none;
+}
+
+/* On a project's map, the chat in the panel: ringed in the accent colour, its name in full strength. */
+.vc-map-node.is-chat.is-open-chat circle {
+  stroke: var(--interactive-accent);
+  stroke-width: 3px;
+}
+
+.vc-map-node.is-open-chat text {
+  fill: var(--text-normal);
+  font-weight: var(--font-semibold);
+}

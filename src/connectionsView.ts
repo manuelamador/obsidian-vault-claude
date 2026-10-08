@@ -1,9 +1,9 @@
 // The Connections pane, drawn (see connections.ts): the map of the chat in the Claude panel, which
-// it follows, centred on that chat (its notes and the chats that share them), on another chat looked
-// at, or on a project (its chats and their notes). Plain SVG. Notes are squares with a page glyph,
+// it follows, centred on that chat (its notes and the chats that share them) or on a project (its
+// chats and their notes). Plain SVG. Notes are squares with a page glyph,
 // chats circles with a speech bubble, folders arcs behind their notes. A note opens in a new tab on a
-// click and shows Obsidian's page preview on ⌘-hover; a chat opens in the panel on a click, its map is
-// looked at on ⌥-click, and a right-click offers to mention, link or unlink it; a folder's arc offers
+// click and shows Obsidian's page preview on ⌘-hover; a chat opens in the panel on a click, and a
+// right-click offers to mention, link or unlink it; a folder's arc offers
 // its project, or to make it one.
 import { ItemView, Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import { ProjectPicker } from './projectModals';
@@ -12,7 +12,7 @@ import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type 
 
 const SVG = 'http://www.w3.org/2000/svg';
 /** What a click on a chat does, said in its tooltip. */
-const CHAT_CLICK = 'Click to open it in the panel · ⌥-click to look at its map · right-click to mention or link it';
+const CHAT_CLICK = 'Click to open it in the panel · right-click to mention or link it';
 /** What putting a chat in a project does, said where it is offered. A chat has at most one project. */
 const HOME_TIP = "This project's Context then goes with this chat's next message. A chat is in one project at most.";
 /** How a note is linked, by weight (see LINK_WEIGHTS). */
@@ -77,8 +77,6 @@ export interface ChatMapHost extends MapActions {
   projectHolding(folder: string): { path: string; name: string; folder: string } | null;
   /** The map's data again, after something it shows changed; with `all`, every note and chat (see chatMap). */
   reload(all: boolean): Promise<ChatMapHost>;
-  /** The map centred on another chat (`centre`), its actions still the chat on screen's (`baseline`). */
-  recentre(centre: string): Promise<ChatMapHost>;
   /** The chat on screen has no session of its own yet (opened from outside the panel): its map is looked at, and the controls that change it are left out. */
   lookOnly: boolean;
   /** The chat on screen, which links, mentions and its project bar act for. */
@@ -100,9 +98,17 @@ function svg<K extends keyof SVGElementTagNameMap>(parent: Element, tag: K, attr
   return el;
 }
 
-/** A hover tooltip on `el`: SVG's own `<title>`. */
+/** The map's tooltips, by node: shown when the node is pointed at (see MapDrawing.node). */
+const tooltips = new WeakMap<Element, string>();
+
+/**
+ * A hover tooltip on `el`, drawn by the map when the node is pointed at (see MapDrawing.showTip):
+ * Obsidian shows none for an SVG element, neither SVG's `<title>` nor its `aria-label` (kept for
+ * screen readers).
+ */
 function tooltip(el: Element, text: string): void {
-  svg(el, 'title').textContent = text;
+  tooltips.set(el, text);
+  el.setAttribute('aria-label', text);
 }
 
 /** The path of a ring segment between radii `inner` and `outer`, from angle `start` to `end`. */
@@ -146,8 +152,13 @@ class MapDrawing {
   private readonly whole: ViewBox;
   private view: ViewBox;
 
+  /** The tooltip of the node pointed at, drawn over the map (see tooltip). */
+  private readonly tipEl: HTMLElement;
+
   constructor(parent: HTMLElement, width: number, height: number) {
     const frame = parent.createDiv({ cls: 'vc-map-frame' });
+    this.tipEl = frame.createDiv({ cls: 'vc-map-tip' });
+    this.tipEl.hide();
     this.whole = { x: -width / 2, y: -height / 2, w: width, h: height };
     this.view = { ...this.whole };
     this.root = svg(frame, 'svg', { viewBox: `${-width / 2} ${-height / 2} ${width} ${height}`, class: 'vc-map' });
@@ -269,15 +280,34 @@ class MapDrawing {
   node(key: string, cls: string): SVGGElement {
     const group = svg(this.nodes, 'g', { class: `vc-map-node ${cls}`, tabindex: 0 });
     group.addEventListener('mouseenter', () => {
+      this.showTip(group);
       this.light(key);
       this.showFull(group);
     });
     group.addEventListener('mouseleave', () => {
+      this.tipEl.hide();
       this.light(null);
       this.showFull(null);
     });
     this.groups.set(key, group);
     return group;
+  }
+
+  /** Shows `group`'s tooltip (see tooltip) just above it, over the map, kept within the map's width. */
+  private showTip(group: SVGGElement): void {
+    const text = tooltips.get(group);
+    if (!text) return this.tipEl.hide();
+    this.tipEl.setText(text);
+    this.tipEl.show();
+    const frame = this.tipEl.parentElement?.getBoundingClientRect();
+    const node = group.getBoundingClientRect();
+    if (!frame) return;
+    const width = this.tipEl.offsetWidth;
+    const left = Math.min(Math.max(node.left + node.width / 2 - frame.left - width / 2, 4), frame.width - width - 4);
+    const top = node.top - frame.top - this.tipEl.offsetHeight - 6;
+    this.tipEl.style.left = `${left}px`;
+    // No room above (a node at the top): below it instead.
+    this.tipEl.style.top = `${top >= 0 ? top : node.bottom - frame.top + 6}px`;
   }
 
   /** A note: a page with a folded corner. */
@@ -360,22 +390,17 @@ function noteNode(group: SVGGElement, path: string, actions: MapActions, parent:
 }
 
 /**
- * Makes a chat open in the panel on a click (the map then follows it), its map be looked at on ⌥-click
- * (`look`), and a right-click offer those, mentioning it in the message being typed, and linking
- * (unlinking) it from the panel's chat; `changed` runs after a link changes.
+ * Makes a chat open in the panel on a click (the map then follows it), and a right-click offer that,
+ * mentioning it in the message being typed, and linking (unlinking) it from the panel's chat.
  */
-function chatNode(group: SVGGElement, id: string, actions: MapActions, look: () => void): void {
-  group.addEventListener('click', (evt) => {
-    if (evt.altKey) look();
-    else actions.openChat(id);
-  });
+function chatNode(group: SVGGElement, id: string, actions: MapActions): void {
+  group.addEventListener('click', () => actions.openChat(id));
   group.addEventListener('contextmenu', (evt) => {
     evt.preventDefault();
     const linked = actions.linked(id);
     const menu = new Menu();
     const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
     add('Open in panel', 'message-square', () => actions.openChat(id));
-    add('Look at its map', 'locate-fixed', look);
     add('Mention in your message', 'at-sign', () => actions.mentionChat(id));
     if (linked !== null) {
       // The map is drawn again by the plugin, as for a link made anywhere (see chatLinksChanged).
@@ -464,12 +489,12 @@ export const CONNECTIONS_VIEW_TYPE = 'vault-claude-connections';
  * what is left, the legend, and the chat's links. Centred on the panel's chat: its notes
  * round it, grouped by folder under arcs, each folder on the same side from one chat to the next;
  * the chats sharing them, or linked with it, outside. A chat on the map opens in the panel on a click
- * (the map follows), or is looked at on ⌥-click; a project's map shows its chats round it, their notes
+ * (the map follows); a project's map shows its chats round it, their notes
  * outside. Nodes on both the map before and the one after glide from one place to the other. Each
- * move (another chat looked at, a project) is a step in the tab's history, for its ← and →.
+ * move to a project and back is a step in the tab's history, for its ← and →.
  */
 export class ConnectionsView extends ItemView {
-  /** The map of the panel's chat (null: no chat with connections in the panel), centred on it or on another chat looked at. */
+  /** The map of the panel's chat (null: no chat with connections in the panel). */
   private host: ChatMapHost | null = null;
   /** The map centred on a project, when it is. */
   private project: ProjectMapHost | null = null;
@@ -545,14 +570,19 @@ export class ConnectionsView extends ItemView {
       project ? project.reload(all ?? project.all) : null,
     ]);
     if (generation !== this.generation) return;
+    // What the map shows, its functions left out (JSON drops them): unchanged, it is not drawn
+    // again, so a node pointed at keeps its tooltip and label rather than being replaced under the
+    // pointer by each refresh while a chat works. The links under it are drawn again all the same.
+    const key = (map: unknown) => JSON.stringify(map);
+    const same = key([host, project]) === key([nextHost ?? host, nextProject ?? project]);
     if (nextHost) this.host = nextHost;
     if (nextProject) this.project = nextProject;
-    this.draw();
+    if (same) this.links?.redraw();
+    else this.draw();
   }
 
   /**
-   * Where the map is centred, as the tab's history keeps it: a chat (the panel's or one looked at)
-   * or a project. Obsidian asks for it before each move, to put on the tab's ← list.
+   * Where the map is centred, as the tab's history keeps it: the panel's chat, or a project. Obsidian asks for it before each move, to put on the tab's ← list.
    */
   getState(): Record<string, unknown> {
     return { centre: this.host?.centre ?? null, project: this.project?.path ?? null };
@@ -566,7 +596,7 @@ export class ConnectionsView extends ItemView {
     if (this.going) result.history = true;
     const place = (state ?? {}) as { centre?: unknown; project?: unknown };
     if (typeof place.project === 'string') await this.showProject(place.project);
-    else if (typeof place.centre === 'string') await this.showChat(place.centre);
+    else this.showOwn();
   }
 
   /** A move made in the pane, under way (see go). */
@@ -583,25 +613,17 @@ export class ConnectionsView extends ItemView {
     }
   }
 
-  /** Centres the map on chat `id` without the panel changing: looking at it. */
-  private peek(id: string): Promise<void> {
-    return this.go({ centre: id, project: null });
-  }
-
-  /** Centres the map on chat `id` (see peek), not as a step of its own. */
-  private async showChat(id: string): Promise<void> {
+  /** The map of the panel's chat again, not as a step of its own (a step back, a project gone). */
+  private showOwn(): void {
     if (!this.host) return;
-    const generation = ++this.generation;
-    const host = await this.host.recentre(id);
-    if (generation !== this.generation) return;
-    this.host = host;
+    ++this.generation;
     this.project = null;
     this.draw();
   }
 
-  /** Back to the map of the panel's chat. */
+  /** Back to the map of the panel's chat, as a step in the tab's history. */
   private backToChat(): Promise<void> {
-    return this.host ? this.peek(this.host.baseline.id) : Promise.resolve();
+    return this.host ? this.go({ centre: this.host.baseline.id, project: null }) : Promise.resolve();
   }
 
   /** Centres the map on project `path`. */
@@ -616,7 +638,7 @@ export class ConnectionsView extends ItemView {
     // Gone since (a step in the tab's history to a project deleted or renamed): the chat's map instead.
     const project = await this.host.projectMap(path).catch(() => null);
     if (generation !== this.generation) return;
-    if (!project) return this.showChat(this.host.baseline.id);
+    if (!project) return this.showOwn();
     this.project = project;
     this.draw();
   }
@@ -645,7 +667,6 @@ export class ConnectionsView extends ItemView {
       return;
     }
     if (this.project) this.drawProjectCentre(this.project);
-    else if (host.centre !== host.baseline.id) this.drawPeek();
     else this.drawOwn();
     // Set by the drawing above, which TypeScript does not follow.
     (this.drawing as MapDrawing | null)?.glide(previous);
@@ -662,12 +683,6 @@ export class ConnectionsView extends ItemView {
     this.links = { ...host.drawLinks(links.createDiv()), chat: host.baseline.id };
   }
 
-  /** Chat `id` was deleted: the map drawn again without it, or back on the panel's chat when it was the one looked at. */
-  async chatGone(id: string): Promise<void> {
-    if (!this.host) return;
-    if (!this.project && this.host.centre === id) return this.showChat(this.host.baseline.id);
-    await this.refresh();
-  }
 
   /** The chat's links unfolded under the map, and brought into view (the panel's links chip). */
   openLinks(): void {
@@ -694,19 +709,6 @@ export class ConnectionsView extends ItemView {
     setIcon(this.barEl.createSpan({ cls: 'vc-project-group-icon' }), 'message-square');
     this.barEl.createSpan({ cls: 'vc-map-bar-name', text: host.title, attr: { title: host.title } });
     this.drawProjectBar(this.actionEl);
-    this.drawChatMap(host);
-  }
-
-  /** Another chat looked at: the way back, its name, Open in panel; links and mentions still act for the panel's chat. */
-  private drawPeek(): void {
-    const host = this.host;
-    if (!host) return;
-    this.backButton();
-    setIcon(this.barEl.createSpan({ cls: 'vc-project-group-icon' }), 'message-square');
-    this.barEl.createSpan({ cls: 'vc-map-bar-name', text: host.title, attr: { title: host.title } });
-    const centre = host.centre;
-    this.barEl.createEl('button', { cls: 'vc-map-action mod-cta', text: 'Open in panel' }).addEventListener('click', () => host.openChat(centre));
-    this.actionEl.createSpan({ cls: 'vc-project-size', text: `Links and mentions act for “${shortLabel(host.baseline.title, 50)}”, the chat in the panel.` });
     this.drawChatMap(host);
   }
 
@@ -777,7 +779,7 @@ export class ConnectionsView extends ItemView {
       if (label) drawing.label(group, label.at, label.side, label.text, 14, host.titleOf(chat.id));
       const shared = `${chat.shared.length} shared note${chat.shared.length === 1 ? '' : 's'}`;
       tooltip(group, `${host.titleOf(chat.id)}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : chat.linkedFrom ? ' · links to this chat' : ''}\n${CHAT_CLICK}`);
-      chatNode(group, chat.id, host, () => void this.peek(chat.id));
+      chatNode(group, chat.id, host);
     }
     const centreNode = drawing.chat(me, centre, 18, 'is-centre');
     const title = svg(centreNode, 'text', { x: 0, y: 34, 'text-anchor': 'middle' });
@@ -991,14 +993,15 @@ export class ConnectionsView extends ItemView {
       noteNode(group, path, project, this);
     }
     for (const [id, at] of chatAt) {
-      // Every chat here is in the project: its colour.
-      const group = drawing.chat(id, at, 11, 'is-same-project');
+      // Every chat here is in the project: its colour. The chat in the panel is marked, larger.
+      const open = id === host.baseline.id;
+      const group = drawing.chat(id, at, open ? 14 : 11, `is-same-project${open ? ' is-open-chat' : ''}`);
       const touched = project.links.filter(([chat]) => chat === id).length;
-      tooltip(group, `${project.titleOf(id)} · ${touched} note${touched === 1 ? '' : 's'} here\n${CHAT_CLICK}`);
+      tooltip(group, `${project.titleOf(id)}${open ? ' · the chat in the panel' : ''} · ${touched} note${touched === 1 ? '' : 's'} here${open ? '' : `\n${CHAT_CLICK}`}`);
       // Its name beside it, on the side away from the middle, shortened (in full on hover).
       const title = project.titleOf(id);
       drawing.label(group, at, at.x >= 0 ? 'right' : 'left', shortLabel(title, 24), 14, title);
-      chatNode(group, id, project, () => void this.peek(id));
+      chatNode(group, id, project);
     }
     // The project in the middle: its note, previewed on ⌘-hover, opened on a click.
     const node = drawing.node(project.path, 'is-project-node');

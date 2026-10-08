@@ -1790,7 +1790,6 @@ export default class VaultClaudePlugin extends Plugin {
       lookOnly,
       baseline: { id: baseline, title: this.chatTitleOf(baseline) },
       centre: id,
-      recentre: (centre) => this.chatMapHost(view, baseline, false, centre, lookOnly),
       title: this.chatTitleOf(id),
       ...map,
       hubs: this.hubNotes(),
@@ -2780,7 +2779,7 @@ export default class VaultClaudePlugin extends Plugin {
     log('chat deleted', { id });
     await this.saveSettings();
     // The Connections pane drawn again without it, staying where it is unless that was the chat itself.
-    void this.connectionsPane()?.chatGone(id);
+    void this.connectionsPane()?.refresh();
     return true;
   }
 
