@@ -33,9 +33,8 @@ export interface LinksHost {
   open(id: string): void;
   summarise(id: string, signal: AbortSignal): Promise<void>;
   forgetSummary(id: string): void;
-  /** The chats that may be linked, the most recent first. */
-  candidates(): { id: string; title: string }[];
-  link(id: string): void;
+  /** Chooses a chat to link to, in the history window (see ChatView.openHistory); the list is drawn again once it is linked. */
+  chooseChat(): void;
 }
 
 /** Picks a chat: to link to, or another named by `placeholder`. */
@@ -64,10 +63,7 @@ export class LinksList {
 
   private readonly running = new Set<AbortController>();
 
-  constructor(
-    private readonly app: App,
-    private readonly host: LinksHost,
-  ) {}
+  constructor(private readonly host: LinksHost) {}
 
   /** Draws the links into `el`. */
   mount(el: HTMLElement): void {
@@ -98,17 +94,7 @@ export class LinksList {
       this.head(box, row);
     }
     const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
-    foot.createEl('button', { text: 'Link a chat…' }).addEventListener('click', () => {
-      const taken = new Set(to.map((row) => row.id));
-      new ChatPicker(
-        this.app,
-        host.candidates().filter((chat) => !taken.has(chat.id)),
-        (chat) => {
-          host.link(chat.id);
-          this.draw();
-        },
-      ).open();
-    });
+    foot.createEl('button', { text: 'Link a chat…' }).addEventListener('click', () => host.chooseChat());
   }
 
   /** A link's title (opening its chat) and what it is. */

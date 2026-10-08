@@ -810,8 +810,8 @@ export class ConnectionsView extends ItemView {
   /**
    * The chat's project, in `bar`: its name (centring on it) and its Project menu, then Move… (another
    * project, picked) and Take chat out; or, with none, the project holding most of its notes, the
-   * project of a chat it is linked with and the folder its notes suggest, each in one click, and Find
-   * a project… for any other.
+   * project of a chat it is linked with and the folder its notes suggest, each in one click, and Add
+   * to a project… for any other.
    */
   private drawProjectBar(bar: HTMLElement): void {
     const { host } = this;
@@ -845,7 +845,7 @@ export class ConnectionsView extends ItemView {
       const { folder } = host.folderSuggestion;
       act(`Make “${folder}” a project…`, () => host.makeProject(folder, changed));
     }
-    act('Find a project…', () => this.pickProject(host, 'Put this chat in…', null, changed));
+    act('Add to a project…', () => this.pickProject(host, 'Add this chat to…', null, changed));
   }
 
   /** The project whose folders hold most of the chat's notes, if any. */

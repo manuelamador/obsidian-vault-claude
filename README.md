@@ -265,7 +265,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 - Open it with **Open connections**, or from the project and links chips above the input. It opens as a tab among your notes.
 - Click a chat on the map to open it in the panel, or ⌥-click it to look at its map without changing the panel; ← and → in the tab step back and forth through what you looked at. A chat started outside the panel appears once you have sent it a message.
-- **Projects:** a project is a note tied to a folder. A chat belongs to one, from the notes it worked on or put there by hand (**Put in**, **Move…**, **Take out**, **Find a project…**). Its project's context goes with the chat's messages. **Create project…** makes one; **Write every project's context anew** refreshes them.
+- **Projects:** a project is a note tied to a folder. A chat belongs to one, from the notes it worked on or put there by hand (**Put in**, **Move…**, **Take out**, **Add to a project…**). Its project's context goes with the chat's messages. **Create project…** makes one; **Write every project's context anew** refreshes them.
 - **Links between chats:** **Link a chat…**, in the links under the map, links the chat with another, so you can go from one to the other; both show it. Nothing is sent unless you tick **Include**, which sends a short digest of the other chat once, with your next message.
 - **Rebuild connections from chat files** (also in the settings) reads every chat's file again and rebuilds which notes each chat changed, was sent or mentioned.
 

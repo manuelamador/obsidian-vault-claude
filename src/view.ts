@@ -1646,7 +1646,7 @@ export class ChatView extends ItemView {
       this.setProjectStateNow(change({ ...this.projectStateNow() }));
       this.projectsChanged();
     };
-    return new LinksList(this.app, {
+    return new LinksList({
       rows: () => {
         const state = this.projectStateNow();
         return [
@@ -1686,8 +1686,7 @@ export class ChatView extends ItemView {
         this.plugin.forgetLinkedSummary(id);
         this.projectsChanged();
       },
-      candidates: () => (this.plugin.listedChats() ?? []).filter((item) => !item.scratch && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title })),
-      link: (id) => this.linkChatHere(id),
+      chooseChat: () => void this.openHistory(true),
     });
   }
 
@@ -2438,7 +2437,8 @@ export class ChatView extends ItemView {
 
   // ---- History -----------------------------------------------------------
 
-  async openHistory(): Promise<void> {
+  /** The history window; with `linking`, choosing a chat links this one to it rather than opening it (the links' Link a chat…). */
+  async openHistory(linking = false): Promise<void> {
     const root = this.plugin.vaultRoot();
     if (!root) return;
     // The chats as last listed show at once, and those listed now replace them if anything changed;
@@ -2458,7 +2458,13 @@ export class ChatView extends ItemView {
         },
       ),
       {
-        pick: (item, newTab) => void this.pickChat(item, newTab),
+        pick: (item, newTab) => {
+          if (!linking) return void this.pickChat(item, newTab);
+          if (item.scratch || item.id === this.chatId) return void new Notice(item.scratch ? 'The scratch chat cannot be linked.' : 'A chat cannot be linked to itself.');
+          if (this.linksTo().some((link) => link.id === item.id)) return void new Notice(`Already linked to “${item.title}”.`);
+          this.linkChatHere(item.id);
+          new Notice(`Linked to “${item.title}”.`);
+        },
         togglePin: (item) => this.plugin.togglePin(item.id),
         rename: (item, title) => void this.plugin.renameChatTitle(item.id, title),
         remove: (item) => (item.scratch ? this.plugin.clearScratchChat().then(() => true) : this.plugin.deleteChat(item.id)),
@@ -2470,10 +2476,12 @@ export class ChatView extends ItemView {
         // Without the prefix new projects are named with, which every one would match.
         projectName: (item) => this.plugin.homeProject(item.id)?.basename.replace(/^Claude Project — /, '') ?? null,
         createProject: (folder) => void this.plugin.openCreateProject({ folder }),
-        link: this.scratch ? undefined : (item) => this.linkChatHere(item.id),
+        // Choosing a row links it already, when linking: no Link button on the rows too.
+        link: this.scratch || linking ? undefined : (item) => this.linkChatHere(item.id),
         isLinked: (item) => item.id === this.chatId || this.linksTo().some((link) => link.id === item.id),
       },
     );
+    if (linking) modal.setPlaceholder(`Link “${this.chatName ?? 'this chat'}” to… (search titles, projects, prompts and replies)`);
     modal.open();
   }
 
