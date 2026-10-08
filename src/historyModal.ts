@@ -544,6 +544,35 @@ export function confirmDelete(app: App, title: string, fromPanel: boolean, onCon
 }
 
 /** A yes/no dialog; `onConfirm` runs only when the confirming button is clicked. */
+/** Asks to choose one of `choices`, each a button; Cancel does nothing. */
+export class ChoiceModal extends Modal {
+  constructor(
+    app: App,
+    private readonly heading: string,
+    private readonly message: string,
+    private readonly choices: [string, () => void][],
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.titleEl.setText(this.heading);
+    this.contentEl.createEl('p', { text: this.message });
+    const buttons = this.contentEl.createDiv({ cls: 'modal-button-container' });
+    this.choices.forEach(([label, run], i) => {
+      buttons.createEl('button', { text: label, cls: i === 0 ? 'mod-cta' : '' }).addEventListener('click', () => {
+        this.close();
+        run();
+      });
+    });
+    buttons.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
 export class ConfirmModal extends Modal {
   constructor(
     app: App,

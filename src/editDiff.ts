@@ -294,6 +294,11 @@ export class ChangesCard {
     this.list = this.el.createDiv({ cls: 'vc-changes-list' });
   }
 
+  /** The notes in the vault this reply changed or created, by their vault paths. */
+  changedNotes(): string[] {
+    return [...this.files.values()].flatMap((file) => (file.vaultPath?.endsWith('.md') ? [file.vaultPath] : []));
+  }
+
   /** The notes in the vault this reply created, by their vault paths. */
   createdNotes(): string[] {
     return [...this.files.values()].flatMap((file) => (file.created && !file.fromShell && file.vaultPath?.endsWith('.md') ? [file.vaultPath] : []));

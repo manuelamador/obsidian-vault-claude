@@ -29,7 +29,7 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
   filePathOf,
@@ -57,13 +57,13 @@ import { followDraftNotes, movedPath, NOTE_CHAT_ICONS, type NoteChatEntry } from
 import { PromptNav } from './promptNav';
 import { SideChat } from './sideChat';
 import { answeredText, readQuestions, renderQuestionCard } from './questionCard';
-import { HistoryModal, RenameModal, confirmDelete } from './historyModal';
+import { ChoiceModal, ConfirmModal, HistoryModal, RenameModal, confirmDelete } from './historyModal';
 import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
 import type { ChatDraft, ChatProjectState } from './main';
 import { contextHash, linkedChatsBlock, projectContextBlock } from './projects';
-import { LinksList } from './linksList';
+import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
@@ -3045,8 +3045,165 @@ export class ChatView extends ItemView {
     menu.showAtMouseEvent(evt);
   }
 
-  branchIntoNewTab(): Promise<void> {
-    return this.branch(undefined, true);
+  /** A message of yours, `uuid`: copy it and what follows to a new chat, move it there or to another chat, or remove it from here on. */
+  private onMessageMenu(evt: MouseEvent, uuid: string, text: string): void {
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle('Copy from here on to a new chat').setIcon('copy-plus').onClick(() => void this.branch(undefined, true, uuid)));
+    menu.addItem((item) => item.setTitle('Move from here on to a new chat').setIcon('square-arrow-out-up-right').onClick(() => this.moveToNewChat(uuid)));
+    menu.addItem((item) => item.setTitle('Send this message to another chat…').setIcon('send').onClick(() => void this.sendToOtherChat(uuid, text)));
+    menu.addSeparator();
+    menu.addItem((item) => item.setTitle('Remove from here on').setIcon('trash-2').setWarning(true).onClick(() => this.confirmRemoveFrom(uuid)));
+    menu.showAtMouseEvent(evt);
+  }
+
+  /**
+   * What removing from message `uuid` on takes: how many messages of yours and replies, and the notes
+   * those replies changed (which stay as they are). Null, with a notice, when it cannot be done now:
+   * while Claude works, in a chat not started in the panel (whose copy is made on its next message),
+   * or while another panel has the chat open.
+   */
+  private removalFrom(uuid: string): { id: string; messages: number; replies: number; notes: string[] } | null {
+    const id = this.chatId;
+    if (!id || !this.plugin.vaultRoot()) {
+      new Notice(this.resumeId ? 'This chat started outside the panel: send a message first, which makes its copy here.' : 'Nothing to remove yet.');
+      return null;
+    }
+    if (this.scratch) {
+      new Notice('The scratch chat is cleared rather than cut: use Start over, or copy what you want to keep to a new chat first.');
+      return null;
+    }
+    if (this.busy) {
+      new Notice('Claude is still working. Stop it, or wait for the reply, then remove.');
+      return null;
+    }
+    if (this.plugin.chatHolder(id, this)) {
+      new Notice('This chat is open in another panel too. Open another chat there first.');
+      return null;
+    }
+    const bubble = this.messagesEl.querySelector<HTMLElement>(`.vc-user[data-uuid="${uuid}"]`);
+    if (!bubble) return null;
+    const order = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user, .vc-turn')];
+    const after = order.slice(order.indexOf(bubble));
+    const turns = after.filter((el) => el.hasClass('vc-turn'));
+    const notes = [...new Set(turns.flatMap((turn) => this.changeCards.get(turn)?.changedNotes() ?? []))];
+    return { id, messages: after.filter((el) => el.hasClass('vc-user')).length, replies: turns.length, notes };
+  }
+
+  /** What a removal takes, in words: "this message and 2 replies", and the notes changed that stay. */
+  private removalWords(removal: { messages: number; replies: number; notes: string[] }): string {
+    const messages = removal.messages > 1 ? `this message, ${removal.messages - 1} later one${removal.messages === 2 ? '' : 's'}` : 'this message';
+    const replies = removal.replies === 0 ? '' : ` and ${removal.replies} repl${removal.replies === 1 ? 'y' : 'ies'}`;
+    const notes = removal.notes.length === 0 ? '' : ` The notes they changed stay as they are: ${removal.notes.join(', ')}.`;
+    return `${messages}${replies}.${notes}`;
+  }
+
+  private confirmRemoveFrom(uuid: string): void {
+    const removal = this.removalFrom(uuid);
+    if (!removal) return;
+    new ConfirmModal(this.app, 'Remove from here on', `This removes ${this.removalWords(removal)} For 10 seconds afterwards, Undo in the notice at the top right puts it back.`, 'Remove', () => void this.removeFrom(uuid, true)).open();
+  }
+
+  /**
+   * Removes message `uuid` and everything after it from the chat on screen, in place, so the chat
+   * keeps its id and what is linked to it: its process is ended, its file cut (see cutChat), and it is
+   * opened again (unless `reopen` is false). A notice offers to put it back. Whether it was removed.
+   */
+  private async removeFrom(uuid: string, reopen: boolean): Promise<boolean> {
+    const id = this.chatId;
+    const root = this.plugin.vaultRoot();
+    if (!id || !root) return false;
+    const item: HistoryItem = { id, title: this.chatName ?? 'Untitled chat', updatedAt: Date.now(), fromPanel: true };
+    // Its process ends first: it holds the conversation and writes to the file as it exits.
+    this.newChat();
+    this.closeBackgroundChat(id);
+    await this.plugin.sessionEnded(id);
+    let done: { kept: string; cut: string };
+    try {
+      done = await cutChat(id, root, uuid);
+    } catch (error) {
+      log('removing from a message failed', error);
+      new Notice(`Could not remove it: ${errorText(error)}`);
+      await this.openChat(item);
+      return false;
+    }
+    log('removed from a message', { chat: id, from: uuid });
+    if (reopen) await this.openChat(item);
+    const notice = createFragment((el) => {
+      el.appendText(`Removed from “${item.title}”. `);
+      el.createEl('a', { text: 'Undo' }).addEventListener('click', () => void this.undoRemove(item, done));
+    });
+    new Notice(notice, 10_000);
+    return true;
+  }
+
+  /** Puts back what removeFrom took, when nothing was added to the chat since; the chat is shown again. */
+  private async undoRemove(item: HistoryItem, done: { kept: string; cut: string }): Promise<void> {
+    const root = this.plugin.vaultRoot();
+    if (!root) return;
+    if (this.plugin.chatHolder(item.id, this) || (this.chatId === item.id && this.busy)) {
+      new Notice('The chat is in use: it could not be put back.');
+      return;
+    }
+    if (this.chatId === item.id) this.newChat();
+    this.closeBackgroundChat(item.id);
+    await this.plugin.sessionEnded(item.id);
+    const put = await uncutChat(item.id, root, done).catch((error: unknown) => {
+      log('undoing a removal failed', error);
+      return false;
+    });
+    new Notice(put ? `Put back in “${item.title}”.` : 'It could not be put back: the chat has changed since.');
+    await this.openChat(item);
+  }
+
+  /** Copies message `uuid` and what follows to a new chat, removes them here, and shows the new chat. */
+  private moveToNewChat(uuid: string): void {
+    const removal = this.removalFrom(uuid);
+    if (!removal) return;
+    new ConfirmModal(this.app, 'Move to a new chat', `This moves ${this.removalWords(removal)}`, 'Move', async () => {
+      const copy = await this.branch(undefined, false, uuid, false);
+      if (!copy) return;
+      if (!(await this.removeFrom(uuid, false))) return;
+      await this.openChat({ id: copy, title: this.plugin.chatTitleOf(copy), updatedAt: Date.now(), fromPanel: true });
+    }).open();
+  }
+
+  /**
+   * Sends message `uuid`'s text to another chat, chosen: it goes into that chat's input to send there.
+   * It may be removed here first, with what followed it. Its attachments are not carried.
+   */
+  private async sendToOtherChat(uuid: string, text: string): Promise<void> {
+    const chats = (await this.plugin.listChats().catch(() => [] as HistoryItem[])).filter((item) => !item.scratch && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title }));
+    if (chats.length === 0) {
+      new Notice('There is no other chat to send it to.');
+      return;
+    }
+    new ChatPicker(
+      this.app,
+      chats,
+      (target) => {
+        const send = async (remove: boolean) => {
+          if (remove && !(await this.removeFrom(uuid, false))) return;
+          const view = await this.plugin.openChatById(target.id, target.title);
+          if (!view) {
+            new Notice('That chat could not be opened. The message is in your clipboard.');
+            await navigator.clipboard.writeText(text).catch(() => undefined);
+            return;
+          }
+          view.addToInput(text, 'Message moved here');
+        };
+        const removal = this.chatId ? this.removalFrom(uuid) : null;
+        if (!removal) return void send(false);
+        new ChoiceModal(this.app, `Send to “${target.title}”`, `Its text goes into that chat's input. Removing it here as well takes ${this.removalWords(removal)}`, [
+          ['Remove here and send', () => void send(true)],
+          ['Send, keep it here', () => void send(false)],
+        ]).open();
+      },
+      'Send this message to…',
+    ).open();
+  }
+
+  async branchIntoNewTab(): Promise<void> {
+    await this.branch(undefined, true);
   }
 
   /**
@@ -3054,14 +3211,15 @@ export class ChatView extends ItemView {
    * or from its beginning) and opens the copy in a new tab or in place of this chat, which then
    * keeps running in the background if it is working. A copy of the scratch chat carries it on as a
    * chat of its own, linked to the notes it changed; a copy from a message on, or of the scratch
-   * chat, is named for what it holds (see copyTitle). The chat copied stays as it is.
+   * chat, is named for what it holds (see copyTitle). The chat copied stays as it is. `open` false:
+   * the copy is made and recorded only. Its id; null when none was made.
    */
-  private async branch(upTo: string | undefined, newTab: boolean, start?: string): Promise<void> {
+  private async branch(upTo: string | undefined, newTab: boolean, start?: string, open = true): Promise<string | null> {
     const source = this.chatId ?? this.resumeId;
     const root = this.plugin.vaultRoot();
     if (!source || !root) {
       new Notice('Nothing to branch yet.');
-      return;
+      return null;
     }
     if (!upTo && (this.busy || start)) {
       // The reply in progress is left out: the branch ends after the last finished one.
@@ -3069,14 +3227,14 @@ export class ChatView extends ItemView {
       upTo = finished[finished.length - 1]?.dataset.branchUuid;
       if (!upTo) {
         new Notice('Nothing to branch yet: Claude has not finished a reply in this chat.');
-        return;
+        return null;
       }
     }
     const startBubble = start ? this.messagesEl.querySelector<HTMLElement>(`.vc-user[data-uuid="${start}"]`) : null;
     const replies = startBubble && upTo ? this.repliesFrom(startBubble, upTo) : [];
     if (start && replies.length === 0) {
       new Notice('Nothing to copy yet: Claude has not finished replying to that message.');
-      return;
+      return null;
     }
     const from: BranchSource = {
       title: this.chatName ?? 'Untitled chat',
@@ -3092,18 +3250,20 @@ export class ChatView extends ItemView {
     } catch (error) {
       log('branching failed', error);
       new Notice(`Could not ${start ? 'copy' : 'branch'} this chat: ${errorText(error)}`);
-      return;
+      return null;
     }
     log('branched chat', { from: source, to: id, upTo: upTo ?? null });
     this.plugin.recordChat(id, title);
     // The scratch chat links no notes; carried on as a chat, the notes it changed are that chat's.
     if (from.scratch) await this.linkChangedNotes(id, root);
+    if (!open) return id;
     const target = newTab ? await this.plugin.openChatTab(this.leaf) : this;
     if (!target) {
       new Notice('Could not open a new tab. The branch is in the chat history.');
-      return;
+      return null;
     }
     await target.openChat({ id, title, updatedAt: Date.now(), fromPanel: true }, from);
+    return id;
   }
 
   /** The name of the scratch chat carried on up to reply `upTo` (the last finished one when unset); see copyTitle. */
@@ -3489,9 +3649,9 @@ export class ChatView extends ItemView {
     const bubble = parent.createDiv({ cls: 'vc-user' });
     if (uuid) {
       bubble.dataset.uuid = uuid;
-      const copy = bubble.createEl('button', { cls: 'clickable-icon vc-user-action', attr: { 'aria-label': 'Copy from here on to a new chat' } });
+      const copy = bubble.createEl('button', { cls: 'clickable-icon vc-user-action', attr: { 'aria-label': 'Copy, move or remove from here on' } });
       setIcon(copy, 'arrow-down-from-line');
-      copy.addEventListener('click', () => void this.branch(undefined, true, uuid));
+      copy.addEventListener('click', (evt) => this.onMessageMenu(evt, uuid, text));
     }
     if (text) {
       bubble.createDiv({ cls: 'vc-user-text', text });

@@ -785,6 +785,56 @@ export async function branchChat(id: string, dir: string, title: string, upTo?: 
   return sessionId;
 }
 
+/** Rows of a session's file that hold no message and stay where a chat is cut: its title, mode and costs. Others (the last prompt, queue operations) refer to what was cut. */
+const KEPT_WHEN_CUT = new Set(['custom-title', 'mode', 'cost-state', 'atis-latch']);
+
+/**
+ * What is left of a session's file `text` cut at message `from` (a prompt of yours): the rows before
+ * it, and those after it that hold no message (see KEPT_WHEN_CUT); and the text cut, to put back.
+ * Null when `from` is not there.
+ */
+export function cutSessionText(text: string, from: string): { kept: string; cut: string } | null {
+  const lines = text.split('\n').filter((line) => line.trim());
+  const rows = lines.map((line) => {
+    try {
+      return JSON.parse(line) as { uuid?: string; type?: string };
+    } catch {
+      return {};
+    }
+  });
+  const start = rows.findIndex((row) => row.uuid === from);
+  if (start === -1) return null;
+  const keep = (i: number) => i < start || (rows[i].uuid === undefined && KEPT_WHEN_CUT.has(rows[i].type ?? ''));
+  const kept = lines.filter((_, i) => keep(i));
+  const cut = lines.filter((_, i) => !keep(i));
+  return { kept: kept.length > 0 ? `${kept.join('\n')}\n` : '', cut: `${cut.join('\n')}\n` };
+}
+
+/**
+ * Cuts session `id` at message `from` (a prompt of yours), in place, so the chat keeps its id: that
+ * message and everything after it go (see cutSessionText). Its process must have ended. What is left,
+ * to tell later that nothing was added since, and what was cut, to put back (see uncutChat).
+ */
+export async function cutChat(id: string, dir: string, from: string): Promise<{ kept: string; cut: string }> {
+  const file = sessionFile(id, dir);
+  const result = cutSessionText(await fs.readFile(file, 'utf8'), from);
+  if (!result) throw new Error('that message is not in the saved conversation');
+  const written = `${file}.tmp`;
+  await fs.writeFile(written, result.kept);
+  await fs.rename(written, file);
+  return result;
+}
+
+/** Puts back what cutChat cut, when the chat is as it left it; false when something was added since. */
+export async function uncutChat(id: string, dir: string, done: { kept: string; cut: string }): Promise<boolean> {
+  const file = sessionFile(id, dir);
+  if ((await fs.readFile(file, 'utf8').catch(() => null)) !== done.kept) return false;
+  const written = `${file}.tmp`;
+  await fs.writeFile(written, done.kept + done.cut);
+  await fs.rename(written, file);
+  return true;
+}
+
 /**
  * Copies a session from message `from` (a prompt of yours) on, up to and including `upTo` (the end
  * when omitted); returns the new session's id. The SDK's copy (see branchChat) is cut at its start:

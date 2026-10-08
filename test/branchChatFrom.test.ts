@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import { branchChatFrom, projectFolder } from '../src/history';
+import { branchChatFrom, cutChat, cutSessionText, projectFolder, uncutChat } from '../src/history';
 
 /** A chat of three exchanges in vault `root`, under a Claude Code config dir of the test's own. */
 function chat() {
@@ -68,6 +68,41 @@ test('a copy from a message not in the chat fails, and leaves no copy behind', a
   try {
     await assert.rejects(branchChatFrom(id, root, 'Nowhere', randomUUID()), /not in the saved conversation/);
     assert.deepEqual(readdirSync(dir), [`${id}.jsonl`]);
+  } finally {
+    done();
+  }
+});
+
+test('a chat cut at a message keeps what came before, and its title and mode rows after', () => {
+  const rows = [
+    { type: 'user', uuid: 'u1', parentUuid: null },
+    { type: 'assistant', uuid: 'a1', parentUuid: 'u1' },
+    { type: 'user', uuid: 'u2', parentUuid: 'a1' },
+    { type: 'custom-title', customTitle: 'T' },
+    { type: 'assistant', uuid: 'a2', parentUuid: 'u2' },
+    { type: 'last-prompt', lastPrompt: 'x' },
+  ];
+  const text = `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`;
+  const result = cutSessionText(text, 'u2');
+  assert.ok(result);
+  assert.deepEqual(result.kept.trim().split('\n').map((line) => JSON.parse(line).uuid ?? JSON.parse(line).type), ['u1', 'a1', 'custom-title']);
+  assert.deepEqual(result.cut.trim().split('\n').map((line) => JSON.parse(line).uuid ?? JSON.parse(line).type), ['u2', 'a2', 'last-prompt']);
+  assert.equal(cutSessionText(text, 'nope'), null);
+});
+
+test('a saved chat cut at a message keeps its id and reads up to there; undo puts it back unless it changed', async () => {
+  const { root, dir, id, uuids, done } = chat();
+  try {
+    const cut = await cutChat(id, root, uuids.u2);
+    const left = (await getSessionMessages(id, { dir: root })).map((message) => message.uuid);
+    assert.deepEqual(left, [uuids.u1, uuids.a1]);
+    assert.equal(await uncutChat(id, root, cut), true);
+    assert.equal((await getSessionMessages(id, { dir: root })).length, 6);
+    // Something added since the cut: not put back.
+    const again = await cutChat(id, root, uuids.u3);
+    writeFileSync(`${dir}/${id}.jsonl`, `${readFileSync(`${dir}/${id}.jsonl`, 'utf8')}${JSON.stringify({ type: 'mode', mode: 'plan' })}\n`);
+    assert.equal(await uncutChat(id, root, again), false);
+    await assert.rejects(cutChat(id, root, 'not-there'));
   } finally {
     done();
   }

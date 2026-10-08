@@ -212,6 +212,7 @@ class MenuItem {
   setIcon(): this { return this; }
   setIsLabel(label: boolean): this { this.label = label; return this; }
   setDisabled(): this { return this; }
+  setWarning(): this { return this; }
   setChecked(checked: boolean | null): this { this.checked = checked; return this; }
   onClick(click: (evt?: unknown) => unknown): this { this.click = click; return this; }
   setSubmenu(): Menu { this.submenu = new Menu(); return this.submenu; }
