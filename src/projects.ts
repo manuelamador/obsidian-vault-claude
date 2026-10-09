@@ -6,7 +6,7 @@
 import { inFolder } from './chatFolders';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import { bubbleOf, textBlocks, type ContentBlock } from './chatText';
-import { memoSection } from './memos';
+import { memoSection, sectionBounds } from './memos';
 
 /** The frontmatter `type` of a project note. */
 export const PROJECT_TYPE = 'project';
@@ -106,18 +106,27 @@ export function homeOf(id: string, chat: { notes?: ReadonlyMap<string, number>; 
   return best && { key: best.project.key, why: 'notes', count: best.count };
 }
 
+/**
+ * Where section `heading`'s generated part lies: from its BEGIN marker, inside the section, to the END
+ * after it, past any headings of the text between them (a Context may have some). Null when it has
+ * none, or when its END is missing: the next END would be another section's, with a BEGIN between.
+ */
+function generatedBounds(note: string, heading: string): { from: number; to: number } | null {
+  const section = sectionBounds(note, heading);
+  if (!section) return null;
+  const from = note.indexOf(BEGIN, section.body);
+  if (from === -1 || from > section.end) return null;
+  const to = note.indexOf(END, from);
+  const nextBegin = note.indexOf(BEGIN, from + BEGIN.length);
+  if (to === -1 || (nextBegin !== -1 && nextBegin < to)) return null;
+  return { from, to };
+}
+
 /** `note` with the generated part of section `heading` (between its markers) replaced by `body`; as it was when it has none. */
 export function withGenerated(note: string, heading: string, body: string): string {
-  const start = new RegExp(`^## ${heading}[ \\t]*$`, 'm').exec(note);
-  if (!start) return note;
-  const from = note.indexOf(BEGIN, start.index);
-  const to = from === -1 ? -1 : note.indexOf(END, from);
-  // Only the markers of this section: its BEGIN before the next section's heading; its END the first
-  // after, past any headings of the text between them (a Context may have some).
-  const next = /^## /m.exec(note.slice(start.index + start[0].length));
-  const limit = next ? start.index + start[0].length + next.index : note.length;
-  if (from === -1 || to === -1 || from > limit) return note;
-  return `${note.slice(0, from + BEGIN.length)}\n${body.trim()}\n${note.slice(to)}`;
+  const bounds = generatedBounds(note, heading);
+  if (!bounds) return note;
+  return `${note.slice(0, bounds.from + BEGIN.length)}\n${body.trim()}\n${note.slice(bounds.to)}`;
 }
 
 /**
@@ -126,32 +135,34 @@ export function withGenerated(note: string, heading: string, body: string): stri
  */
 export function projectParts(note: string): { context: string; instructions: string } {
   const instructions = memoSection(note, 'Instructions').replace(INSTRUCTIONS_PLACEHOLDER, '').trim();
-  return { context: generatedText(note, 'Context') ?? memoSection(note, 'Context').trim(), instructions };
+  return { context: generatedText(note, 'Context') ?? memoSection(note, 'Context').replace(BEGIN, '').trim(), instructions };
 }
 
-/** The text between section `heading`'s markers, headings in it included (see withGenerated); null when it has none. */
+/** The text between section `heading`'s markers, headings in it included (see generatedBounds); null when it has none. */
 function generatedText(note: string, heading: string): string | null {
-  const start = new RegExp(`^## ${heading}[ \\t]*$`, 'm').exec(note);
-  if (!start) return null;
-  const from = note.indexOf(BEGIN, start.index);
-  const to = from === -1 ? -1 : note.indexOf(END, from);
-  const next = /^## /m.exec(note.slice(start.index + start[0].length));
-  if (from === -1 || to === -1 || (next && from > start.index + start[0].length + next.index)) return null;
-  return note.slice(from + BEGIN.length, to).trim();
+  const bounds = generatedBounds(note, heading);
+  return bounds ? note.slice(bounds.from + BEGIN.length, bounds.to).trim() : null;
 }
 
-/** `note` with its Context set to `context`: between the section's markers, the section (and its markers) made when the note has none. */
+/**
+ * `note` with its Context set to `context`: between the section's markers, the section (and its
+ * markers) made when the note has none. Throws when the section has a BEGIN marker without its END,
+ * which only a look at the note can mend.
+ */
 export function withContext(note: string, context: string): string {
-  if (/^## Context[ \t]*$/m.test(note)) {
-    const replaced = withGenerated(note, 'Context', context);
-    if (replaced !== note || projectParts(note).context === context.trim()) return replaced;
+  const generated = `${BEGIN}\n${context.trim()}\n${END}`;
+  const section = sectionBounds(note, 'Context');
+  if (section) {
+    if (generatedBounds(note, 'Context')) return withGenerated(note, 'Context', context);
+    if (note.slice(section.body, section.end).includes(BEGIN)) throw new Error(`its Context has a “${BEGIN}” line without its “${END}”: add it in the note`);
     // A Context section without markers: its text replaced, markers added.
-    // A function: a context holding `$` (display math) must not be read as a replacement pattern.
-    return note.replace(/^## Context[ \t]*\n[\s\S]*?(?=^## |(?![\s\S]))/m, () => `## Context\n\n${BEGIN}\n${context.trim()}\n${END}\n\n`);
+    return `${note.slice(0, section.body)}\n\n${generated}\n\n${note.slice(section.end)}`;
   }
-  const heading = /^# .*$/m.exec(note);
-  const at = heading ? heading.index + heading[0].length : note.length;
-  return `${note.slice(0, at)}\n\n## Context\n\n${BEGIN}\n${context.trim()}\n${END}\n${note.slice(at)}`;
+  // After the note's title, below its frontmatter.
+  const body = /^---\n[\s\S]*?\n---(?:\n|$)/.exec(note)?.[0].length ?? 0;
+  const heading = /^# .*$/m.exec(note.slice(body));
+  const at = heading ? body + heading.index + heading[0].length : note.length;
+  return `${note.slice(0, at)}\n\n## Context\n\n${generated}\n${note.slice(at)}`;
 }
 
 /**
@@ -179,6 +190,32 @@ export function linkedChatsBlock(chats: { id: string; title: string; digest: str
   return `<linked_chats>\nEarlier conversations the user linked to this one, as context:\n\n${each.join('\n\n')}\n</linked_chats>`;
 }
 
+/**
+ * Claude Code keeps a hook's context longer than 10,000 characters in a file and gives the model only
+ * a notice and its first 2,000: what goes with a message stays below that.
+ */
+export const CONTEXT_MAX_CHARS = 9500;
+
+/** A part of what goes with a message (see contextBlock): a project's (see projectContextBlock) or a linked chat's (see linkedChatsBlock), under the key that marks it sent. */
+export type ContextPart = { key: string; project: Parameters<typeof projectContextBlock>[0][number] } | { key: string; chat: Parameters<typeof linkedChatsBlock>[0][number] };
+
+/**
+ * What goes with a message from `parts`: the projects' block, then the linked chats', within
+ * `max` characters. The chats' digests share what the projects leave, each keeping its latest part.
+ */
+export function contextBlock(parts: ContextPart[], max = CONTEXT_MAX_CHARS): string {
+  const projects = projectContextBlock(parts.flatMap((part) => ('project' in part ? [part.project] : [])));
+  const chats = parts.flatMap((part) => ('chat' in part ? [part.chat] : []));
+  const join = (chatsBlock: string) => [projects, chatsBlock].filter(Boolean).join('\n\n');
+  const whole = join(linkedChatsBlock(chats));
+  if (whole.length <= max || chats.length === 0) return whole.length <= max ? whole : `${whole.slice(0, max - 40)}\n[… the rest left out …]`;
+  const room = max - join(linkedChatsBlock(chats.map((chat) => ({ ...chat, digest: '' })))).length;
+  const each = Math.floor(room / chats.length) - 40;
+  if (each < 200) return projects.slice(0, max);
+  const cut = (digest: string) => (digest.length <= each ? digest : `[… earlier part left out …]\n\n${digest.slice(-each)}`);
+  return join(linkedChatsBlock(chats.map((chat) => ({ ...chat, digest: cut(chat.digest) }))));
+}
+
 /** A short fingerprint of a project's Context and Instructions, to tell whether they changed since they were sent. */
 export function contextHash(parts: { context: string; instructions: string }): string {
   let hash = 5381;
@@ -189,8 +226,8 @@ export function contextHash(parts: { context: string; instructions: string }): s
 /** How much of a chat's conversation a digest keeps, at most. */
 const DIGEST_CHARS = 8000;
 
-/** A chat as a digest reads it: your prompts and Claude's replies, the latest kept when long. */
-export function chatDigest(messages: SessionMessage[]): string {
+/** A chat as a digest reads it: your prompts and Claude's replies, the latest `max` characters kept when long. */
+export function chatDigest(messages: SessionMessage[], max = DIGEST_CHARS): string {
   const lines: string[] = [];
   for (const message of messages) {
     if (message.parent_tool_use_id !== null) continue;
@@ -204,7 +241,7 @@ export function chatDigest(messages: SessionMessage[]): string {
     }
   }
   const all = lines.join('\n\n');
-  return all.length <= DIGEST_CHARS ? all : `[… earlier part left out …]\n\n${all.slice(-DIGEST_CHARS)}`;
+  return all.length <= max ? all : `[… earlier part left out …]\n\n${all.slice(-max)}`;
 }
 
 /** The instructions for writing a project's Context. */

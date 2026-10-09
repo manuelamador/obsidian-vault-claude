@@ -21,6 +21,17 @@ test('values are edited as text and read back in the shape proposed', () => {
   assert.deepEqual(readEdited('{"a":1}', { b: 2 }), { a: 1 });
 });
 
+test('applying keeps the types proposed: numbers in lists, null left alone, an emptied number empty', () => {
+  assert.deepEqual(readEdited(valueText([1, 2]), [1, 2]), [1, 2]);
+  assert.deepEqual(readEdited('1\n2\n3', [1, 2]), [1, 2, 3]);
+  assert.deepEqual(readEdited('a\n2', ['a', 'b']), ['a', '2']);
+  assert.equal(readEdited(valueText(null), null), null);
+  assert.equal(readEdited('', 3), null);
+  assert.equal(readEdited(' ', true), null);
+  assert.equal(readEdited('', 'text'), '');
+  assert.equal(readEdited('soon', null), 'soon');
+});
+
 test('the request carries the note, its neighbours, the chats and the guidance', () => {
   const prompt = frontmatterPrompt({ path: 'P/Hub.md', text: '---\nstatus: x\n---\nBody', neighbours: [{ path: 'P/T.md', frontmatter: { status: 'open' }, modified: '2026-10-07' }], chats: [{ title: 'Chat', date: '2026-10-06' }], guidance: 'status ≤ 80' });
   assert.match(prompt, /^Note: P\/Hub\.md\n<note>\n---\nstatus: x/);

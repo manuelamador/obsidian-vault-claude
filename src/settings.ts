@@ -251,7 +251,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Model for small jobs')
-      .setDesc('Model for Edit selection with Claude, Save summary as note, and the scratch chat. These are short requests where a smaller model answers faster and uses less of the plan.')
+      .setDesc('Model for Edit selection with Claude, Save summary as note, memo title and description suggestions, Pick up where you left off, a project\'s Context, summaries of chats included in another, Suggest frontmatter updates, and the scratch chat. These are short requests where a smaller model answers faster and uses less of the plan.')
       .addDropdown((dropdown) =>
         dropdown
           .addOptions(modelChoices(settings.smallJobModel, 'Same as chats'))
@@ -382,7 +382,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Rebuild connections')
       .setDesc(
-        "Reads every chat's session file again for the notes it changed, was sent and linked to, which the connections map and projects follow. Links removed by hand stay removed; chats put in a project by hand stay in it. Also in the command palette.",
+        "Reads every chat's session file again and adds the links it shows to notes it changed, was sent and linked to, which the connections map and projects follow. No link is taken away; links removed by hand stay removed, and chats put in a project by hand stay in it. Also in the command palette.",
       )
       .addButton((button) => button.setButtonText('Rebuild…').onClick(() => this.plugin.confirmRebuildConnections()));
 

@@ -1,10 +1,11 @@
-// The Connections pane, drawn (see connections.ts): the map of the chat in the Claude panel, which
-// it follows, centred on that chat (its notes and the chats that share them) or on a project (its
-// chats and their notes). Plain SVG. Notes are squares with a page glyph,
-// chats circles with a speech bubble, folders arcs behind their notes. A note opens in a new tab on a
-// click and shows Obsidian's page preview on ⌘-hover; a chat opens in the panel on a click, and a
-// right-click offers to mention, link or unlink it; a folder's arc offers
-// its project, or to make it one.
+// The Connections pane, drawn (see connections.ts): a tab in the main area, among the notes, showing
+// the map of the chat in the Claude panel and following it as the panel changes chat; centred on that
+// chat (its notes and the chats that share them, or linked with it) or on a project (its chats and
+// their notes). Plain SVG. Notes are squares with a page glyph, chats circles with a speech bubble,
+// folders arcs behind their notes. A note opens in a new tab on a click and shows Obsidian's page
+// preview on ⌘-hover; a chat opens in the panel on a click (the map then follows it), and a
+// right-click offers to open it in the panel, mention it, or link or unlink it; a folder's arc offers
+// its project (show it, put the chat in it, open its note), or to make it one.
 import { ItemView, Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import { ProjectPicker } from './projectModals';
 import { folderOf } from './chatFolders';
@@ -81,8 +82,6 @@ export interface ChatMapHost extends MapActions {
   lookOnly: boolean;
   /** The chat on screen, which links, mentions and its project bar act for. */
   baseline: { id: string; title: string };
-  /** The chat the map is centred on: the chat on screen, unless moved to another. */
-  centre: string;
   /** Whether it shows every note and chat. */
   all: boolean;
   /** For a chat without a project: the project of a chat it is linked with, and the folder its notes suggest. */
@@ -203,7 +202,10 @@ class MapDrawing {
         this.root.setPointerCapture(drag.pointer);
         this.root.addClass('is-panning');
       }
-      const units = this.view.w / this.root.getBoundingClientRect().width;
+      // Map units per screen pixel: the view fits the frame whole (SVG's default preserveAspectRatio,
+      // xMidYMid meet), so it is scaled by the tighter of its two sides.
+      const box = this.root.getBoundingClientRect();
+      const units = Math.max(drag.view.w / box.width, drag.view.h / box.height);
       this.show({ ...drag.view, x: drag.view.x - dx * units, y: drag.view.y - dy * units });
     });
     const end = () => {
@@ -509,6 +511,10 @@ export class ConnectionsView extends ItemView {
   private linksOpen = false;
   /** Each change of map counts: a map read for an earlier one is not drawn. */
   private generation = 0;
+  /** Each read of the map shown again counts (see refresh): only the latest is drawn. */
+  private reads = 0;
+  /** Show all (or Show fewer) asked of a read still under way: a later read, which replaces it, keeps it. */
+  private pendingAll: boolean | undefined;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -550,8 +556,8 @@ export class ConnectionsView extends ItemView {
 
   /** Shows the map of the panel's chat (`host`; null, none), or with `atProject`, that project's. */
   async follow(host: ChatMapHost | null, atProject: string | null = null): Promise<void> {
-    const generation = ++this.generation;
-    const project = host && atProject ? await host.projectMap(atProject) : null;
+    const generation = this.move();
+    const project = host && atProject ? await host.projectMap(atProject).catch(() => null) : null;
     if (generation !== this.generation) return;
     this.host = host;
     this.project = project;
@@ -561,15 +567,20 @@ export class ConnectionsView extends ItemView {
   /** Reads the map shown again and draws it in place: after its data changed. */
   async refresh(all?: boolean): Promise<void> {
     // Not a move: one under way is not cancelled by it (its step is already in the tab's history),
-    // and what is read here is dropped if the map moved meanwhile. The chat's map is read again too
-    // when a project is shown, as what it says of the chat (its project) may have changed.
+    // and what is read here is dropped if the map moved meanwhile, or if a later read was asked for.
+    // The chat's map is read again too when a project is shown, as what it says of the chat (its
+    // project) may have changed.
     const generation = this.generation;
+    const read = ++this.reads;
+    if (all === undefined) all = this.pendingAll;
+    else this.pendingAll = all;
     const { host, project } = this;
     const [nextHost, nextProject] = await Promise.all([
       host ? host.reload(project ? host.all : (all ?? host.all)) : null,
       project ? project.reload(all ?? project.all) : null,
     ]);
-    if (generation !== this.generation) return;
+    if (generation !== this.generation || read !== this.reads) return;
+    this.pendingAll = undefined;
     // What the map shows, its functions left out (JSON drops them): unchanged, it is not drawn
     // again, so a node pointed at keeps its tooltip and label rather than being replaced under the
     // pointer by each refresh while a chat works. The links under it are drawn again all the same.
@@ -585,7 +596,7 @@ export class ConnectionsView extends ItemView {
    * Where the map is centred, as the tab's history keeps it: the panel's chat, or a project. Obsidian asks for it before each move, to put on the tab's ← list.
    */
   getState(): Record<string, unknown> {
-    return { centre: this.host?.centre ?? null, project: this.project?.path ?? null };
+    return { centre: this.host?.baseline.id ?? null, project: this.project?.path ?? null };
   }
 
   /**
@@ -613,10 +624,16 @@ export class ConnectionsView extends ItemView {
     }
   }
 
+  /** A change of map: what is still being read for the one before (a move, a refresh) is dropped. */
+  private move(): number {
+    this.pendingAll = undefined;
+    return ++this.generation;
+  }
+
   /** The map of the panel's chat again, not as a step of its own (a step back, a project gone). */
   private showOwn(): void {
     if (!this.host) return;
-    ++this.generation;
+    this.move();
     this.project = null;
     this.draw();
   }
@@ -628,13 +645,13 @@ export class ConnectionsView extends ItemView {
 
   /** Centres the map on project `path`. */
   private moveToProject(path: string): Promise<void> {
-    return this.go({ centre: this.host?.centre ?? null, project: path });
+    return this.go({ centre: this.host?.baseline.id ?? null, project: path });
   }
 
   /** Centres the map on project `path` (see moveToProject), not as a step of its own. */
   private async showProject(path: string): Promise<void> {
     if (!this.host) return;
-    const generation = ++this.generation;
+    const generation = this.move();
     // Gone since (a step in the tab's history to a project deleted or renamed): the chat's map instead.
     const project = await this.host.projectMap(path).catch(() => null);
     if (generation !== this.generation) return;
@@ -724,7 +741,7 @@ export class ConnectionsView extends ItemView {
     const drawing = new MapDrawing(mapEl, 820 * scale, 620 * scale);
     this.drawing = drawing;
     // A project's folder holds its subfolders' arcs; each folder on its own side (see ringLayout).
-    const { angles, arcs, spans } = ringLayout(host.notes.map((note) => note.path), folderOf, 0.8, (path) => host.projectHolding(folderOf(path))?.folder ?? null, true);
+    const { angles, arcs, spans } = ringLayout(host.notes.map((note) => note.path), folderOf, 0.8, (path) => host.projectHolding(folderOf(path))?.folder ?? null);
     const placesOfChats = chatAngles(host.chats, angles);
     const centre = { x: 0, y: 0 };
     const noteAt = (path: string) => polar(angles.get(path) ?? 0, ring);
@@ -748,7 +765,7 @@ export class ConnectionsView extends ItemView {
       },
       (folder, evt) => this.folderMenu(folder, evt),
     );
-    const me = host.centre;
+    const me = host.baseline.id;
     for (const note of host.notes) drawing.line(centre, noteAt(note.path), [me, note.path], LINK_KINDS[note.weight] ?? 'mentioned');
     for (const chat of host.chats) {
       for (const path of chat.shared) if (angles.has(path)) drawing.line(chatAt(chat.id), noteAt(path), [chat.id, path], 'shared');
@@ -792,7 +809,8 @@ export class ConnectionsView extends ItemView {
 
   /**
    * A project's menu: centre on it (when not already), its note, its Context written anew or sent again
-   * with the chat's next message (its own project's), another folder, a new name, deletion.
+   * with the chat's next message (its own project's), another folder, a new name, deletion. Look-only,
+   * the first two.
    */
   private projectMenu(path: string, evt: MouseEvent): void {
     const { host } = this;
@@ -801,6 +819,10 @@ export class ConnectionsView extends ItemView {
     const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
     if (this.project?.path !== path) add('Show the project', 'locate-fixed', () => void this.moveToProject(path));
     add('Open project note', 'file-text', () => host.openProjectNote(path));
+    if (host.lookOnly) {
+      menu.showAtMouseEvent(evt);
+      return;
+    }
     add('Refresh context…', 'refresh-cw', () => host.refreshContext(path, () => void this.refresh()));
     if (host.ownProject?.path === path) add('Send its context again', 'send', () => host.sendAgain(path));
     add('Change folder…', 'folder-input', () => host.changeFolder(path, () => void this.refresh()));
@@ -897,7 +919,7 @@ export class ConnectionsView extends ItemView {
    * another project, putting the chat in it, and its note; a folder in no project, Make it a project; a
    * folder inside a project, nothing of its own (its notes count toward that project).
    */
-  private folderActions(folder: string): { label: string; tip?: string; run: () => void }[] {
+  private folderActions(folder: string): { label: string; run: () => void }[] {
     const { host } = this;
     if (!host) return [];
     const project = host.projectHolding(folder);
@@ -909,7 +931,7 @@ export class ConnectionsView extends ItemView {
     if (project)
       return [
         show(project.path),
-        { label: host.ownProject ? 'Move chat here' : 'Put chat here', tip: HOME_TIP, run: () => void host.setHome(project.path).then(() => this.refresh()) },
+        { label: host.ownProject ? 'Move chat here' : 'Put chat here', run: () => void host.setHome(project.path).then(() => this.refresh()) },
         { label: 'Open project note', run: () => host.openProjectNote(project.path) },
       ];
     if (!folder) return [];
@@ -970,7 +992,7 @@ export class ConnectionsView extends ItemView {
       return `/${folder}`;
     };
     const inside = (path: string) => folderOf(path) === project.folder || folderOf(path).startsWith(`${project.folder}/`);
-    const { angles, arcs, spans } = ringLayout(project.notes, within, 0.8, (path) => (inside(path) ? '' : null), true);
+    const { angles, arcs, spans } = ringLayout(project.notes, within, 0.8, (path) => (inside(path) ? '' : null));
     drawArcs(drawing, ring, arcs, spans, (sub, outer) => ({
       text: shortLabel(sub === TOP ? 'Top of the vault' : sub.startsWith('/') ? sub.slice(1) : sub || `◆ ${project.folder.slice(project.folder.lastIndexOf('/') + 1)}`, 22),
       // The project's own band (sub '') names its folder; its subfolders, their path; folders outside it, theirs.
@@ -1006,9 +1028,11 @@ export class ConnectionsView extends ItemView {
       }
       chatNode(group, id, project);
     }
-    // The project in the middle: its note, previewed on ⌘-hover, opened on a click.
-    const node = drawing.node(project.path, 'is-project-node');
-    drawing.place(project.path, { x: 0, y: 0 });
+    // The project in the middle: its note, previewed on ⌘-hover, opened on a click. Keyed apart from
+    // the project note's own node on the ring, where a chat worked on it.
+    const key = `project:${project.path}`;
+    const node = drawing.node(key, 'is-project-node');
+    drawing.place(key, { x: 0, y: 0 });
     svg(node, 'rect', { x: -16, y: -16, width: 32, height: 32, rx: 7 });
     svg(node, 'path', { d: 'M -8 -6 h 6 l 2 3 h 8 v 9 h -16 z', class: 'vc-map-bubble' });
     const title = svg(node, 'text', { x: 0, y: 32, 'text-anchor': 'middle' });

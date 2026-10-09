@@ -57,11 +57,17 @@ export function chatLink(params: { vault: string; chat: string; msg?: string; fi
   return `obsidian://${PROTOCOL_ACTION}?${query}`;
 }
 
-/** The chats that links made by chatLink in `text` open, each once. */
+/** Whether `id` has the form of a chat's id (Claude Code's session ids): a name, never a path. */
+export function isChatId(id: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id);
+}
+
+/** The chats that links made by chatLink in `text` open, each once; a link naming anything else is passed over. */
 export function linkedChatIds(text: string): string[] {
   const ids = [...text.matchAll(new RegExp(`obsidian://${PROTOCOL_ACTION}\\?([^)\\s>]*)`, 'g'))].flatMap((match) => {
     try {
-      return new URLSearchParams(match[1]).get('chat') ?? [];
+      const id = new URLSearchParams(match[1]).get('chat');
+      return id && isChatId(id) ? id : [];
     } catch {
       return [];
     }
@@ -69,11 +75,26 @@ export function linkedChatIds(text: string): string[] {
   return [...new Set(ids)];
 }
 
-/** `text` without its Markdown links to chat `id` (made by chatLink). */
+/**
+ * `text` without its Markdown links to chat `id` (made by chatLink), each with the space after it; a
+ * link alone on its line goes with its line break. The rest of the text is left as it was.
+ */
 export function removeChatLinks(text: string, id: string): string {
-  return text
-    .replace(new RegExp(`\\[[^\\]]*\\]\\(obsidian://${PROTOCOL_ACTION}\\?[^)\\s]*\\)[ \\t]?`, 'g'), (link) => (linkedChatIds(link).includes(id) ? '' : link))
-    .replace(/\n{3,}/g, '\n\n');
+  let out = '';
+  let from = 0;
+  for (const match of text.matchAll(new RegExp(`\\[[^\\]]*\\]\\(obsidian://${PROTOCOL_ACTION}\\?[^)\\s]*\\)[ \\t]?`, 'g'))) {
+    if (!linkedChatIds(match[0]).includes(id)) continue;
+    let start = match.index;
+    let end = start + match[0].length;
+    // Alone on its line: the line break after it goes too (before it, on the last line).
+    if (start === 0 || text[start - 1] === '\n') {
+      if (text[end] === '\n') end += 1;
+      else if (end === text.length && start > 0) start -= 1;
+    }
+    out += text.slice(from, start);
+    from = end;
+  }
+  return out + text.slice(from);
 }
 
 /**
@@ -122,7 +143,7 @@ const COMMENT_MARK = '*Comment:* ';
  * (`start`) and the end of it (`body`) to the next heading of its level or above (`end`, the note's
  * length when none). Headings are lines outside code fences, so an example in your Why is not one.
  */
-function sectionBounds(note: string, heading: string): { start: number; body: number; end: number } | null {
+export function sectionBounds(note: string, heading: string): { start: number; body: number; end: number } | null {
   let fence: string | null = null;
   let found: { start: number; body: number } | null = null;
   let at = 0;
@@ -333,6 +354,16 @@ export function freeMemoTitle(title: string, stamp: string, taken: (name: string
     const candidate = n === 1 ? stamped : `${stamped} ${n}`;
     if (!taken(memoNoteName(candidate))) return candidate;
   }
+}
+
+/** A memo note's description: the text between its title and its first section; empty when it has none. */
+export function memoDescription(note: string): string {
+  const body = note.replace(/^---\n[\s\S]*?\n---\n+/, '');
+  const title = /^# .*$/m.exec(body);
+  if (!title) return '';
+  const rest = body.slice(title.index + title[0].length);
+  const end = /^#{1,2} /m.exec(rest);
+  return (end ? rest.slice(0, end.index) : rest).trim();
 }
 
 /** The instructions for suggesting a memo's title and description (see VaultClaudePlugin.suggestMemo). */

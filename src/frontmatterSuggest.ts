@@ -89,20 +89,34 @@ export function valueText(value: unknown): string {
   return String(value);
 }
 
-/** An edited value read back in the shape of `like` (the value proposed): a list from its lines, a boolean, a number, an object from JSON; else text. */
+/**
+ * An edited value read back in the shape of `like` (the value proposed): unedited, `like` itself; a
+ * list from its lines, each item as JSON when the list held anything but text; a boolean, a number,
+ * an object from JSON; else text. A number, boolean, object or null emptied is null (an empty
+ * property), never 0 or false.
+ */
 export function readEdited(text: string, like: unknown): unknown {
-  if (Array.isArray(like)) return text.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (text === valueText(like)) return like;
+  if (Array.isArray(like)) {
+    const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+    return like.every((item) => typeof item === 'string') ? lines : lines.map((line) => jsonOr(line, line));
+  }
+  if (typeof like === 'string') return text.trim();
+  if (!text.trim()) return null;
   if (typeof like === 'boolean') return text.trim().toLowerCase() === 'true';
   if (typeof like === 'number') {
     const number = Number(text.trim());
-    return Number.isFinite(number) ? number : text;
+    return Number.isFinite(number) ? number : text.trim();
   }
-  if (like !== null && typeof like === 'object') {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
-  }
+  if (like !== null && typeof like === 'object') return jsonOr(text, text);
   return text.trim();
+}
+
+/** `text` parsed as JSON, or `fallback` when it is not JSON. */
+function jsonOr(text: string, fallback: unknown): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
 }

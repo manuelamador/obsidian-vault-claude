@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { HUB_CHATS, HUB_WEIGHT, MAP_NOTES, chatAngles, chatMap, groupDirection, hubNotes, withoutHubs, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
-import { chatLink, linkedChatIds, removeChatLinks } from '../src/memos';
+import { chatLink, isChatId, linkedChatIds, memoDescription, removeChatLinks } from '../src/memos';
 
 const weighted = new Map([
   ['me', new Map([['A/one.md', 3], ['A/two.md', 1], ['B/three.md', 2]])],
@@ -21,12 +21,13 @@ test("a chat's map: its notes, strongest first; chats sharing them, those linked
 
 test('the ring: notes grouped by folder under arcs, a gap between groups; chats towards their notes, spread apart', () => {
   const { angles, arcs } = ringLayout(['B/b.md', 'A/a.md', 'A/c.md']);
-  assert.deepEqual(arcs.map((arc) => arc.folder), ['A', 'B']);
-  assert.equal(angles.get('A/a.md'), 0);
-  assert.ok((angles.get('A/c.md') ?? 0) < (angles.get('B/b.md') ?? 0));
+  assert.deepEqual(arcs.map((arc) => arc.folder).sort(), ['A', 'B']);
+  const a = arcs.find((arc) => arc.folder === 'A')!;
+  assert.ok((angles.get('A/a.md') ?? 0) < (angles.get('A/c.md') ?? 0));
   // Each arc spans its notes, half a place either side, and the arcs do not overlap.
-  assert.ok(arcs[0].end < arcs[1].start);
-  assert.ok(arcs[0].start < 0 && arcs[0].end > (angles.get('A/c.md') ?? 0));
+  assert.ok(a.start < (angles.get('A/a.md') ?? 0) && a.end > (angles.get('A/c.md') ?? 0));
+  const [first, second] = [...arcs].sort((x, y) => x.start - y.start);
+  assert.ok(first.end < second.start && second.end - 2 * Math.PI < first.start);
   const chats = chatAngles([{ id: 'x', shared: ['A/a.md'] }, { id: 'y', shared: ['A/a.md'] }], angles);
   assert.ok(Math.abs((chats.get('y') ?? 0) - (chats.get('x') ?? 0)) >= 0.44);
   const point = polar(Math.PI / 2, 100);
@@ -63,6 +64,16 @@ test("a chat's links are taken out of a message, the others kept", () => {
   const a = chatLink({ vault: 'V', chat: 'a' });
   const b = chatLink({ vault: 'V', chat: 'b' });
   assert.equal(removeChatLinks(`see [A](${a}) and [B](${b}) now`, 'a'), `see and [B](${b}) now`);
+});
+
+test("taking a chat's link out leaves the rest of the message as it was", () => {
+  const a = chatLink({ vault: 'V', chat: 'a' });
+  const draft = 'One.\n\n\n\nTwo,   spaced.\n\n\n';
+  assert.equal(removeChatLinks(draft, 'a'), draft);
+  assert.equal(removeChatLinks(`[A](${a})\n${draft}`, 'a'), draft);
+  assert.equal(removeChatLinks(`${draft}[A](${a})`, 'a'), draft.slice(0, -1));
+  assert.equal(removeChatLinks(`One.\n\n[A](${a})\n\n\nTwo.`, 'a'), 'One.\n\n\n\nTwo.');
+  assert.equal(removeChatLinks(`One.\n\n\nsee [A](${a}) here`, 'a'), 'One.\n\n\nsee here');
 });
 
 test('CLAUDE.md files stay off both maps and tie no chats together', () => {
@@ -102,19 +113,30 @@ test('hubs: notes linked to many chats join no chats on the map, and weigh littl
   assert.deepEqual([...(withoutHubs(new Map([['Hub.md', 3], ['A.md', 2]]), hubs) ?? [])], [['Hub.md', 3 * HUB_WEIGHT], ['A.md', 2]]);
 });
 
-test('with stable, a folder sits in its own direction on every map', () => {
+test('a folder sits in its own direction on every map', () => {
   const near = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
   const mid = (layout: ReturnType<typeof ringLayout>, folder: string) => {
     const arc = layout.arcs.find((each) => each.folder === folder);
     return arc ? (arc.start + arc.end) / 2 : NaN;
   };
   // One folder: exactly in its direction.
-  const alone = ringLayout(['Research/a.md', 'Research/b.md'], undefined, 0.8, undefined, true);
+  const alone = ringLayout(['Research/a.md', 'Research/b.md']);
   assert.ok(near(mid(alone, 'Research'), groupDirection('Research')) < 1e-9);
   // Its notes keep their order within it.
   assert.ok((alone.angles.get('Research/a.md') ?? 0) < (alone.angles.get('Research/b.md') ?? 0));
   // Two maps sharing folders: each shared folder on the same side (within a quarter turn) on both.
-  const one = ringLayout(['A/x.md', 'B/y.md', 'C/z.md', 'C/w.md'], undefined, 0.8, undefined, true);
-  const two = ringLayout(['A/x.md', 'B/y.md', 'D/v.md'], undefined, 0.8, undefined, true);
+  const one = ringLayout(['A/x.md', 'B/y.md', 'C/z.md', 'C/w.md']);
+  const two = ringLayout(['A/x.md', 'B/y.md', 'D/v.md']);
   for (const folder of ['A', 'B']) assert.ok(near(mid(one, folder), mid(two, folder)) < Math.PI / 2, folder);
+});
+
+test('a link naming a path rather than a chat id links nothing', () => {
+  assert.deepEqual(linkedChatIds('[x](obsidian://vault-claude?chat=..%2F..%2Ftmp%2Fanything)'), []);
+  assert.equal(isChatId('9f5bd39a-5b1b-4ada-ae58-19da7dfb6f15'), true);
+  assert.equal(isChatId('../x'), false);
+});
+
+test('a memo without a description has none, rather than its next section', () => {
+  assert.equal(memoDescription('---\ntags: [memo]\n---\n\n# Title\n\n## Sources\n\n### Passage\n'), '');
+  assert.equal(memoDescription('# Title\n\nWhat came out.\n\n## Why\n\nBecause.'), 'What came out.');
 });

@@ -250,7 +250,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
   <img src="docs/notes-menu.png" width="510" alt="The notes menu open from the button beside the paperclip, headed “Notes in this chat · ⌥-click to attach”: under Memos, This chat's memos in a table and the chat's one memo; under Changed, the note the chat changed; under Mentioned, a note it mentioned">
 
 - Scratch is first in history. Adjust its idle timeout in settings or clear it with its trash button. Under a reply in the scratch chat, **Continue as a chat** copies the conversation up to that reply into an ordinary chat, which stays in the history when the scratch chat starts over.
-- **The arrow beside one of your messages** opens a menu: **Copy from here on** starts a new chat from that message onward; **Move to a new chat** does the same and removes those messages here; **Send to another chat** puts the message's text in another chat's input, removing it here or not; **Remove from here on** deletes that message and everything after it, with **Undo** in the notice for 10 seconds. The notes those replies changed stay as they are, but no longer list the chat as having changed them.
+- **The arrow beside one of your messages** opens a menu: **Copy from here on to a new chat** starts a new chat from that message onward; **Move from here on to a new chat** does the same and removes those messages here; **Send this message to another chat…** puts the message's text in another chat's input, removing it here or not; **Remove from here on** deletes that message and everything after it. For 10 seconds after a move or a removal, **Undo** in the notice puts the messages back; after a move it also deletes the new chat. The notes those replies changed stay as they are, but no longer list the chat as having changed them.
 
   <img src="docs/copy-from-here.png" width="178" alt="The arrow button to the left of a message of yours, “Add a diagram”, shown when you point at the message">
 
@@ -267,7 +267,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 - Click a chat on the map to open it in the panel; the map follows. Click the chat's project to see the project's map, and ← and → in the tab to go back and forth. A chat started outside the panel is shown look-only until you send it a message: its map, without the controls that change it.
 - **Projects:** a project is a note tied to a folder. A chat belongs to one, from the notes it worked on or put there by hand (**Put in**, **Move…**, **Take out**, **Add to a project…**). Its project's context goes with the chat's messages. **Create project…** makes one; **Write every project's context anew** refreshes them.
 - **Links between chats:** **Link a chat…**, in the links under the map, links the chat with another, so you can go from one to the other; both show it. Nothing is sent unless you tick **Include**, which sends a short digest of the other chat once, with your next message.
-- **Rebuild connections from chat files** (also in the settings) reads every chat's file again and rebuilds which notes each chat changed, was sent or mentioned.
+- **Rebuild connections from chat files** (also in the settings) reads every chat's file again and adds the links it shows to the notes each chat changed, was sent or mentioned. It takes no link away.
 
 </details>
 
@@ -308,7 +308,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 ## Your data
 
 - **Conversations** are Claude Code's own session files, in `~/.claude/projects/` on your computer, outside the vault. Deleting a chat from the history deletes its file.
-- **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings and each chat's title, pin, unsent text, attached note, note links and ticked checkboxes. Deleting a chat removes its entries there, including its links to other chats and its project. Obsidian Sync copies the file if it syncs plugin settings.
+- **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings; each chat's title, pin, unsent text, attached note, note links, ticked checkboxes and, when one was asked for, its summary; and the guidance last given to Suggest frontmatter updates, by folder. Deleting a chat removes its entries there, including its links to other chats, its project and its summary. Obsidian Sync copies the file if it syncs plugin settings.
 - **The diagnostic log** records process starts, stops and errors, with session ids and paths (the vault's and Claude Code's), never message text: `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
 - Nothing is sent anywhere but through Claude Code itself.
 
@@ -322,7 +322,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 | Scratch chat | Offer the scratch chat in the history, an empty chat and the new-chat menu (default on) |
 | Scratch chat starts over after | 1 hour to 1 week unused (default 24 hours) |
 | Side chat knows | The whole chat it was opened from (default), or only what you ask it |
-| Model for small jobs | Model for Edit selection with Claude, Save summary as note, memo title and description suggestions, and the scratch chat (default Sonnet) |
+| Model for small jobs | Model for Edit selection with Claude, Save summary as note, memo title and description suggestions, Pick up where you left off, a project's Context, summaries of chats included in another, Suggest frontmatter updates, and the scratch chat (default Sonnet) |
 | Offer bypass permissions | Adds Bypass to the mode menus |
 | Deny rules | Actions refused in every mode, one rule per line |
 | Tool calls | Summary, one line each, or hidden |

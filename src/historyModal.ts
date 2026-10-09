@@ -199,8 +199,9 @@ export class HistoryModal extends SuggestModal<Match> {
   }
 
   /**
-   * The hint line under the list: its keys for the list of chats, or for the notes view (`notes`),
-   * where ⌘↵ opens a note. The Tab hint is a button as well, which switches views as Tab does.
+   * The hint line under the list: its keys for the view shown, the list of chats, chats by note
+   * (`notes`, where ⌘↵ opens a note) or chats by folder (`folders`, where ⌫ goes up a folder). The
+   * Tab hint is a button as well, which switches to the next view as Tab does.
    */
   private showKeys(view: HistoryView): void {
     if (this.keysFor === view) return;
@@ -543,7 +544,6 @@ export function confirmDelete(app: App, title: string, fromPanel: boolean, onCon
   new ConfirmModal(app, 'Delete chat', `“${title}” and its saved conversation will be deleted from this computer.${outside} This cannot be undone.`, 'Delete', onConfirm).open();
 }
 
-/** A yes/no dialog; `onConfirm` runs only when the confirming button is clicked. */
 /** Asks to choose one of `choices`, each a button; Cancel does nothing. */
 export class ChoiceModal extends Modal {
   constructor(
@@ -573,6 +573,7 @@ export class ChoiceModal extends Modal {
   }
 }
 
+/** A yes/no dialog; `onConfirm` runs only when the confirming button is clicked. */
 export class ConfirmModal extends Modal {
   constructor(
     app: App,

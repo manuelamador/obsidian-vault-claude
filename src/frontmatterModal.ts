@@ -1,8 +1,8 @@
 // Suggest frontmatter updates, as a dialog (see frontmatterSuggest.ts): what Claude will read and any
 // guidance; then each property proposed, its current and proposed value and why, to edit, tick and
 // apply. Nothing is written before Apply.
-import { Modal, setIcon, type App } from 'obsidian';
-import { errorText } from './log';
+import { Modal, Notice, type App } from 'obsidian';
+import { errorText, log } from './log';
 import { readEdited, valueText, type FieldSuggestion } from './frontmatterSuggest';
 
 export interface FrontmatterHost {
@@ -44,13 +44,13 @@ export class FrontmatterModal extends Modal {
     guidance.value = this.guidance;
     guidance.addEventListener('input', () => (this.guidance = guidance.value));
     const foot = contentEl.createDiv({ cls: 'vc-project-foot' });
-    const status = foot.createDiv({ cls: 'vc-project-status' });
+    const status = foot.createDiv({ cls: 'vc-project-status vc-pick-up-status' });
     const button = foot.createEl('button', { cls: 'mod-cta', text: 'Suggest' });
     button.addEventListener('click', async () => {
       button.disabled = true;
       status.empty();
-      setIcon(status.createSpan({ cls: 'vc-pick-up-wheel' }), 'loader-2');
-      status.appendText(' Claude is reading…');
+      status.createSpan({ cls: 'vc-pick-up-wheel', attr: { 'aria-hidden': 'true' } });
+      status.createSpan({ text: 'Claude is reading…' });
       this.abort = new AbortController();
       const signal = this.abort.signal;
       try {
@@ -113,8 +113,15 @@ export class FrontmatterModal extends Modal {
     apply.addEventListener('click', async () => {
       apply.disabled = true;
       const values = Object.fromEntries(rows.filter((row) => row.box.checked).map((row) => [row.field.key, readEdited(row.text.value, row.field.value)]));
-      await host.apply(values);
-      this.close();
+      try {
+        await host.apply(values);
+        this.close();
+      } catch (error) {
+        // Not written: the dialog stays, to try again.
+        log('applying properties failed', error);
+        new Notice(`The properties were not updated: ${errorText(error)}`);
+        update();
+      }
     });
   }
 

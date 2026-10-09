@@ -12,6 +12,9 @@ test("a shell command's change is its own when the command names the file: its p
   // A short name alone is too common to count.
   assert.equal(commandNames('echo abcd', '/v/abcd.md'), true);
   assert.equal(commandNames('echo abc', '/v/abc.md'), false);
+  // A Windows path: its name is after the last backslash.
+  assert.equal(commandNames("Set-Content 'Tax at Lambda One.md' x", 'C:\\v\\Notes\\Tax at Lambda One.md'), true);
+  assert.equal(commandNames('echo Lambda', 'C:\\v\\Notes\\Tax at Lambda One.md'), false);
 });
 
 test("only a shell command's changes to files it names link their notes; an edit always does", () => {

@@ -107,3 +107,24 @@ test('a saved chat cut at a message keeps its id and reads up to there; undo put
     done();
   }
 });
+
+test('a cut takes the queue records holding the text of the prompts it removes', () => {
+  const rows = [
+    { type: 'queue-operation', operation: 'enqueue', content: 'first' },
+    { type: 'queue-operation', operation: 'dequeue' },
+    { type: 'user', uuid: 'u1', message: { content: 'first' } },
+    { type: 'assistant', uuid: 'a1' },
+    // Sent while Claude worked: queued well before its own row.
+    { type: 'queue-operation', operation: 'enqueue', content: 'a secret' },
+    { type: 'assistant', uuid: 'a1b' },
+    { type: 'queue-operation', operation: 'enqueue', content: 'second' },
+    { type: 'queue-operation', operation: 'dequeue' },
+    { type: 'user', uuid: 'u2', message: { content: 'second' } },
+    { type: 'user', uuid: 'u3', message: { content: [{ type: 'text', text: 'a secret' }] } },
+  ];
+  const result = cutSessionText(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'u2');
+  assert.ok(result);
+  assert.ok(!result.kept.includes('a secret'));
+  assert.ok(!result.kept.includes('second'));
+  assert.ok(result.kept.includes('"content":"first"'));
+});

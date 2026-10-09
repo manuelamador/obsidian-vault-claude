@@ -1,7 +1,7 @@
 // The dialogs of projects (see projects.ts): picking one, making one of a folder, choosing another
 // folder for one, and writing a project's Context anew beside the one it has.
 import { FuzzySuggestModal, Modal, Notice, setIcon, type App } from 'obsidian';
-import { errorText } from './log';
+import { errorText, log } from './log';
 import { folderOf, type FolderSuggestion } from './chatFolders';
 
 /** A project as the dialogs show it. */
@@ -217,9 +217,9 @@ export class ContextModal extends Modal {
     const { contentEl, host } = this;
     this.modalEl.addClass('vc-project-modal');
     this.setTitle(`Context: ${host.name}`);
-    const status = contentEl.createDiv({ cls: 'vc-project-status' });
-    setIcon(status.createSpan({ cls: 'vc-pick-up-wheel' }), 'loader-2');
-    status.appendText(' Claude is reading the project’s notes and chats…');
+    const status = contentEl.createDiv({ cls: 'vc-project-status vc-pick-up-status' });
+    status.createSpan({ cls: 'vc-pick-up-wheel', attr: { 'aria-hidden': 'true' } });
+    status.createSpan({ text: 'Claude is reading the project’s notes and chats…' });
     void host.write(this.abort.signal).then(
       (context) => {
         if (this.abort.signal.aborted) return;
@@ -237,8 +237,15 @@ export class ContextModal extends Modal {
         const save = foot.createEl('button', { cls: 'mod-cta', text: 'Save' });
         save.addEventListener('click', async () => {
           save.disabled = true;
-          await host.save(text.value.trim());
-          this.close();
+          try {
+            await host.save(text.value.trim());
+            this.close();
+          } catch (error) {
+            // Not saved: the dialog stays, to try again.
+            log('saving a project context failed', error);
+            new Notice(`The context was not saved: ${errorText(error)}`);
+            save.disabled = false;
+          }
         });
       },
       (error: unknown) => {

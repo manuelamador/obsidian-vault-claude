@@ -4,6 +4,7 @@ import { promises as fs, realpathSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { log } from './log';
+import { isChatId } from './memos';
 
 /** A chat started from the panel, kept in the plugin's data.json. */
 export interface ChatRecord {
@@ -392,6 +393,8 @@ let plansFolder: { path: string; real: string | null } | null = null;
 
 /** Where Claude Code keeps a session: `<config>/projects/<projectFolder>/<id>.jsonl`. */
 function sessionFile(id: string, dir: string): string {
+  // An id from a link is a name in the vault's session folder, never a path out of it.
+  if (!isChatId(id)) throw new Error(`not a chat id: ${id}`);
   return path.join(sessionFolder(dir), `${id}.jsonl`);
 }
 
@@ -525,7 +528,7 @@ interface SessionRow {
   isMeta?: boolean;
   isCompactSummary?: boolean;
   /** What Claude Code attached to the chat: a queued message taken up mid-turn is one (`queued_command`). */
-  attachment?: { type?: string; prompt?: unknown; source_uuid?: string };
+  attachment?: { type?: string; prompt?: unknown; source_uuid?: string; commandMode?: string; origin?: { kind?: string } | null };
   /** A queue operation's: what it did, why, and to which message (by the uuid it was sent with). */
   operation?: string;
   reason?: string;
@@ -542,6 +545,12 @@ function parseRow(line: string): SessionRow | null {
   }
 }
 
+/** The id a queued message taken up mid-turn was sent with (see rowMessage), when it is drawn from its file under the attachment's own. */
+export function sentUuidOf(message: SessionMessage): string | undefined {
+  const sent = (message as { sent_uuid?: unknown }).sent_uuid;
+  return typeof sent === 'string' ? sent : undefined;
+}
+
 /** A row as one of the chat's messages (see loadChat): a prompt or reply, or a compaction boundary; null for the rest. */
 function rowMessage(row: SessionRow, id: string): SessionMessage | null {
   if (row.type === 'system' && row.subtype === 'compact_boundary' && !row.isSidechain) {
@@ -554,17 +563,22 @@ function rowMessage(row: SessionRow, id: string): SessionMessage | null {
       message: { subtype: 'compact_boundary', trigger: row.compactMetadata?.trigger, preTokens: row.compactMetadata?.preTokens },
     } as unknown as SessionMessage;
   }
-  // A message sent while Claude worked and taken up mid-turn is kept only as this attachment: drawn as the message it was.
-  if (row.type === 'attachment' && row.attachment?.type === 'queued_command' && !row.isSidechain) {
-    const { prompt, source_uuid: uuid } = row.attachment;
+  // A message sent while Claude worked and taken up mid-turn is kept only as this attachment: drawn as
+  // the message it was, under the attachment's own uuid, which copies and cuts find. Claude Code queues
+  // other things the same way, an agent's hand-back (marked meta, from a peer): not messages of yours.
+  if (row.type === 'attachment' && row.attachment?.type === 'queued_command' && !row.isSidechain && !row.isMeta) {
+    const { prompt, commandMode, origin } = row.attachment;
     if (typeof prompt !== 'string' && !Array.isArray(prompt)) return null;
+    if (commandMode !== undefined && commandMode !== 'prompt' && commandMode !== 'task-notification') return null;
+    if (origin?.kind !== undefined && origin.kind !== 'human' && origin.kind !== 'task-notification') return null;
     return {
       type: 'user',
-      uuid: uuid ?? row.uuid,
+      uuid: row.uuid,
       session_id: row.sessionId ?? id,
       parent_tool_use_id: null,
       parent_agent_id: null,
       message: { role: 'user', content: prompt },
+      sent_uuid: row.attachment.source_uuid,
     } as unknown as SessionMessage;
   }
   if ((row.type !== 'user' && row.type !== 'assistant') || row.isSidechain || row.isMeta || !row.message) return null;
@@ -590,8 +604,8 @@ async function readSession(id: string, dir: string, withEdits: boolean): Promise
   }
   const messages: SessionMessage[] = [];
   const edits = new Map<string, unknown>();
-  // Queued messages taken up mid-turn (see rowMessage), and the uuids of the messages of their own.
-  const queued = new Set<SessionMessage>();
+  // Queued messages taken up mid-turn (see rowMessage), with the uuid they were sent with, and the uuids of the messages of their own.
+  const queued = new Map<SessionMessage, string | undefined>();
   const own = new Set<string>();
   for (const line of text.split('\n')) {
     const row = line ? parseRow(line) : null;
@@ -601,11 +615,14 @@ async function readSession(id: string, dir: string, withEdits: boolean): Promise
     const message = rowMessage(row, id);
     if (!message) continue;
     messages.push(message);
-    if (row.type === 'attachment') queued.add(message);
+    if (row.type === 'attachment') queued.set(message, row.attachment?.source_uuid);
     else if (message.uuid) own.add(message.uuid);
   }
   // A queued message that also became a message of its own is drawn once, as that message.
-  const once = messages.filter((message) => !queued.has(message) || !message.uuid || !own.has(message.uuid));
+  const once = messages.filter((message) => {
+    const source = queued.get(message);
+    return source === undefined || !own.has(source);
+  });
   const transcript = once.some((message) => message.type !== 'system') ? once : await getSessionMessages(id, { dir });
   return { transcript, edits };
 }
@@ -788,26 +805,63 @@ export async function branchChat(id: string, dir: string, title: string, upTo?: 
 /** Rows of a session's file that hold no message and stay where a chat is cut: its title, mode and costs. Others (the last prompt, queue operations) refer to what was cut. */
 const KEPT_WHEN_CUT = new Set(['custom-title', 'mode', 'cost-state', 'atis-latch']);
 
+/** The text of a prompt row's message, as Claude Code's queue records it (see cutSessionText). */
+function promptText(row: { message?: { content?: unknown } }): string | null {
+  const content = row.message?.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+  const text = content.find((block): block is { type: 'text'; text: string } => (block as { type?: string })?.type === 'text');
+  return text?.text ?? null;
+}
+
 /**
  * What is left of a session's file `text` cut at message `from` (a prompt of yours): the rows before
  * it, and those after it that hold no message (see KEPT_WHEN_CUT); and the text cut, to put back.
- * Null when `from` is not there.
+ * Claude Code records a prompt in its queue before the prompt itself, with the prompt's text: those
+ * records of prompts cut go too, as do the queue records just before `from`. Null when `from` is not there.
  */
 export function cutSessionText(text: string, from: string): { kept: string; cut: string } | null {
   const lines = text.split('\n').filter((line) => line.trim());
   const rows = lines.map((line) => {
     try {
-      return JSON.parse(line) as { uuid?: string; type?: string };
+      return JSON.parse(line) as { uuid?: string; type?: string; content?: unknown; message?: { content?: unknown } };
     } catch {
       return {};
     }
   });
   const start = rows.findIndex((row) => row.uuid === from);
   if (start === -1) return null;
-  const keep = (i: number) => i < start || (rows[i].uuid === undefined && KEPT_WHEN_CUT.has(rows[i].type ?? ''));
+  const queued = (i: number) => rows[i].type === 'queue-operation';
+  // Those of the prompt cut at, written just before it.
+  let lead = start;
+  while (lead > 0 && queued(lead - 1)) lead -= 1;
+  const cutTexts = new Set(rows.slice(start).flatMap((row) => (row.type === 'user' ? [promptText(row)] : [])).filter((each): each is string => each !== null));
+  const keep = (i: number) => {
+    if (queued(i)) return i < lead && !(typeof rows[i].content === 'string' && cutTexts.has(rows[i].content as string));
+    return i < start || (rows[i].uuid === undefined && KEPT_WHEN_CUT.has(rows[i].type ?? ''));
+  };
   const kept = lines.filter((_, i) => keep(i));
   const cut = lines.filter((_, i) => !keep(i));
   return { kept: kept.length > 0 ? `${kept.join('\n')}\n` : '', cut: `${cut.join('\n')}\n` };
+}
+
+/**
+ * Deletes what Claude Code kept beside session `id`'s file for the part cutChat removed (`done.cut`):
+ * the transcripts of its subagents and the long tool results it saved, those the part left names
+ * no more. Run once the removal can no longer be undone.
+ */
+export async function deleteCutLeftovers(id: string, dir: string, done: { kept: string; cut: string }): Promise<void> {
+  const folder = path.join(path.dirname(sessionFile(id, dir)), id);
+  const named = (text: string, pattern: RegExp) => new Set([...text.matchAll(pattern)].map((match) => match[1]));
+  const agents = /"agentId":"([A-Za-z0-9_-]+)"/g;
+  const results = /tool-results\/([A-Za-z0-9_-]+\.[A-Za-z0-9]+)/g;
+  const keptAgents = named(done.kept, agents);
+  const keptResults = named(done.kept, results);
+  const files = [
+    ...[...named(done.cut, agents)].filter((agent) => !keptAgents.has(agent)).flatMap((agent) => [`subagents/agent-${agent}.jsonl`, `subagents/agent-${agent}.meta.json`]),
+    ...[...named(done.cut, results)].filter((file) => !keptResults.has(file)).map((file) => `tool-results/${file}`),
+  ];
+  await Promise.all(files.map((file) => fs.rm(path.join(folder, file), { force: true })));
 }
 
 /**

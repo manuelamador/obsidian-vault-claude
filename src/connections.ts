@@ -113,28 +113,27 @@ export function groupDirection(name: string): number {
   return (hash / 2 ** 32) * 2 * Math.PI;
 }
 
-/** The most a note's place on a ring spans with `stable` (see ringLayout), in radians: few notes stay near their folders' directions. */
+/** The most a note's place on a ring spans (see ringLayout), in radians: few notes stay near their folders' directions. */
 const STABLE_STEP = 0.3;
 
 /**
- * Notes on a ring, grouped by `group` (their folder, by default): the groups in order of name, the
- * notes in a group side by side, a gap of `gap` note places between groups. Each note's angle, and
- * each group's arc, padded by half a place either side. `outer` puts groups inside an enclosing one
- * (a project's folder round its subfolders): those are kept side by side, and `spans` gives each
- * enclosing group's extent, a quarter place wider either side than the arcs it holds. With `stable`,
- * each top-level group (one, or an enclosing one with those inside it) is centred on its own direction
- * (see groupDirection), pushed aside only as far as it must be to clear the others, so that a folder
- * sits on the same side from one map to the next; a place then spans at most STABLE_STEP.
+ * Notes on a ring, grouped by `group` (their folder, by default): the notes in a group side by side, a
+ * gap of `gap` note places between groups. Each note's angle, and each group's arc, padded by half a
+ * place either side. `outer` puts groups inside an enclosing one (a project's folder round its
+ * subfolders): those are kept side by side, and `spans` gives each enclosing group's extent, a quarter
+ * place wider either side than the arcs it holds. Each top-level group (one, or an enclosing one with
+ * those inside it) is centred on its own direction (see groupDirection), pushed aside only as far as
+ * it must be to clear the others, so that a folder sits on the same side from one map to the next; a
+ * place spans at most STABLE_STEP.
  */
 export function ringLayout(
   notes: string[],
   group: (path: string) => string = folderOf,
   gap = 0.8,
   outer: (path: string) => string | null = () => null,
-  stable = false,
 ): { angles: Map<string, number>; arcs: RingArc[]; spans: RingArc[] } {
   const key = (path: string) => outer(path) ?? group(path);
-  const order = (a: string, b: string) => (stable ? groupDirection(key(a)) - groupDirection(key(b)) : 0) || key(a).localeCompare(key(b));
+  const order = (a: string, b: string) => groupDirection(key(a)) - groupDirection(key(b)) || key(a).localeCompare(key(b));
   const groups = new Map<string, string[]>();
   for (const path of [...notes].sort((a, b) => order(a, b) || group(a).localeCompare(group(b)) || a.localeCompare(b))) {
     const name = group(path);
@@ -151,36 +150,27 @@ export function ringLayout(
   }
   const gaps = groups.size > 1 ? groups.size : 0;
   const places = notes.length + gaps * gap;
-  const step = Math.min((2 * Math.PI) / Math.max(1, places), stable ? STABLE_STEP : Infinity);
-  // Where each block's first note goes: in turn from the top; or with `stable`, as said above.
-  const starts: number[] = [];
-  if (!stable) {
-    let at = 0;
-    for (const block of blocks) {
-      starts.push(at);
-      at += (block.notes + (gaps > 0 ? block.groups.length * gap : 0)) * step;
+  const step = Math.min((2 * Math.PI) / Math.max(1, places), STABLE_STEP);
+  // From a block's first note to its last.
+  const extent = blocks.map((block) => (block.notes - 1 + (block.groups.length - 1) * gap) * step);
+  const centres = blocks.map((block) => groupDirection(block.key));
+  // Neighbours too near are pushed apart, half each, until none is: they fit, the places spanning
+  // at most the whole ring between them.
+  for (let round = 0; round < 500 && blocks.length > 1; round++) {
+    let moved = false;
+    for (let i = 0; i < blocks.length; i++) {
+      const j = (i + 1) % blocks.length;
+      const next = centres[j] + (j === 0 ? 2 * Math.PI : 0);
+      const over = (extent[i] + extent[j]) / 2 + step * (1 + gap) - (next - centres[i]);
+      if (over <= 1e-9) continue;
+      centres[i] -= over / 2;
+      centres[j] += over / 2;
+      moved = true;
     }
-  } else {
-    // From a block's first note to its last.
-    const extent = blocks.map((block) => (block.notes - 1 + (block.groups.length - 1) * gap) * step);
-    const centres = blocks.map((block) => groupDirection(block.key));
-    // Neighbours too near are pushed apart, half each, until none is: they fit, the places spanning
-    // at most the whole ring between them.
-    for (let round = 0; round < 500 && blocks.length > 1; round++) {
-      let moved = false;
-      for (let i = 0; i < blocks.length; i++) {
-        const j = (i + 1) % blocks.length;
-        const next = centres[j] + (j === 0 ? 2 * Math.PI : 0);
-        const over = (extent[i] + extent[j]) / 2 + step * (1 + gap) - (next - centres[i]);
-        if (over <= 1e-9) continue;
-        centres[i] -= over / 2;
-        centres[j] += over / 2;
-        moved = true;
-      }
-      if (!moved) break;
-    }
-    blocks.forEach((_, i) => starts.push(centres[i] - extent[i] / 2));
+    if (!moved) break;
   }
+  // Where each block's first note goes, as said above.
+  const starts = centres.map((centre, i) => centre - extent[i] / 2);
   const angles = new Map<string, number>();
   const arcs: RingArc[] = [];
   const spans = new Map<string, RingArc>();

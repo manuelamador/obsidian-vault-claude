@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
-import { join as joinPath } from 'path';
+import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
@@ -13,7 +13,7 @@ import { transcriptNotes } from './rebuildLinks';
 import { vaultRelative } from './toolSummary';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
 import { hiddenPaths } from './pathFilter';
-import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatLink, chatMemosView, continueDraft, firstPassageTarget, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, upgradeMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
+import { ALL_MEMOS_VIEW, MEMO_SUGGESTION_SYSTEM, chatLink, chatMemosView, continueDraft, firstPassageTarget, isChatId, memoDescription, isChatViewName, PROTOCOL_ACTION, memoBaseYaml, memoSection, pairChat, retargetMemoBase, upgradeMemoBase, memoSuggestionPrompt, readMemoSuggestion, savedPassages, type LinkedMemo, type MemoPassage } from './memos';
 import { ContinueMemoModal } from './memoModal';
 import { DAY_MS, OLDER_LOOKED_AT, PICK_UP_SYSTEM, SKIP_DAYS, candidateOf, leftOut, ownMessage, chatsToLookAt, keptToday, localDay, remindersNow, pickUpPrompt, readPickUp, type Candidate, type PickUpState, type Suggestion } from './pickUp';
 import { PickUpModal, type ChatDetails } from './pickUpModal';
@@ -42,6 +42,8 @@ const PLAN_CACHE_MS = 5 * 60 * 1000;
 const SAVE_SOON_MS = 300;
 /** Longest a chat being opened waits for a session's process to end (see sessionEnded); it takes about 2.5 s. */
 const ENDING_WAIT_MS = 10_000;
+/** How long a listing of the chats serves what reads it often (see recentListing). */
+const LISTING_FRESH_MS = 5000;
 /** How long after Obsidian is ready the chats are first listed (see listChats), out of the way of its start. */
 const FIRST_LISTING_DELAY_MS = 3000;
 
@@ -75,6 +77,8 @@ const PICK_UP_OLDER_READS = 30;
 
 /** How many of a chat's last messages its digest reads, when it has no memos (see linkedChatDigest). */
 const DIGEST_MESSAGES = 16;
+/** How much of a chat's conversation its summary is written from (see summariseLinkedChat), at most: its latest part. */
+const SUMMARY_SOURCE_CHARS = 120_000;
 /** The instructions for summarising a chat that is included in another. */
 const LINKED_SUMMARY_SYSTEM =
   'Summarise the conversation given, between a user and an AI assistant, for another conversation that will use it as context. In at most 250 words: what was asked, what was decided or found (with numbers where given), and what was left open. Plain prose or short bullets; no preamble.';
@@ -227,6 +231,8 @@ export default class VaultClaudePlugin extends Plugin {
   private probe: Promise<void> | null = null;
   /** The vault's chats as last listed, and a listing still running (see listChats). */
   private lastListing: HistoryItem[] | null = null;
+  /** When lastListing was listed. */
+  private listedAt = 0;
   private listing: Promise<HistoryItem[]> | null = null;
   /** Chats deleted, or being deleted, kept out of listings (see unlist). */
   private readonly unlisted = new Set<string>();
@@ -289,7 +295,7 @@ export default class VaultClaudePlugin extends Plugin {
         if (view) void this.openConnections(view);
       },
     });
-    this.addCommand({ id: 'write-project-contexts', name: 'Write every project’s context anew', callback: () => void this.writeAllContexts() });
+    this.addCommand({ id: 'write-project-contexts', name: 'Write every project’s context anew', callback: () => this.writeAllContexts() });
     this.addCommand({ id: 'create-project', name: 'Create project…', callback: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId() }) });
     this.addCommand({ id: 'rebuild-connections', name: 'Rebuild connections from chat files', callback: () => this.confirmRebuildConnections() });
     this.addCommand({
@@ -539,13 +545,7 @@ export default class VaultClaudePlugin extends Plugin {
       for (const id of Object.keys(this.unseen)) if (!ids.has(id)) changed = delete this.unseen[id] || changed;
       for (const id of Object.keys(this.chatProjects)) if (!ids.has(id)) changed = delete this.chatProjects[id] || changed;
       for (const id of Object.keys(this.chatSummaries)) if (!ids.has(id)) changed = delete this.chatSummaries[id] || changed;
-      for (const [id, to] of Object.entries(this.chatLinks)) {
-        const kept = to.filter((other) => ids.has(other));
-        if (ids.has(id) && kept.length === to.length) continue;
-        if (ids.has(id) && kept.length > 0) this.chatLinks[id] = kept;
-        else delete this.chatLinks[id];
-        changed = true;
-      }
+      changed = this.pruneChatLinks((id) => ids.has(id)) || changed;
       for (const record of [this.pickUp.hidden, this.pickUp.later ?? {}, this.pickUp.skipped ?? {}]) for (const id of Object.keys(record)) if (!ids.has(id)) changed = delete record[id] || changed;
       // Skips that have run out.
       for (const [id, until] of Object.entries(this.pickUp.skipped ?? {})) if (until <= Date.now()) changed = delete this.pickUp.skipped?.[id] || changed;
@@ -615,12 +615,22 @@ export default class VaultClaudePlugin extends Plugin {
         for (const id of this.searchTexts.keys()) if (!searchable.has(id)) this.searchTexts.delete(id);
         log(`history listed: ${items.length} chats in ${Math.round(performance.now() - started)} ms`);
         this.lastListing = items;
+        this.listedAt = Date.now();
         return items;
       } finally {
         this.listing = null;
       }
     })();
     return this.listing;
+  }
+
+  /**
+   * The chats as listed a moment ago (see LISTING_FRESH_MS), else listed again: for what reads the
+   * listing often (maps, project lists), where a listing takes a read of every session file.
+   */
+  private async recentListing(): Promise<void> {
+    if (this.lastListing && Date.now() - this.listedAt < LISTING_FRESH_MS) return;
+    await this.listChats().catch(() => []);
   }
 
   /**
@@ -952,7 +962,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** Resolves once session `id` has no process left, a closed one exiting (see processEnding) or a kept side chat's, or after `limitMs`. */
-  private async processesEnded(id: string, limitMs = ENDING_WAIT_MS): Promise<void> {
+  async processesEnded(id: string, limitMs = ENDING_WAIT_MS): Promise<void> {
     const exiting = this.exiting.get(id);
     await Promise.all([this.sessionEnded(id, limitMs), exiting && waitAtMost(exiting, limitMs)]);
   }
@@ -1216,13 +1226,22 @@ export default class VaultClaudePlugin extends Plugin {
     // Its project and summary, and its links to and from other chats.
     delete this.chatProjects[id];
     delete this.chatSummaries[id];
-    delete this.chatLinks[id];
+    this.pruneChatLinks((other) => other !== id);
+    // Its notes no longer count toward any project's chats.
+    this.membershipChanged();
+  }
+
+  /** Keeps only the links between chats that `keeps` keeps, both ends; whether any went. */
+  private pruneChatLinks(keeps: (id: string) => boolean): boolean {
+    let changed = false;
     for (const [from, to] of Object.entries(this.chatLinks)) {
-      if (!to.includes(id)) continue;
-      const kept = to.filter((other) => other !== id);
+      const kept = keeps(from) ? to.filter(keeps) : [];
+      if (kept.length === to.length) continue;
       if (kept.length > 0) this.chatLinks[from] = kept;
       else delete this.chatLinks[from];
+      changed = true;
     }
+    return changed;
   }
 
   /** The positions of reply `replyKey`'s checkboxes that the reader flipped; a fresh set to change and save. */
@@ -1433,15 +1452,17 @@ export default class VaultClaudePlugin extends Plugin {
     new Notice(count > 0 ? `${count} ignored chat${count === 1 ? '' : 's'} can be suggested again.` : 'No chats were ignored.');
   }
 
-  /** The project notes of the vault: notes with `type: project` (see projects.ts). */
+  /** The project notes of the vault: notes with `type: project` and a `folder` (see projects.ts). */
   projectNotes(): TFile[] {
     // Kept: the chip looks for the chat's project on every move of the cursor.
     this.projectCache ??= this.app.vault.getMarkdownFiles().filter((file) => this.isProjectNote(file));
     return this.projectCache.filter((file) => this.app.vault.getAbstractFileByPath(file.path) === file);
   }
 
+  /** A note the plugin made for a project: `type: project`, a common property of notes of one's own, with the `folder` it gave it. */
   isProjectNote(file: TFile): boolean {
-    return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === PROJECT_TYPE;
+    const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    return frontmatter?.type === PROJECT_TYPE && typeof frontmatter.folder === 'string';
   }
 
   /** A project note's list of chat ids added to it by hand (`added`). */
@@ -1518,6 +1539,8 @@ export default class VaultClaudePlugin extends Plugin {
     else delete this.chatLinks[from];
     this.saveSoon();
     this.chatLinksChanged();
+    // Its digest, waiting to go with a message, no longer goes.
+    for (const view of this.chatViews()) view.projectsChanged();
   }
 
   /** A link between chats made or taken away, from wherever: the Connections pane draws it at once (a read the project change that follows shares). */
@@ -1540,8 +1563,7 @@ export default class VaultClaudePlugin extends Plugin {
       const items = await Promise.all(
         memos.map(async (file) => {
           const text = await this.app.vault.cachedRead(file);
-          // Its description: what follows the title, up to the first section.
-          const description = /^# .*\n+([^#][\s\S]*?)(?=\n## |(?![\s\S]))/m.exec(text.replace(/^---\n[\s\S]*?\n---\n+/, ''))?.[1]?.trim() ?? '';
+          const description = memoDescription(text);
           const next = memoSection(text, 'Next').trim();
           return [`Memo “${file.basename}”${description ? `: ${description}` : ''}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
         }),
@@ -1560,7 +1582,8 @@ export default class VaultClaudePlugin extends Plugin {
     const dir = this.vaultRoot();
     if (typeof launch === 'string') throw new Error(launch);
     if (!dir) throw new Error('the vault is not a folder on this computer');
-    const transcript = chatDigest(await loadTranscript(id, dir));
+    // More of it than a digest keeps: the summary is what is kept short.
+    const transcript = chatDigest(await loadTranscript(id, dir), SUMMARY_SOURCE_CHARS);
     const text = await runOneShot(launch, { system: LINKED_SUMMARY_SYSTEM, prompt: `Conversation “${this.chatTitleOf(id)}”:\n\n${transcript}`, model: this.smallJobModel(), effort: 'low' }, () => undefined, signal);
     if (signal.aborted || !text.trim()) return;
     this.chatSummaries[id] = { text: text.trim(), at: Date.now() };
@@ -1574,10 +1597,13 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * What the maps do: open a note or chat, preview a note, link a chat from chat `from` (the map's, or
-   * the one on screen), and mention a chat or note in the message being typed in panel `view`.
+   * What the maps do: open a note, preview it, open a chat in panel `view`, link or unlink a chat from
+   * chat `from` (the panel's), name another chat's project, and mention a chat in the message being
+   * typed in panel `view`.
+   * `stale`: whether the panel has moved on from chat `from` since the map was read; then nothing is
+   * done, and the map is drawn again.
    */
-  private mapActions(from: string | null, view: ChatView | null) {
+  private mapActions(from: string | null, view: ChatView | null, stale: () => boolean = () => false) {
     const panel = async () => view ?? this.frontChatView() ?? (await this.activateView());
     return {
       mentionChat: (id: string) => void panel().then((target) => target?.mentionChat(id)),
@@ -1585,10 +1611,10 @@ export default class VaultClaudePlugin extends Plugin {
       openNote: (path: string, newTab: boolean) => void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false),
       previewNote: (path: string, event: MouseEvent | KeyboardEvent, target: Element, parent: unknown) =>
         this.app.workspace.trigger('hover-link', { event, source: VIEW_TYPE, hoverParent: parent, targetEl: target, linktext: path }),
-      openChat: (id: string) => void this.openChatById(id, this.chatTitleOf(id)),
+      openChat: (id: string) => void this.openChatById(id, this.chatTitleOf(id), view),
       linked: (id: string) => (from ? (this.chatLinks[from] ?? []).includes(id) : null),
       link: (id: string, on: boolean) => {
-        if (!from || from === id) return;
+        if (!from || from === id || this.staleMap(stale)) return;
         if (on) this.linkChats(from, [id]);
         else this.unlinkChat(from, id);
         this.projectsChanged();
@@ -1598,36 +1624,49 @@ export default class VaultClaudePlugin extends Plugin {
     };
   }
 
-  /** Asks before rebuilding the links between chats and notes (see rebuildConnections); `done` runs after. */
-  confirmRebuildConnections(done?: () => void): void {
+  /** Whether the Connections pane's map is of a chat the panel no longer shows (see mapActions): then it is drawn again for the panel's chat, with a notice. */
+  private staleMap(stale: () => boolean): boolean {
+    if (!stale()) return false;
+    new Notice('The panel shows another chat now: its map is drawn instead.');
+    this.refollowConnections();
+    return true;
+  }
+
+  /** The Connections pane drawn again for the chat its panel shows now. */
+  private refollowConnections(): void {
+    const pane = this.connectionsPane();
+    if (pane) void this.followPanel(pane, this.connectionsPanel);
+  }
+
+  /** Asks before rebuilding the links between chats and notes (see rebuildConnections). */
+  confirmRebuildConnections(): void {
     new ConfirmModal(
       this.app,
       'Rebuild connections',
-      "Reads every chat's session file again and rebuilds its links to notes: the notes it changed, was sent and linked to in its replies. Links you removed by hand stay removed. Chats put in a project by hand stay in it; the others follow their notes, so some may move to another project.",
+      "Reads every chat's session file again and adds the links to notes it is missing: the notes it changed, was sent and linked to in its replies. No link is taken away, and links you removed by hand stay removed. Chats put in a project by hand stay in it; the others follow their notes, so some may move to another project.",
       'Rebuild',
       () =>
         void this.rebuildConnections().then((result) => {
-          if (result) new Notice(`Connections rebuilt from ${result.chats} chat${result.chats === 1 ? '' : 's'}: ${result.notes} note${result.notes === 1 ? '' : 's'} linked.`);
-          done?.();
+          if (result) new Notice(`Connections rebuilt from ${result.chats} chat${result.chats === 1 ? '' : 's'}: ${result.added} link${result.added === 1 ? '' : 's'} added.`);
         }),
     ).open();
   }
 
   /**
-   * Rebuilds the links between chats and notes from the chats' session files: the notes each changed
-   * (its saved edits), was sent (its prompts' context blocks) and mentioned (the notes its replies
-   * link to). The panel otherwise records them as it draws a chat, so chats never opened since, or
-   * from before a kind of link was recorded, miss some. Links removed by hand stay removed; a chat
-   * whose file cannot be read keeps the links it had. Chats added to a project by hand stay in it; the
-   * others' projects follow from their notes, as rebuilt.
+   * Adds the links between chats and notes that the chats' session files show and the indexes miss:
+   * the notes each changed (its saved edits), was sent (its prompts' context blocks) and mentioned (the
+   * notes its replies link to). The panel otherwise records them as it draws a chat, so chats never
+   * opened since, or from before a kind of link was recorded, miss some. Nothing is taken away: a file
+   * names a note by the path it had then, so a note renamed since is linked by the indexes alone.
+   * Links removed by hand stay removed. Chats added to a project by hand stay in it; the others'
+   * projects follow from their notes.
    */
-  async rebuildConnections(): Promise<{ chats: number; notes: number } | null> {
+  async rebuildConnections(): Promise<{ chats: number; added: number } | null> {
     const root = this.vaultRoot();
     if (!root) return null;
     const notice = new Notice('Rebuilding connections…', 0);
     try {
-      // Oldest first, each made the newest of its notes in turn: the most recent chat ends up first.
-      const items = (await this.listChats()).filter((item) => !item.scratch).sort((a, b) => a.updatedAt - b.updatedAt);
+      const items = (await this.listChats()).filter((item) => !item.scratch);
       const found = new Map<string, { changed: string[]; sent: string[]; mentioned: string[] }>();
       await eachInParallel(items, async (item) => {
         try {
@@ -1638,31 +1677,20 @@ export default class VaultClaudePlugin extends Plugin {
         }
       });
       const removed = (path: string, id: string) => this.noteRemoved[path]?.includes(id) === true;
-      const indexes: [NoteChats, NoteChats, NoteChats] = [{}, {}, {}];
-      for (const item of items) {
-        const links = found.get(item.id);
-        if (!links) {
-          // Unread: its links as they were.
-          [this.noteChats, this.noteRefs, this.noteMentions].forEach((old, i) => {
-            for (const [path, ids] of Object.entries(old)) if (ids.includes(item.id)) linkNote(indexes[i], path, item.id);
-          });
-          continue;
-        }
-        const groups = this.linkedPaths(links, root);
-        groups.forEach((paths, i) => {
-          for (const path of paths) if (path && !removed(path, item.id)) linkNote(indexes[i], path, item.id);
+      // Into the indexes as they are now, links recorded while the files were read included; each
+      // added after the chats that note lists already.
+      const indexes = [this.noteChats, this.noteRefs, this.noteMentions];
+      let added = 0;
+      for (const [id, links] of found) {
+        this.linkedPaths(links, root).forEach((paths, i) => {
+          for (const path of paths) if (path && !removed(path, id) && linkNote(indexes[i], path, id, false)) added += 1;
         });
       }
-      // Chats not listed (copies of chats from outside the panel, side sessions) keep theirs.
-      const listed = new Set(items.map((item) => item.id));
-      [this.noteChats, this.noteRefs, this.noteMentions].forEach((old, i) => {
-        for (const [path, ids] of Object.entries(old)) for (const id of ids) if (!listed.has(id)) linkNote(indexes[i], path, id, false);
-      });
-      [this.noteChats, this.noteRefs, this.noteMentions] = indexes;
-      this.notesLinked();
-      this.projectsChanged();
-      const notes = new Set(indexes.flatMap((index) => Object.keys(index))).size;
-      return { chats: found.size, notes };
+      if (added > 0) {
+        this.notesLinked();
+        this.projectsChanged();
+      }
+      return { chats: found.size, added };
     } finally {
       notice.hide();
     }
@@ -1671,7 +1699,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** A chat's notes as its file names them (see rebuildConnections), as vault paths: changed, sent, mentioned; null for none. */
   private linkedPaths(links: { changed: string[]; sent: string[]; mentioned: string[] }, root: string): (string | null)[][] {
     const inVault = (written: string) => {
-      const path = written.startsWith('/') ? vaultRelative(written, root) : written;
+      const path = isAbsolute(written) ? vaultRelative(written, root) : written;
       return path && !this.isHiddenPath(path) && this.onDisk(path) ? path : null;
     };
     const linkTarget = (target: string) => {
@@ -1713,8 +1741,9 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * Shows the Connections pane (see ConnectionsView) for the chat in panel `view`, opening it beside
-   * the notes when it is not open; `atProject`, centred on the chat's project (the project chip's).
+   * Shows the Connections pane (see ConnectionsView) for the chat in panel `view`, opening it as a tab
+   * among the notes when it is not open; `atProject`, centred on the chat's project (the project
+   * chip's); `links`, with the links under the map unfolded and in view (the links chip's).
    */
   async openConnections(view: ChatView, atProject = false, links = false): Promise<void> {
     const { workspace } = this.app;
@@ -1738,7 +1767,7 @@ export default class VaultClaudePlugin extends Plugin {
     const shown = view?.connectionsChat() ?? null;
     if (!view || !shown) return pane.follow(null);
     const home = atProject ? this.homeProject(shown.id) : null;
-    await pane.follow(await this.chatMapHost(view, shown.id, false, shown.id, shown.lookOnly), home?.path ?? null);
+    await pane.follow(await this.chatMapHost(view, shown.id, false, shown.lookOnly), home?.path ?? null);
   }
 
   /** Panel `view` is closing: a Connections pane following it follows another panel, or none. */
@@ -1772,10 +1801,13 @@ export default class VaultClaudePlugin extends Plugin {
     }, delay);
   }
 
-  /** What chat `id`'s map shows, read now, and what it does. */
-  /** `lookOnly`: the chat on screen has no session of its own yet (see ChatView.connectionsChat): its map is looked at, and nothing is changed for it. */
-  private async chatMapHost(view: ChatView, baseline: string, all = false, id = baseline, lookOnly = false): Promise<ChatMapHost> {
-    await this.listChats().catch(() => []);
+  /**
+   * What the map of chat `id`, panel `view`'s, shows, read now, and what it does. `lookOnly`: the chat
+   * has no session of its own yet (see ChatView.connectionsChat): its map is looked at, and nothing is
+   * changed for it.
+   */
+  private async chatMapHost(view: ChatView, id: string, all = false, lookOnly = false): Promise<ChatMapHost> {
+    await this.recentListing();
     const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
     const listed = new Set((this.lastListing ?? []).filter((item) => !item.scratch).map((item) => item.id));
     const weighted = new Map([...this.weightedNotes()].filter(([other]) => other === id || listed.has(other)));
@@ -1783,18 +1815,17 @@ export default class VaultClaudePlugin extends Plugin {
     const from = this.linkedChats(id).filter((other) => listed.has(other) && !to.includes(other));
     const map = chatMap(id, weighted, to, recent, all, this.hubNotes(), from);
     const home = this.homeProject(id);
+    const stale = () => view.connectionsChat()?.id !== id;
     return {
-      // Links and mentions act for the chat on screen, wherever the map is centred.
       // Look-only: no chat for links to be made from.
-      ...this.mapActions(lookOnly ? null : baseline, view),
+      ...this.mapActions(lookOnly ? null : id, view, stale),
       lookOnly,
-      baseline: { id: baseline, title: this.chatTitleOf(baseline) },
-      centre: id,
+      baseline: { id, title: this.chatTitleOf(id) },
       title: this.chatTitleOf(id),
       ...map,
       hubs: this.hubNotes(),
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
-      ownProject: ((own) => (own ? { name: own.basename, path: own.path } : null))(id === baseline ? home : this.homeProject(baseline)),
+      ownProject: home ? { name: home.basename, path: home.path } : null,
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
       projectMap: async (path) => {
         const file = this.app.vault.getAbstractFileByPath(path);
@@ -1802,8 +1833,9 @@ export default class VaultClaudePlugin extends Plugin {
         return this.projectMapHost(file, view);
       },
       sendAgain: (path) => {
-        const state = this.projectState(baseline);
-        this.setProjectState(baseline, { ...state, sent: state.sent?.filter((key) => key !== path && !key.startsWith('parent:')) });
+        if (this.staleMap(stale)) return;
+        const state = this.projectState(id);
+        this.setProjectState(id, { ...state, sent: state.sent?.filter((key) => key !== path && !key.startsWith('parent:')) });
         this.projectsChanged();
         new Notice('Its context goes again with your next message.');
       },
@@ -1828,9 +1860,15 @@ export default class VaultClaudePlugin extends Plugin {
       },
       projects: () => this.projectNotes().map((file) => ({ path: file.path, name: file.basename })),
       setHome: async (path) => {
-        if (lookOnly) return;
+        if (lookOnly || this.staleMap(stale)) return;
         const file = path === null ? null : this.app.vault.getAbstractFileByPath(path);
-        await this.setHomeProject(baseline, file instanceof TFile ? file : null);
+        if (path !== null && !(file instanceof TFile)) {
+          // A project deleted since the map was drawn: not a choice to leave the chat's own.
+          new Notice('That project is gone.');
+          void this.connectionsPane()?.refresh();
+          return;
+        }
+        await this.setHomeProject(id, file instanceof TFile ? file : null);
         new Notice(file instanceof TFile ? `This chat is now in “${file.basename}”.` : 'This chat is out of its project; its notes no longer place it in one.');
       },
       projectHolding: (folder) => {
@@ -1838,7 +1876,7 @@ export default class VaultClaudePlugin extends Plugin {
         return file && { path: file.path, name: file.basename, folder: this.projectFolder(file) };
       },
       all,
-      reload: (more) => this.chatMapHost(view, baseline, more, id, lookOnly),
+      reload: (more) => this.chatMapHost(view, id, more, lookOnly),
       linkedProject: home ? null : (() => {
         for (const other of this.linkedChats(id)) {
           const file = this.homeProject(other);
@@ -1847,13 +1885,15 @@ export default class VaultClaudePlugin extends Plugin {
         return null;
       })(),
       folderSuggestion: home ? null : this.folderSuggestionFor(id),
-      makeProject: (folder, created) => void this.openCreateProject({ folder, chatId: baseline, created }),
+      makeProject: (folder, created) => {
+        if (!this.staleMap(stale)) void this.openCreateProject({ folder, chatId: id, created });
+      },
     };
   }
 
   /** What project `file`'s map shows, read now; with `all`, every chat and note (see projectMap). */
   private async projectMapHost(file: TFile, view: ChatView | null, all = false): Promise<ProjectMapHost> {
-    await this.listChats().catch(() => []);
+    await this.recentListing();
     const members = this.projectMembers(file).map((item) => item.id);
     const map = projectMap(members, this.weightedNotes(), all);
     return {
@@ -1933,6 +1973,37 @@ export default class VaultClaudePlugin extends Plugin {
     else delete this.chatProjects[id];
     this.homeCache.delete(id);
     void this.saveSettings();
+  }
+
+  /**
+   * The context that went with chat `id` has left its conversation (compacted, or cut away): it is
+   * sent again with the next message. `cut`: part of the chat was removed, so its stored summary,
+   * which holds that part, goes too.
+   */
+  contextLeft(id: string, cut: boolean): void {
+    const state = this.projectState(id);
+    if (state.sent?.length) this.setProjectState(id, { ...state, sent: undefined, sentHash: undefined });
+    if (cut && this.chatSummaries[id]) {
+      delete this.chatSummaries[id];
+      this.saveSoon();
+    }
+    for (const view of this.chatViews()) view.projectsChanged();
+  }
+
+  /**
+   * Keeps `state`, what a chat chose before it had id `id`, together with what was recorded under the
+   * id meanwhile: the context its hook sent with its first message (see markContextSent).
+   */
+  adoptProjectState(id: string, state: ChatProjectState): void {
+    const now = this.projectState(id);
+    const union = (a?: string[], b?: string[]) => [...new Set([...(a ?? []), ...(b ?? [])])];
+    this.setProjectState(id, {
+      sent: union(state.sent, now.sent),
+      sentHash: { ...state.sentHash, ...now.sentHash },
+      declined: now.declined || state.declined,
+      start: now.start ?? state.start,
+      includeChats: union(state.includeChats, now.includeChats),
+    });
   }
 
   /** Records that context `paths` (see ChatView.projectContext), with their fingerprints, went with chat `id`. */
@@ -2015,7 +2086,7 @@ export default class VaultClaudePlugin extends Plugin {
    * opened, as its chats follow from their notes rather than from the note.
    */
   async refreshProjectLists(file: TFile): Promise<void> {
-    await this.listChats().catch(() => []);
+    await this.recentListing();
     const own = this.projectMembers(file).map((item) => item.id);
     const chats = own.map((id) => `- ${this.chatMarkdownLink(id)}`).join('\n');
     const keyNotes = this.keyNotes(file, own);
@@ -2113,17 +2184,21 @@ export default class VaultClaudePlugin extends Plugin {
     return suggestion && !this.projectOfFolder(suggestion.folder) ? suggestion : null;
   }
 
-  /** A project note's name as it is written: without the characters a note name cannot hold. */
+  /** A project note's name as it is written: without the characters a note name cannot hold, nor a leading dot, which would hide it. */
   private cleanProjectName(name: string): string {
-    return name.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+    return name.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+\s*/, '');
   }
 
-  /** Why a project note cannot be called `name`: none left once cleaned, or a note of that name exists (names are unique in the vault). */
-  projectNameProblem(name: string): string | null {
+  /**
+   * Why a project note cannot be called `name`: none left once cleaned, or a note of that name exists
+   * (names are unique in the vault); `renamed`, the note being renamed, which may keep its name in
+   * other letter case.
+   */
+  projectNameProblem(name: string, renamed?: TFile): string | null {
     const clean = this.cleanProjectName(name);
     if (!clean) return 'A project needs a name with letters or numbers in it.';
     const taken = this.app.vault.getAbstractFileByPath(`${this.projectsFolder()}/${clean}.md`) ?? this.app.metadataCache.getFirstLinkpathDest(clean, '');
-    return taken ? `A note named “${clean}” exists already (${taken.path}): choose another name.` : null;
+    return taken && taken !== renamed ? `A note named “${clean}” exists already (${taken.path}): choose another name.` : null;
   }
 
   /**
@@ -2216,7 +2291,7 @@ export default class VaultClaudePlugin extends Plugin {
       file.basename,
       (name) => {
         if (name.trim() === file.basename) return;
-        const problem = this.projectNameProblem(name);
+        const problem = this.projectNameProblem(name, file);
         if (problem) return void new Notice(problem);
         const folder = file.parent && !file.parent.isRoot() ? file.parent.path : '';
         void this.app.fileManager.renameFile(file, `${folder ? `${folder}/` : ''}${this.cleanProjectName(name)}.md`).then(done, (error: unknown) => {
@@ -2246,15 +2321,27 @@ export default class VaultClaudePlugin extends Plugin {
     ).open();
   }
 
-  /** Writes every project's Context anew, straight into its note (one request each, on the model for small jobs). */
-  async writeAllContexts(): Promise<void> {
+  /** Writes every project's Context anew, straight into its note (one request each, on the model for small jobs), after asking. */
+  writeAllContexts(): void {
     const projects = this.projectNotes();
     if (projects.length === 0) return void new Notice('There are no projects yet.');
+    const names = projects.map((file) => `“${file.basename}”`).join(', ');
+    new ConfirmModal(
+      this.app,
+      'Write every project’s context anew',
+      `This replaces the Context of ${projects.length === 1 ? 'the project' : `all ${projects.length} projects`} (${names}), edits by hand included, with one written from its notes and chats. Their Instructions stay. Each Context then goes again with the next message of each of its chats.`,
+      'Write',
+      () => void this.writeContexts(projects),
+    ).open();
+  }
+
+  private async writeContexts(projects: TFile[]): Promise<void> {
     const notice = new Notice(`Writing the context of ${projects.length} project${projects.length === 1 ? '' : 's'}…`, 0);
     let done = 0;
     for (const file of projects) {
       try {
         await this.saveProjectContext(file, await this.writeProjectContext(file));
+        this.contextChanged(file.path);
         done += 1;
       } catch (error) {
         log('writing a project context failed', file.path, error);
@@ -2278,14 +2365,18 @@ export default class VaultClaudePlugin extends Plugin {
       write: (signal) => this.writeProjectContext(file, signal),
       save: async (context) => {
         await this.saveProjectContext(file, context);
-        // Its chats get it again, whether or not it went before.
-        for (const [id, state] of Object.entries(this.chatProjects)) {
-          if (state.sent?.includes(file.path)) this.setProjectState(id, { ...state, sent: state.sent.filter((key) => key !== file.path) });
-        }
+        this.contextChanged(file.path);
         new Notice(`The context of “${file.basename}” is updated: it goes with the next message of each of its chats.`);
         saved?.();
       },
     }).open();
+  }
+
+  /** Project `path`'s Context has been written anew: its chats get it again, whether or not it went before. */
+  private contextChanged(path: string): void {
+    for (const [id, state] of Object.entries(this.chatProjects)) {
+      if (state.sent?.includes(path)) this.setProjectState(id, { ...state, sent: state.sent.filter((key) => key !== path) });
+    }
   }
 
   /** Puts `context` in a project's note, and stamps when. */
@@ -2551,8 +2642,10 @@ export default class VaultClaudePlugin extends Plugin {
    * side chat whose panel has closed, a passage a memo came from. The panel that shows it, once
    * shown (another panel, when that one held it already); null when it could not be.
    */
-  async openChatById(id: string, title: string): Promise<ChatView | null> {
-    const view = await this.activateView();
+  /** `into`: the panel to open it in (the one a map follows), when it is still open; else the panel the plugin opens. */
+  async openChatById(id: string, title: string, into?: ChatView | null): Promise<ChatView | null> {
+    const view = into && !into.isClosing() ? into : await this.activateView();
+    if (into && view === into) await this.app.workspace.revealLeaf(into.leaf);
     const listed = this.lastListing?.find((item) => item.id === id);
     const opened = await view?.openChat(listed ? { ...listed, title } : { id, title, updatedAt: Date.now(), fromPanel: this.isPanelChat(id) });
     if (!opened) return null;
@@ -2567,7 +2660,7 @@ export default class VaultClaudePlugin extends Plugin {
    */
   private async openChatLink(params: Record<string, string>): Promise<void> {
     const id = params.chat;
-    if (!id) return;
+    if (!id || !isChatId(id)) return;
     const dir = this.vaultRoot();
     if (dir && (await sessionStamp(id, dir)) === null) {
       new Notice('Source chat not found on this computer: deleted, or saved on another computer or with the vault in another folder. The passage stays readable in the memo.');
@@ -2778,8 +2871,10 @@ export default class VaultClaudePlugin extends Plugin {
     this.forgetChatData(id);
     log('chat deleted', { id });
     await this.saveSettings();
-    // The Connections pane drawn again without it, staying where it is unless that was the chat itself.
-    void this.connectionsPane()?.refresh();
+    // The Connections pane drawn again without it, staying where it is; when the panel it follows
+    // shows no chat (it was just deleted from there), followed again for none.
+    if (this.connectionsPanel?.connectionsChat()) void this.connectionsPane()?.refresh();
+    else this.refollowConnections();
     return true;
   }
 

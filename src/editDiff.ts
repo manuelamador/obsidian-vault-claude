@@ -103,7 +103,7 @@ export interface EditDiff {
  * as the command's own.
  */
 export function commandNames(command: string, file: string): boolean {
-  const name = file.slice(file.lastIndexOf('/') + 1);
+  const name = file.slice(Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')) + 1);
   const stem = name.replace(/\.[^.]+$/, '');
   return command.includes(file) || command.includes(name) || (stem.length >= 4 && command.includes(stem));
 }
@@ -294,9 +294,12 @@ export class ChangesCard {
     this.list = this.el.createDiv({ cls: 'vc-changes-list' });
   }
 
-  /** The notes in the vault this reply changed or created, by their vault paths. */
+  /**
+   * The notes in the vault this reply changed or created, by their vault paths: those it changed
+   * itself, not those a shell command only reported (see isOwnChange).
+   */
   changedNotes(): string[] {
-    return [...this.files.values()].flatMap((file) => (file.vaultPath?.endsWith('.md') ? [file.vaultPath] : []));
+    return [...this.files.values()].flatMap((file) => (file.own && file.vaultPath?.endsWith('.md') ? [file.vaultPath] : []));
   }
 
   /** The notes in the vault this reply created, by their vault paths. */
@@ -386,6 +389,11 @@ class ChangedFile {
     this.removed += diff.removed;
     showCounts(this.addedEl, this.removedEl, this.added, this.removed);
     if (this.diffEl.isShown()) this.draw();
+  }
+
+  /** Whether any of its changes is the chat's own (see isOwnChange). */
+  get own(): boolean {
+    return this.diffs.some(isOwnChange);
   }
 
   /** The file's edits in order, with a gap between them. */

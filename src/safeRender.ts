@@ -49,16 +49,25 @@ export async function renderSafely(app: App, markdown: string, el: HTMLElement, 
     evt.preventDefault();
     links.open(linktext(link), Keymap.isModEvent(evt) !== false);
   });
-  // Over a link, with ⌘ held or pressed while there: its preview.
+  // Over a link, with ⌘ held or pressed while there: its preview. The key is listened for only while
+  // over one, and no longer once the excerpt is drawn away under the pointer, which no mouseout says.
   let over: HTMLElement | null = null;
+  const doc = el.ownerDocument;
+  const key = (evt: KeyboardEvent) => {
+    if (!over || !over.isConnected) return stop();
+    if (evt.key === 'Meta' || evt.key === 'Control') links.preview(linktext(over), evt, over);
+  };
+  const stop = () => doc.removeEventListener('keydown', key);
+  component.register(stop);
   component.registerDomEvent(el, 'mouseover', (evt) => {
     over = target(evt);
-    if (over) links.preview(linktext(over), evt, over);
+    if (!over) return;
+    links.preview(linktext(over), evt, over);
+    doc.addEventListener('keydown', key);
   });
   component.registerDomEvent(el, 'mouseout', (evt) => {
-    if (over && !over.contains(evt.relatedTarget as Node | null)) over = null;
-  });
-  component.registerDomEvent(el.ownerDocument, 'keydown', (evt) => {
-    if (over && over.isConnected && (evt.key === 'Meta' || evt.key === 'Control')) links.preview(linktext(over), evt, over);
+    if (!over || over.contains(evt.relatedTarget as Node | null)) return;
+    over = null;
+    stop();
   });
 }

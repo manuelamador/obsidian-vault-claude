@@ -37,9 +37,9 @@ export interface LinksHost {
   chooseChat(): void;
 }
 
-/** Picks a chat: to link to, or another named by `placeholder`. */
+/** Picks a chat, for what `placeholder` says. */
 export class ChatPicker extends FuzzySuggestModal<{ id: string; title: string }> {
-  constructor(app: App, private readonly chats: { id: string; title: string }[], private readonly chosen: (chat: { id: string; title: string }) => void, placeholder = 'Link to a chat') {
+  constructor(app: App, private readonly chats: { id: string; title: string }[], private readonly chosen: (chat: { id: string; title: string }) => void, placeholder: string) {
     super(app);
     this.setPlaceholder(placeholder);
   }
@@ -57,11 +57,14 @@ export class ChatPicker extends FuzzySuggestModal<{ id: string; title: string }>
   }
 }
 
-/** The chat's links, drawn under its map in the Connections pane (see ConnectionsView): its own dialogs (pickers) open above. */
+/** The chat's links, drawn under its map in the Connections pane (see ConnectionsView); Link a chat… chooses one in the history window. */
 export class LinksList {
   private contentEl!: HTMLElement;
 
-  private readonly running = new Set<AbortController>();
+  /** The summaries being written, by chat: kept across redraws, so a row drawn again shows its summary under way rather than offering another. */
+  private readonly running = new Map<string, AbortController>();
+  /** Why a chat's summary failed, by chat, shown in its row until it is asked for again. */
+  private readonly failed = new Map<string, string>();
 
   constructor(private readonly host: LinksHost) {}
 
@@ -141,43 +144,56 @@ export class LinksList {
       void host.digest(row.id).then((digest) => status.setText(`Goes with your next message: about ${formatTokens(estimateTokens(digest.length))} tokens.`));
     }
     const fold = box.createEl('details', { cls: 'vc-project-connections' });
+    // Unfolded while its summary is written, or failed, so that what came of it shows.
+    fold.open = this.running.has(row.id) || this.failed.has(row.id);
     fold.createEl('summary', { text: row.summarised ? 'What goes: its summary' : 'What goes: its digest' });
     const body = fold.createEl('pre', { cls: 'vc-link-digest' });
     fold.addEventListener('toggle', () => {
       if (fold.open && !body.textContent) void host.digest(row.id).then((digest) => body.setText(digest));
     });
     const actions = fold.createDiv({ cls: 'vc-project-foot' });
-    const working = actions.createSpan({ cls: 'vc-project-status' });
+    const working = actions.createSpan({ cls: 'vc-project-status vc-pick-up-status' });
     if (row.summarised) {
       actions.createEl('button', { text: 'Use its digest instead' }).addEventListener('click', () => {
         host.forgetSummary(row.id);
         this.draw();
       });
-    } else {
-      const summarise = actions.createEl('button', { text: 'Summarise first' });
-      summarise.setAttr('aria-label', 'Ask the model for small jobs for a summary of this chat, sent in place of its digest');
-      summarise.addEventListener('click', async () => {
-        summarise.disabled = true;
-        working.empty();
-        setIcon(working.createSpan({ cls: 'vc-pick-up-wheel' }), 'loader-2');
-        working.appendText(' Summarising…');
-        const controller = new AbortController();
-        this.running.add(controller);
-        try {
-          await host.summarise(row.id, controller.signal);
-          if (!controller.signal.aborted) this.draw();
-        } catch (error) {
-          if (!controller.signal.aborted) working.setText(`No summary: ${errorText(error)}.`);
-          summarise.disabled = false;
-        } finally {
-          this.running.delete(controller);
-        }
-      });
+      return;
     }
+    const summarise = actions.createEl('button', { text: 'Summarise first' });
+    summarise.setAttr('aria-label', 'Ask the model for small jobs for a summary of this chat, sent in place of its digest');
+    if (this.running.has(row.id)) {
+      summarise.disabled = true;
+      working.createSpan({ cls: 'vc-pick-up-wheel', attr: { 'aria-hidden': 'true' } });
+      working.createSpan({ text: 'Summarising…' });
+    } else {
+      const failure = this.failed.get(row.id);
+      if (failure) working.setText(`No summary: ${failure}.`);
+    }
+    summarise.addEventListener('click', () => void this.summarise(row.id));
+  }
+
+  /** Has the model summarise chat `id` (once at a time), drawing the list again as it starts and when it ends. */
+  private async summarise(id: string): Promise<void> {
+    if (this.running.has(id)) return;
+    const controller = new AbortController();
+    this.running.set(id, controller);
+    this.failed.delete(id);
+    this.draw();
+    try {
+      await this.host.summarise(id, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) this.failed.set(id, errorText(error));
+    } finally {
+      this.running.delete(id);
+    }
+    if (!controller.signal.aborted) this.draw();
   }
 
   onClose(): void {
-    for (const controller of this.running) controller.abort();
+    for (const controller of this.running.values()) controller.abort();
+    this.running.clear();
+    this.failed.clear();
     this.contentEl.empty();
   }
 }

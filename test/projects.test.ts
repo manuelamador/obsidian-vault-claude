@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { bubbleOf } from '../src/chatText';
 import { stripContext } from '../src/history';
-import { contextHash, contextPrompt, homeOf, linkedChatsBlock, noteOpening, projectContextBlock, projectNoteMarkdown, projectParts, readContext, withContext, withGenerated } from '../src/projects';
+import { CONTEXT_MAX_CHARS, contextBlock, contextHash, contextPrompt, homeOf, linkedChatsBlock, type ContextPart, noteOpening, projectContextBlock, projectNoteMarkdown, projectParts, readContext, withContext, withGenerated } from '../src/projects';
 import { prompt } from './transcript';
 
 const note = projectNoteMarkdown({ name: 'Tariffs', folder: 'Research/Tariffs', added: ['a', 'b'], date: '2026-10-06' });
@@ -105,4 +105,34 @@ test('the linked chats block holds each digest; a prompt written with one before
   assert.equal(stripContext(raw), 'hello');
   assert.deepEqual(bubbleOf(prompt(raw))?.chips, []);
   assert.equal(linkedChatsBlock([]), '');
+});
+
+test('a section whose END marker is missing is left alone, and the sections after it with it', () => {
+  const broken = note.replace(/(## Chats\n\n<!-- BEGIN GENERATED -->\n)<!-- END GENERATED -->\n/, '$1');
+  assert.equal(withGenerated(broken, 'Chats', '- a chat'), broken);
+  assert.match(withGenerated(broken, 'Key notes', '- [[A]]'), /## Key notes\n\n<!-- BEGIN GENERATED -->\n- \[\[A\]\]\n<!-- END GENERATED -->/);
+  const noContextEnd = note.replace(/(## Context\n\n<!-- BEGIN GENERATED -->\n)<!-- END GENERATED -->\n/, '$1');
+  assert.throws(() => withContext(noContextEnd, 'New context.'), /without its/);
+  assert.equal(projectParts(noContextEnd).context, '');
+});
+
+test('a Context made where a note has none goes below its frontmatter', () => {
+  const own = '---\ntype: project\n# a comment\n---\n\n# Title\n\nText.\n';
+  const made = withContext(own, 'About it.');
+  assert.ok(made.startsWith('---\ntype: project\n# a comment\n---\n\n# Title\n\n## Context\n\n<!-- BEGIN GENERATED -->\nAbout it.'));
+});
+
+test('what goes with a message stays under the hook limit, the digests cut to share it', () => {
+  const project = { name: 'P', note: 'P.md', context: 'c'.repeat(2000), role: 'home' as const };
+  const parts: ContextPart[] = [
+    { key: 'P.md', project },
+    { key: 'chat:a', chat: { id: 'a', title: 'A', digest: `${'x'.repeat(8000)}END-A` } },
+    { key: 'chat:b', chat: { id: 'b', title: 'B', digest: `${'y'.repeat(8000)}END-B` } },
+  ];
+  const block = contextBlock(parts);
+  assert.ok(block.length <= CONTEXT_MAX_CHARS, String(block.length));
+  assert.match(block, /<project_context>/);
+  assert.match(block, /END-A/);
+  assert.match(block, /END-B/);
+  assert.equal(contextBlock(parts.slice(0, 1)), projectContextBlock([project]));
 });

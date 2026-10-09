@@ -29,7 +29,7 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
   filePathOf,
@@ -62,7 +62,7 @@ import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
 import type { ChatDraft, ChatProjectState } from './main';
-import { contextHash, linkedChatsBlock, projectContextBlock } from './projects';
+import { contextHash, type ContextPart } from './projects';
 import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
@@ -286,6 +286,8 @@ const PANEL_CLOSED_ANSWER = 'Not answered: the Claude panel was closed. Nothing 
 
 /** How long a chat whose waiting requests were just answered has to take the answers before its process is ended (see ChatView.closeAfterAnswer). */
 const ANSWER_WAIT_MS = 3000;
+/** How long the notice after Remove or Move from here on offers Undo. */
+const REMOVAL_UNDO_MS = 10_000;
 
 /** A plan request without the plan's text: its file is read this many times, this far apart, until it is written (see showPlan). */
 const PLAN_READ_ATTEMPTS = 40;
@@ -330,6 +332,15 @@ interface BackgroundChat {
   modeBeforePlan: PermissionMode;
   /** Its messages still queued, by id, with their text and chips: not yet in its file, so drawn again from here. */
   queued: Map<string, { text: string; chips: Chip[] }>;
+  /** A new chat sent to the background before its id came: what it chose (see ChatView.startOf), kept under its id at its init. */
+  start: ChatStart | null;
+}
+
+/** What a new chat chose before it has an id: its project state, with the note it starts from, and the chats and notes its first message linked. */
+interface ChatStart {
+  state: ChatProjectState;
+  chats: string[];
+  notes: string[];
 }
 
 /** A background chat with nothing left to keep its process for: not working, no tasks, not on the phone, nothing waiting on you. */
@@ -1526,6 +1537,20 @@ export class ChatView extends ItemView {
     return this.attachedNote ? this.plugin.projectForPath(this.attachedNote) : null;
   }
 
+  /** What this chat, new and without an id yet, has chosen (see ChatStart). */
+  private startOf(): ChatStart {
+    const state: ChatProjectState = { ...this.projectLocal };
+    if (this.attachedNote) state.start = this.attachedNote;
+    return { state, chats: [...this.chatsToLink], notes: [...this.notesToLink] };
+  }
+
+  /** Keeps what a chat sent to the background chose before its id came, now that it has id `id`. */
+  private adoptStart(id: string, start: ChatStart): void {
+    this.plugin.adoptProjectState(id, start.state);
+    for (const path of start.notes) this.plugin.linkNoteRef(path, id);
+    if (start.chats.length > 0) this.plugin.linkChats(id, start.chats);
+  }
+
   private projectStateNow(): ChatProjectState {
     return this.chatId ? this.plugin.projectState(this.chatId) : this.projectLocal;
   }
@@ -1535,16 +1560,18 @@ export class ChatView extends ItemView {
     else this.projectLocal = state;
   }
 
-  /** What goes with the next message from the chat's projects (see projectContextBlock), and which projects it holds. */
-  /** `text`: the message it goes with, whose links to chats count as this chat's (see linksTo). */
-  private async projectContext(text: string): Promise<{ block: string; paths: string[]; hashes: Record<string, string> }> {
+  /**
+   * What goes with the next message from the chat's projects and the chats it includes (see
+   * contextBlock), by part, with their fingerprints. `text`: the message it goes with, whose links to
+   * chats count as this chat's (see linksTo).
+   */
+  private async projectContext(text: string): Promise<{ parts: ContextPart[]; hashes: Record<string, string> }> {
     const home = this.homeProjectFile();
     const state = this.projectStateNow();
     // Sent already, or waiting to go with a message Claude Code has not taken up yet.
     const sent = new Set([...(state.sent ?? []), ...(this.session?.waitingContext() ?? [])]);
-    const parts: Parameters<typeof projectContextBlock>[0] = [];
     // What went is marked by key: a project's path; `parent:` and its path for an enclosing project's Instructions; `chat:` and an id.
-    const paths: string[] = [];
+    const parts: ContextPart[] = [];
     const hashes: Record<string, string> = {};
     // The Instructions of the projects holding its home project's folder, the outermost first.
     for (const parent of home ? this.plugin.enclosingProjects(home) : []) {
@@ -1552,29 +1579,41 @@ export class ChatView extends ItemView {
       if (sent.has(key)) continue;
       const read = await this.plugin.projectParts(parent);
       if (!read.instructions) continue;
-      parts.push({ name: parent.basename, note: parent.path, instructions: read.instructions, role: 'parent' });
-      paths.push(key);
+      parts.push({ key, project: { name: parent.basename, note: parent.path, instructions: read.instructions, role: 'parent' } });
       // Only its Instructions go: a change to its Context alone sends nothing again.
       hashes[key] = contextHash({ context: '', instructions: read.instructions });
     }
     if (home && !sent.has(home.path)) {
       const read = await this.plugin.projectParts(home);
       if (read.context || read.instructions) {
-        parts.push({ name: home.basename, note: home.path, context: read.context, instructions: read.instructions, role: 'home' });
-        paths.push(home.path);
+        parts.push({ key: home.path, project: { name: home.basename, note: home.path, context: read.context, instructions: read.instructions, role: 'home' } });
         hashes[home.path] = contextHash(read);
       }
     }
     // The chats it links to and includes: each one's digest, once.
-    const chats: Parameters<typeof linkedChatsBlock>[0] = [];
     for (const id of this.includedChats(text)) {
       const key = `chat:${id}`;
       if (sent.has(key)) continue;
-      chats.push({ id, title: this.plugin.chatTitleOf(id), digest: await this.plugin.linkedChatDigest(id) });
-      paths.push(key);
+      parts.push({ key, chat: { id, title: this.plugin.chatTitleOf(id), digest: await this.plugin.linkedChatDigest(id) } });
       hashes[key] = this.chatStamp(id);
     }
-    return { block: [projectContextBlock(parts), linkedChatsBlock(chats)].filter(Boolean).join('\n\n'), paths, hashes };
+    return { parts, hashes };
+  }
+
+  /**
+   * Whether context under `key` (see projectContext) is still to go with the chat on screen: a
+   * project it is still in, a chat it still links to and includes. What waits to go is checked again
+   * whenever these change (see projectsChanged).
+   */
+  private contextWanted(key: string): boolean {
+    const home = this.homeProjectFile();
+    if (key.startsWith('chat:')) {
+      const id = key.slice('chat:'.length);
+      const linked = [...this.linksTo(''), ...this.chatsToLink.map((each) => ({ id: each }))].some((link) => link.id === id);
+      return linked && (this.projectStateNow().includeChats ?? []).includes(id);
+    }
+    if (key.startsWith('parent:')) return home !== null && this.plugin.enclosingProjects(home).some((parent) => `parent:${parent.path}` === key);
+    return home?.path === key;
   }
 
   /** Whether what went under `key` (see projectContext) changed since: a project's Context or Instructions, or a linked chat. */
@@ -1688,7 +1727,7 @@ export class ChatView extends ItemView {
         }
         update((state) => ({ ...state, includeChats: state.includeChats?.filter((each) => each !== id), sent: state.sent?.filter((key) => key !== `chat:${id}`) }));
       },
-      open: (id) => void this.plugin.openChatById(id, titleOf(id)),
+      open: (id) => void this.plugin.openChatById(id, titleOf(id), this),
       summarise: async (id, signal) => {
         await this.plugin.summariseLinkedChat(id, signal);
         this.projectsChanged();
@@ -1773,11 +1812,12 @@ export class ChatView extends ItemView {
   /**
    * After a memo or note is saved from a chat with no project: saved notes go to the plugin's own
    * folders, which give a chat no project, so a notice offers the projects to add it to, the most
-   * recent first. Nothing when its project was removed by hand (the + Project chip still offers one).
+   * recently changed first. Nothing when the chat was taken out of its project by hand (the No
+   * project chip still offers one).
+   * `id`: the chat saved from, read before the save; nothing when the panel shows another chat since.
    */
-  private offerProjectAfterSave(): void {
-    const id = this.chatId;
-    if (!id || !this.offersProject() || this.projectStateNow().declined) return;
+  private offerProjectAfterSave(id: string): void {
+    if (this.chatId !== id || !this.offersProject() || this.projectStateNow().declined) return;
     const projects = this.plugin.projectNotes().sort((a, b) => b.stat.mtime - a.stat.mtime);
     if (projects.length === 0) return;
     const add = (file: TFile) => void this.plugin.setHomeProject(id, file).then(() => new Notice(`This chat is now in “${file.basename}”.`));
@@ -1823,6 +1863,8 @@ export class ChatView extends ItemView {
 
   /** Projects changed (a chat joined or left one, its Context changed): the chip shows it. */
   projectsChanged(): void {
+    // What waits to go with a message already sent, and is no longer wanted, does not go.
+    this.session?.withdrawContext((key) => !this.contextWanted(key));
     this.contextKey = '';
     this.updateContextChip();
   }
@@ -1885,7 +1927,7 @@ export class ChatView extends ItemView {
       const shown = prompt && promptBubble(prompt.text, prompt.images);
       if (!shown || shown === 'stopped') continue;
       // Already drawn (sent here before the panel was reloaded, say, so not known as sent here): not again.
-      if (Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).some((drawn) => drawn.dataset.uuid === message.uuid)) {
+      if (Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).some((drawn) => drawn.dataset.uuid === message.uuid || drawn.dataset.sentUuid === message.uuid)) {
         this.sentIds.add(message.uuid);
         continue;
       }
@@ -1939,6 +1981,7 @@ export class ChatView extends ItemView {
       turnPrompts: this.turnPrompts,
       sentIds: this.sentIds,
       modeBeforePlan: this.modeBeforePlan,
+      start: this.chatId || this.scratch ? null : this.startOf(),
     };
     this.tasks = new Set();
     for (const approval of this.openApprovals) this.adoptApproval(entry, approval);
@@ -1983,6 +2026,8 @@ export class ChatView extends ItemView {
         if (message.type === 'system' && message.subtype === 'init' && entry.chatId !== message.session_id) {
           entry.chatId = message.session_id;
           this.plugin.recordChat(message.session_id, entry.title ?? 'Untitled chat');
+          if (entry.start) this.adoptStart(message.session_id, entry.start);
+          entry.start = null;
         } else if (message.type === 'stream_event') {
           clearSettle(entry);
           if (!entry.busy) {
@@ -2264,7 +2309,7 @@ export class ChatView extends ItemView {
     for (const [id, queued] of entry.queued) {
       const waiting = this.pending.get(id);
       if (!waiting || waiting.running) continue;
-      const drawn = Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).find((bubble) => bubble.dataset.uuid === id);
+      const drawn = Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).find((bubble) => bubble.dataset.uuid === id || bubble.dataset.sentUuid === id);
       this.pending.set(id, { ...waiting, bubble: drawn ?? this.drawQueued(queued.text, queued.chips), text: queued.text, chips: queued.chips });
     }
     for (const approval of entry.approvals) this.renderApprovalCard(approval);
@@ -2275,6 +2320,7 @@ export class ChatView extends ItemView {
     this.restoreDraft();
     this.seeChat();
     this.scrollToBottom(true);
+    this.plugin.chatShown(this);
   }
 
   private updateBackgroundIndicator(): void {
@@ -2808,7 +2854,7 @@ export class ChatView extends ItemView {
             }
           }
           const prompt = messagePrompt(message);
-          if (prompt) lastPrompt = timed('prompts', () => this.renderHistoricUser(prompt.text, prompt.images, message.uuid)) ?? lastPrompt;
+          if (prompt) lastPrompt = timed('prompts', () => this.renderHistoricUser(prompt.text, prompt.images, message.uuid, sentUuidOf(message))) ?? lastPrompt;
         } else if (message.type === 'assistant' && Array.isArray(content)) {
           let textIndex = 0;
           for (const block of content as ContentBlock[]) {
@@ -2864,13 +2910,15 @@ export class ChatView extends ItemView {
    * A saved prompt of yours (see promptBubble): its background-task notices, then its bubble and a
    * new turn for the reply, or the Stopped notice. Returns the bubble's text, for ↑.
    */
-  private renderHistoricUser(raw: string, images: Chip[] = [], uuid?: string): string | null {
+  /** `sentUuid`: the id a queued message was sent with, when its file holds it under another (see sentUuidOf). */
+  private renderHistoricUser(raw: string, images: Chip[] = [], uuid?: string, sentUuid?: string): string | null {
     if (raw.includes('<task-notification>')) for (const notice of parseTaskNotifications(raw).notices) this.renderTaskNotice(notice);
     const bubble = promptBubble(raw, images);
     if (bubble === 'stopped') this.renderNotice('Stopped.', 'vc-muted');
     if (!bubble || bubble === 'stopped') return null;
     try {
-      this.renderUserBubble(bubble.text, bubble.chips, undefined, uuid);
+      const drawn = this.renderUserBubble(bubble.text, bubble.chips, undefined, uuid);
+      if (sentUuid) drawn.dataset.sentUuid = sentUuid;
     } finally {
       // The reply gets a turn of its own even when the bubble could not be drawn whole, rather than
       // joining the exchange before it.
@@ -3095,21 +3143,38 @@ export class ChatView extends ItemView {
       new Notice('The scratch chat is cleared rather than cut: use Start over, or copy what you want to keep to a new chat first.');
       return null;
     }
-    if (this.busy) {
-      new Notice('Claude is still working. Stop it, or wait for the reply, then remove.');
-      return null;
-    }
-    if (this.plugin.chatHolder(id, this)) {
-      new Notice('This chat is open in another panel too. Open another chat there first.');
+    const blocked = this.cutBlocked(id);
+    if (blocked) {
+      new Notice(blocked);
       return null;
     }
     const bubble = this.messagesEl.querySelector<HTMLElement>(`.vc-user[data-uuid="${uuid}"]`);
     if (!bubble) return null;
     const order = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user, .vc-turn')];
+    // Nothing would be left: a chat with no message cannot be opened again.
+    if (order[0] === bubble && !this.earlier) {
+      new Notice('This is the chat’s first message: delete the chat instead, from the history.');
+      return null;
+    }
     const after = order.slice(order.indexOf(bubble));
     const turns = after.filter((el) => el.hasClass('vc-turn'));
     const notes = [...new Set(turns.flatMap((turn) => this.changeCards.get(turn)?.changedNotes() ?? []))];
     return { id, messages: after.filter((el) => el.hasClass('vc-user')).length, replies: turns.length, notes };
+  }
+
+  /**
+   * Why chat `id` cannot be cut now, or null when it can: its process is ended for the cut, which
+   * would stop a reply, a message waiting, a background task or the phone link, and another panel
+   * holding it would go on writing to its file.
+   */
+  private cutBlocked(id: string): string | null {
+    if (this.plugin.chatHolder(id, this)) return 'This chat is open in another panel too. Open another chat there first.';
+    if ([...this.background].some((entry) => entry.chatId === id)) return 'This chat is still running in the background. Wait for it to finish.';
+    if (this.chatId !== id) return null;
+    if (this.busy || this.pending.size > 0) return 'Claude is still working. Stop it, or wait for the reply, then remove.';
+    if (this.tasks.size > 0) return 'A background task of this chat is still running, and ending the chat would stop it. Wait for it to end.';
+    if (this.remoteUrl) return 'This chat is on your phone, and ending it would end that link. Take it off the phone first.';
+    return null;
   }
 
   /** What a removal takes, in words: "this message and 2 replies", and the notes changed that stay. */
@@ -3123,25 +3188,31 @@ export class ChatView extends ItemView {
   private confirmRemoveFrom(uuid: string): void {
     const removal = this.removalFrom(uuid);
     if (!removal) return;
-    new ConfirmModal(this.app, 'Remove from here on', `This removes ${this.removalWords(removal)} For 10 seconds afterwards, Undo in the notice at the top right puts it back.`, 'Remove', () => void this.removeFrom(uuid, true)).open();
+    new ConfirmModal(this.app, 'Remove from here on', `This removes ${this.removalWords(removal)} For 10 seconds afterwards, Undo in the notice at the top right puts it back.`, 'Remove', () => void this.removeFrom(removal.id, uuid, true)).open();
   }
 
   /**
-   * Removes message `uuid` and everything after it from the chat on screen, in place, so the chat
+   * Removes message `uuid` and everything after it from chat `id`, on screen, in place, so the chat
    * keeps its id and what is linked to it: its process is ended, its file cut (see cutChat), and it is
-   * opened again (unless `reopen` is false). A notice offers to put it back. Whether it was removed.
+   * opened again (unless `reopen` is false). A notice offers to put it back; `copy`, the chat the part
+   * removed was moved to, goes when it is. What it left beside the file goes once the offer has
+   * passed (see deleteCutLeftovers). Whether it was removed.
    */
-  private async removeFrom(uuid: string, reopen: boolean): Promise<boolean> {
-    const id = this.chatId;
+  private async removeFrom(id: string, uuid: string, reopen: boolean, copy?: string): Promise<boolean> {
     const root = this.plugin.vaultRoot();
-    if (!id || !root) return false;
+    if (!root) return false;
+    // Checked again: the chat may have changed while the dialog was open, or a copy was made.
+    const blocked = this.chatId === id ? this.cutBlocked(id) : 'The chat is no longer on screen.';
+    if (blocked) {
+      new Notice(`Not removed: ${blocked}`);
+      return false;
+    }
     const item: HistoryItem = { id, title: this.chatName ?? 'Untitled chat', updatedAt: Date.now(), fromPanel: true };
     // The notes the part removed changed, read while it is still on screen.
     const changed = this.removalFrom(uuid)?.notes ?? [];
-    // Its process ends first: it holds the conversation and writes to the file as it exits.
+    // Its process ends first, and its file is cut once it has exited: it writes to the file as it exits.
     this.newChat();
-    this.closeBackgroundChat(id);
-    await this.plugin.sessionEnded(id);
+    await this.plugin.processesEnded(id);
     let done: { kept: string; cut: string };
     try {
       done = await cutChat(id, root, uuid);
@@ -3154,33 +3225,59 @@ export class ChatView extends ItemView {
     log('removed from a message', { chat: id, from: uuid });
     // Notes only the removed part changed no longer list the chat as having changed them.
     const dropped = await this.plugin.unlinkRemovedEdits(id, changed);
+    // What went with the part removed (project context, a summary of it) is no longer in the chat.
+    this.plugin.contextLeft(id, true);
     if (reopen) await this.openChat(item);
+    let undoing = false;
+    let leftovers = 0;
+    const later = () => {
+      leftovers = window.setTimeout(() => void deleteCutLeftovers(id, root, done).catch((error: unknown) => log('deleting what a removal left failed', error)), REMOVAL_UNDO_MS + 1000);
+    };
+    later();
     const notice = createFragment((el) => {
-      el.appendText(`Removed from “${item.title}”. `);
-      el.createEl('a', { text: 'Undo' }).addEventListener('click', () => void this.undoRemove(item, done, dropped));
+      el.appendText(copy ? `Moved from “${item.title}”. ` : `Removed from “${item.title}”. `);
+      el.createEl('a', { text: 'Undo' }).addEventListener('click', () => {
+        if (undoing) return;
+        undoing = true;
+        window.clearTimeout(leftovers);
+        void this.undoRemove(item, done, dropped, copy).then((put) => {
+          if (put) return;
+          undoing = false;
+          later();
+        });
+      });
     });
-    new Notice(notice, 10_000);
+    new Notice(notice, REMOVAL_UNDO_MS);
     return true;
   }
 
-  /** Puts back what removeFrom took, when nothing was added to the chat since, and the note links it dropped (`dropped`); the chat is shown again. */
-  private async undoRemove(item: HistoryItem, done: { kept: string; cut: string }, dropped: string[]): Promise<void> {
+  /**
+   * Puts back what removeFrom took, when nothing was added to the chat since, and the note links it
+   * dropped (`dropped`); `copy`, the chat it was moved to, is deleted. The chat is shown again.
+   * Whether it was put back.
+   */
+  private async undoRemove(item: HistoryItem, done: { kept: string; cut: string }, dropped: string[], copy?: string): Promise<boolean> {
     const root = this.plugin.vaultRoot();
-    if (!root) return;
-    if (this.plugin.chatHolder(item.id, this) || (this.chatId === item.id && this.busy)) {
-      new Notice('The chat is in use: it could not be put back.');
-      return;
+    if (!root) return false;
+    const blocked = this.cutBlocked(item.id) ?? (copy ? this.cutBlocked(copy) : null);
+    if (blocked) {
+      new Notice(`It could not be put back: ${blocked}`);
+      return false;
     }
-    if (this.chatId === item.id) this.newChat();
-    this.closeBackgroundChat(item.id);
-    await this.plugin.sessionEnded(item.id);
+    if (this.chatId === item.id || (copy && this.chatId === copy)) this.newChat();
+    await this.plugin.processesEnded(item.id);
     const put = await uncutChat(item.id, root, done).catch((error: unknown) => {
       log('undoing a removal failed', error);
       return false;
     });
-    if (put) for (const path of dropped) this.plugin.linkNoteChat(path, item.id, false);
+    if (put) {
+      for (const path of dropped) this.plugin.linkNoteChat(path, item.id, false);
+      // The moved part is back where it was: its copy would hold it a second time.
+      if (copy) await this.plugin.deleteChat(copy);
+    }
     new Notice(put ? `Put back in “${item.title}”.` : 'It could not be put back: the chat has changed since.');
     await this.openChat(item);
+    return put;
   }
 
   /** Copies message `uuid` and what follows to a new chat, removes them here, and shows the new chat. */
@@ -3188,9 +3285,10 @@ export class ChatView extends ItemView {
     const removal = this.removalFrom(uuid);
     if (!removal) return;
     new ConfirmModal(this.app, 'Move to a new chat', `This moves ${this.removalWords(removal)}`, 'Move', async () => {
-      const copy = await this.branch(undefined, false, uuid, false);
+      // All of it to the end, as all of it is cut here.
+      const copy = await this.branch(undefined, false, uuid, false, true);
       if (!copy) return;
-      if (!(await this.removeFrom(uuid, false))) {
+      if (!(await this.removeFrom(removal.id, uuid, false, copy))) {
         // Not cut here: the copy would hold the same messages a second time, and goes.
         await this.plugin.deleteChat(copy);
         return;
@@ -3215,8 +3313,9 @@ export class ChatView extends ItemView {
       this.app,
       chats,
       (target) => {
+        const id = this.chatId;
         const send = async (remove: boolean) => {
-          if (remove && !(await this.removeFrom(uuid, false))) return;
+          if (remove && (!id || !(await this.removeFrom(id, uuid, false)))) return;
           const view = await this.plugin.openChatById(target.id, target.title);
           if (!view) {
             new Notice('That chat could not be opened. The message is in your clipboard.');
@@ -3248,24 +3347,27 @@ export class ChatView extends ItemView {
    * chat, is named for what it holds (see copyTitle). The chat copied stays as it is. `open` false:
    * the copy is made and recorded only. Its id; null when none was made.
    */
-  private async branch(upTo: string | undefined, newTab: boolean, start?: string, open = true): Promise<string | null> {
+  private async branch(upTo: string | undefined, newTab: boolean, start?: string, open = true, whole = false): Promise<string | null> {
     const source = this.chatId ?? this.resumeId;
     const root = this.plugin.vaultRoot();
     if (!source || !root) {
       new Notice('Nothing to branch yet.');
       return null;
     }
-    if (!upTo && (this.busy || start)) {
-      // The reply in progress is left out: the branch ends after the last finished one.
-      const finished = this.messagesEl.querySelectorAll<HTMLElement>('.vc-turn.has-branch');
-      upTo = finished[finished.length - 1]?.dataset.branchUuid;
+    // The last finished reply: a reply in progress, or one stopped before it finished, is left out.
+    const finished = this.messagesEl.querySelectorAll<HTMLElement>('.vc-turn.has-branch');
+    const lastFinished = finished[finished.length - 1]?.dataset.branchUuid;
+    if (!upTo && (this.busy || start) && !whole) {
+      upTo = lastFinished;
       if (!upTo) {
         new Notice('Nothing to branch yet: Claude has not finished a reply in this chat.');
         return null;
       }
     }
+    // `whole`: the copy goes to the end, whatever is there (the chat is idle).
+    const repliesTo = upTo ?? lastFinished;
     const startBubble = start ? this.messagesEl.querySelector<HTMLElement>(`.vc-user[data-uuid="${start}"]`) : null;
-    const replies = startBubble && upTo ? this.repliesFrom(startBubble, upTo) : [];
+    const replies = startBubble && repliesTo ? this.repliesFrom(startBubble, repliesTo) : [];
     if (start && replies.length === 0) {
       new Notice('Nothing to copy yet: Claude has not finished replying to that message.');
       return null;
@@ -3430,7 +3532,7 @@ export class ChatView extends ItemView {
       const file = await this.app.vault.create(path, chatToMarkdown(title, id, transcript, date, this.plugin.ticks[id]));
       await this.app.workspace.getLeaf('tab').openFile(file);
       new Notice(`Saved to ${path}.`);
-      this.offerProjectAfterSave();
+      this.offerProjectAfterSave(id);
     } catch (error) {
       log('saving the chat failed', error);
       new Notice(`Could not save the chat: ${errorText(error)}`);
@@ -3468,7 +3570,7 @@ export class ChatView extends ItemView {
       const file = await this.app.vault.create(path, summaryNote(answer, { date, sessionId: id }));
       await this.app.workspace.getLeaf('tab').openFile(file);
       new Notice(`Saved the summary to ${path}.`);
-      this.offerProjectAfterSave();
+      this.offerProjectAfterSave(id);
     } catch (error) {
       // Cancelled (from the notice, or by closing the panel): already reported, nothing saved.
       if (controller.signal.aborted) return;
@@ -3880,7 +3982,7 @@ export class ChatView extends ItemView {
     const draftKey = this.draftKey();
     let built: { content: UserContent; notes: string[] };
     // The chat's projects' context, once (see projectContext); never with a slash command.
-    let project: Awaited<ReturnType<ChatView['projectContext']>> = { block: '', paths: [], hashes: {} };
+    let project: Awaited<ReturnType<ChatView['projectContext']>> = { parts: [], hashes: {} };
     try {
       if (!slash) project = await this.projectContext(text);
       built = slash ? { content: text, notes: [] } : await this.buildContent(text, attachments, pathOnly);
@@ -3912,9 +4014,9 @@ export class ChatView extends ItemView {
     // The project's context and linked chats' digests go outside the message's text (see
     // ClaudeSession.addContext), marked as sent once Claude Code has taken them up: a session that
     // never starts leaves them to go with the next message.
-    if (project.block) {
-      session.addContext(project.block, project.paths, (sessionId) => {
-        if (sessionId) this.plugin.markContextSent(sessionId, project.paths, project.hashes);
+    if (project.parts.length > 0) {
+      session.addContext(project.parts, (sessionId, keys) => {
+        if (sessionId) this.plugin.markContextSent(sessionId, keys, project.hashes);
         this.projectsChanged();
       });
     }
@@ -3992,8 +4094,9 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * The chats a message linked to (as "Use what it found" quotes them) are linked to this chat: shown
-   * on its map, and their projects offered. Before the chat has an id they wait, as notes do.
+   * The chats a message links to (see linkedChatIds: a chat mentioned, or linked before the chat
+   * started) are linked to this chat: shown on its map and in its links, and their projects offered.
+   * Before the chat has an id they wait, as notes do.
    */
   private linkSentChats(ids: string[]): void {
     if (this.scratch) return;
@@ -4213,10 +4316,9 @@ export class ChatView extends ItemView {
       const sent = state?.sent?.includes(project.path);
       const updated = this.projectUpdated(project.path);
       if (updated) chip.createSpan({ cls: 'vc-project-updated', attr: { 'aria-hidden': 'true' } });
-      chip.toggleClass('is-updated', updated);
       chip.setAttr(
         'aria-label',
-        `${this.projectWhy()} ${updated ? 'Its Context or Instructions changed since they went with this chat: Send its context again is in the Project menu.' : sent ? 'Its context went with this chat.' : 'Its Context goes with your next message.'} Click to see what goes.`,
+        `${this.projectWhy()} ${updated ? 'Its Context or Instructions changed since they went with this chat: Send its context again is in the Project menu.' : sent ? 'Its context went with this chat.' : 'Its Context goes with your next message.'} Click to see the project on the map.`,
       );
     } else if (this.offersProject()) {
       // One chip says there is none; a second offers the likeliest project in one click.
@@ -4515,6 +4617,13 @@ export class ChatView extends ItemView {
     while (from.length > 0) {
       const target = from.pop();
       if (!target || target.id === here?.id) continue;
+      // Open in another panel: shown there, and this panel stays where it is, its arrows too.
+      const holder = this.plugin.chatHolder(target.id, this);
+      if (holder) {
+        from.push(target);
+        await holder.showHeldChat(target.id);
+        break;
+      }
       this.navigating = true;
       try {
         if (!(await this.openChatId(target.id, this.plugin.chatTitleOf(target.id) === 'Chat' ? target.title : this.plugin.chatTitleOf(target.id)))) continue;
@@ -5130,13 +5239,12 @@ export class ChatView extends ItemView {
             // What its projects sent and its choices, kept under its id (a fork keeps its original's); a
             // new chat's project follows from its attached note.
             const started = this.chatId === null;
-            const projectState: ChatProjectState = { ...this.projectStateNow() };
-            if (started && this.attachedNote) projectState.start = this.attachedNote;
+            const start: ChatStart = started ? this.startOf() : { state: { ...this.projectStateNow() }, chats: [], notes: [] };
             this.chatId = message.session_id;
             if (this.scratch) this.plugin.setScratch(message.session_id);
             else {
               this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf);
-              this.plugin.setProjectState(message.session_id, projectState);
+              this.plugin.adoptProjectState(message.session_id, start.state);
             }
             this.projectLocal = {};
             // A new chat has connections now: the Connections pane shows it.
@@ -5163,6 +5271,8 @@ export class ChatView extends ItemView {
           // Optional in practice, whatever the SDK's types say: a Claude Code release may leave it out.
           this.renderCompaction(message.compact_metadata?.trigger, message.compact_metadata?.pre_tokens);
           void this.refreshMeters();
+          // The summary that replaces the conversation does not carry the context the hook added: it goes again.
+          if (this.chatId) this.plugin.contextLeft(this.chatId, false);
         } else if (message.subtype === 'task_notification' && !message.ambient && !message.skip_transcript) {
           const { usage } = message;
           this.renderTaskNotice(
@@ -6481,7 +6591,7 @@ export class ChatView extends ItemView {
         titleProblem: (title) => this.memoTitleProblem(title),
         suggest: (signal) => this.plugin.suggestMemo(sources.chatTitle, passages, signal),
       },
-      (choice) => void this.saveMemo(choice, sources).then((saved) => saved && this.offerProjectAfterSave()),
+      (choice) => void this.saveMemo(choice, sources).then((saved) => saved && this.offerProjectAfterSave(sources.chatId)),
     ).open();
   }
 

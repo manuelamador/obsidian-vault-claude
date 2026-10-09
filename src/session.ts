@@ -19,6 +19,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { contextBlock, type ContextPart } from './projects';
 import { log } from './log';
 
 /** A user message: plain text, or content blocks (text and images). */
@@ -212,9 +213,15 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
+/** Context waiting for the next message (see ClaudeSession.addContext). */
+interface PendingContext {
+  parts: ContextPart[];
+  delivered: (sessionId: string | null, keys: string[]) => void;
+}
+
 export class ClaudeSession {
   /** Context waiting for the next message (see addContext). */
-  private pendingContext: { text: string; keys: string[]; delivered: (sessionId: string | null) => void }[] = [];
+  private pendingContext: PendingContext[] = [];
   sessionId: string | null = null;
   /**
    * Resolves once the session has ended: its process gone (at once for one never started). Claude
@@ -251,13 +258,18 @@ export class ClaudeSession {
    * hook's context. Several given before then go together. `keys` name what it holds, waiting until
    * then (see waitingContext); `delivered` runs once it has gone, with the chat's session id.
    */
-  addContext(text: string, keys: string[], delivered: (sessionId: string | null) => void): void {
-    if (text.trim()) this.pendingContext.push({ text, keys, delivered });
+  addContext(parts: ContextPart[], delivered: (sessionId: string | null, keys: string[]) => void): void {
+    if (parts.length > 0) this.pendingContext.push({ parts, delivered });
   }
 
   /** What context is waiting to go (see addContext): not to be given again meanwhile. */
   waitingContext(): Set<string> {
-    return new Set(this.pendingContext.flatMap((each) => each.keys));
+    return new Set(this.pendingContext.flatMap((each) => each.parts.map((part) => part.key)));
+  }
+
+  /** Takes back the context waiting to go whose key `unwanted` names: a chat no longer included, a project the chat left. */
+  withdrawContext(unwanted: (key: string) => boolean): void {
+    for (const each of this.pendingContext) each.parts = each.parts.filter((part) => !unwanted(part.key));
   }
 
   /**
@@ -415,10 +427,11 @@ export class ClaudeSession {
               hooks: [
                 async (input) => {
                   const context = this.pendingContext.splice(0);
-                  if (context.length === 0) return {};
+                  const parts = context.flatMap((each) => each.parts);
+                  if (parts.length === 0) return {};
                   // The hook's own session id: a new chat's is not known to the panel yet.
-                  for (const each of context) each.delivered(input.session_id || this.sessionId);
-                  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: context.map((each) => each.text).join('\n\n') } };
+                  for (const each of context) each.delivered(input.session_id || this.sessionId, each.parts.map((part) => part.key));
+                  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: contextBlock(parts) } };
                 },
               ],
             },

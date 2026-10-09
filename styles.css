@@ -2483,10 +2483,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   color: var(--text-muted);
 }
 
-.vc-project-connections > button {
-  margin-top: var(--size-4-2);
-}
-
 .vc-project-proposal {
   display: flex;
   flex-direction: column;
@@ -2546,10 +2542,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   border-radius: var(--radius-s);
 }
 
-.vc-project-folder > button {
-  margin-left: auto;
-}
-
 .vc-project-folder-path {
   font-family: var(--font-monospace);
   font-size: var(--font-ui-small);
@@ -2606,7 +2598,7 @@ body:has(.vc-pick-up) .popover.hover-popover {
   margin-left: auto;
 }
 
-/* A project's Instructions or Guide changed since they went with the chat. */
+/* On the project chip, a project's Context or Instructions changed since they went with the chat; on the links chip, a chat included changed since it went. */
 .vc-project-updated {
   width: 6px;
   height: 6px;
@@ -2844,11 +2836,16 @@ body:has(.vc-pick-up) .popover.hover-popover {
 }
 
 .vc-map-action {
-  margin-left: auto;
   font-size: var(--font-ui-smaller);
 }
 
-/* Links between chats (see linksModal.ts). */
+/* In a bar, the name's margin-right: auto puts the actions after it at the end; a row with no name
+   (the panel's chat put in or taken out of the project shown) has its action at the end too. */
+.vc-map-actions-row > .vc-map-action:first-child {
+  margin-left: auto;
+}
+
+/* Links between chats: the links chip under the input (see drawLinksChip in view.ts) and the links list (see linksList.ts). */
 .vc-links-chip .vc-context-name {
   color: var(--text-normal);
 }
@@ -2924,8 +2921,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   font-weight: var(--font-semibold);
   margin-right: auto;
 }
-
-/* A folder inside a project: listed under it, its notes counted toward it. */
 
 /* Connections maps: zoom and pan. */
 .vc-map-frame {

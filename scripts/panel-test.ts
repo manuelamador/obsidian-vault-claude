@@ -109,6 +109,9 @@ async function main(): Promise<void> {
     sessionEnded(id: string) {
       return this.ending.get(id) ?? Promise.resolve();
     },
+    processesEnded(id: string) {
+      return this.ending.get(id) ?? Promise.resolve();
+    },
     processEnding: () => undefined,
     loadConfigured: async () => undefined,
     refreshStatus: async () => undefined,
@@ -131,6 +134,8 @@ async function main(): Promise<void> {
     projectNotes: (): unknown[] => [],
     projectState: (_id: string) => ({}),
     setProjectState: () => undefined,
+    adoptProjectState: () => undefined,
+    contextLeft: () => undefined,
     setHomeProject: async () => undefined,
     projectParts: async () => ({ context: '', instructions: '' }),
     sideSessions: [] as string[],
