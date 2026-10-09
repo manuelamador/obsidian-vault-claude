@@ -3151,15 +3151,15 @@ body:has(.vc-pick-up) .popover.hover-popover {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  width: 10px;
-  min-height: 26px;
+  width: 18px;
+  min-height: 34px;
   overflow: hidden;
   padding: 0;
-  border-radius: var(--radius-s) 0 0 var(--radius-s);
+  border-radius: 12px 0 0 12px;
   background: var(--interactive-accent);
   box-shadow: var(--shadow-s);
   cursor: pointer;
-  transition: width 120ms ease-out, background-color 120ms ease-out;
+  transition: width 160ms ease-out, background-color 160ms ease-out;
 }
 
 .vc-done-tab.is-error {
@@ -3167,7 +3167,7 @@ body:has(.vc-pick-up) .popover.hover-popover {
 }
 
 .vc-done-tab-mark {
-  flex: 0 0 10px;
+  flex: 0 0 18px;
   align-self: stretch;
 }
 
@@ -3177,7 +3177,8 @@ body:has(.vc-pick-up) .popover.hover-popover {
 }
 
 .vc-done-tab:hover,
-.vc-done-tab:focus-visible {
+.vc-done-tab:focus-visible,
+.vc-done-tab.is-fresh {
   width: min(280px, 80vw);
   padding: 6px 4px 6px 0;
   background: var(--background-primary);
@@ -3186,26 +3187,30 @@ body:has(.vc-pick-up) .popover.hover-popover {
 }
 
 .vc-done-tab:hover .vc-done-tab-mark,
-.vc-done-tab:focus-visible .vc-done-tab-mark {
+.vc-done-tab:focus-visible .vc-done-tab-mark,
+.vc-done-tab.is-fresh .vc-done-tab-mark {
   flex-basis: 4px;
   border-radius: 2px;
   background: var(--interactive-accent);
 }
 
 .vc-done-tab.is-error:hover .vc-done-tab-mark,
-.vc-done-tab.is-error:focus-visible .vc-done-tab-mark {
+.vc-done-tab.is-error:focus-visible .vc-done-tab-mark,
+.vc-done-tab.is-error.is-fresh .vc-done-tab-mark {
   background: var(--text-error);
 }
 
 .vc-done-tab:hover .vc-done-tab-body,
-.vc-done-tab:focus-visible .vc-done-tab-body {
+.vc-done-tab:focus-visible .vc-done-tab-body,
+.vc-done-tab.is-fresh .vc-done-tab-body {
   display: block;
   flex: 1;
   min-width: 0;
 }
 
 .vc-done-tab:hover .vc-done-tab-close,
-.vc-done-tab:focus-visible .vc-done-tab-close {
+.vc-done-tab:focus-visible .vc-done-tab-close,
+.vc-done-tab.is-fresh .vc-done-tab-close {
   display: flex;
   flex: 0 0 auto;
   padding: 2px;

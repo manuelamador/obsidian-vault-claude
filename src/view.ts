@@ -2220,7 +2220,9 @@ export class ChatView extends ItemView {
       this.doneTabs.add({ id: entry.chatId, title: entry.title ?? 'Chat', outcome: succeeded ? 'done' : 'error', text: entry.lastText });
     }
     this.updateBackgroundIndicator();
-    this.notifyBackground(entry, succeeded ? 'has finished' : 'stopped with an error', false);
+    // Its tab on the margin says so (see DoneTabs); a chat without an id has none, and a notice instead.
+    if (entry.chatId) entry.notice?.hide();
+    else this.notifyBackground(entry, succeeded ? 'has finished' : 'stopped with an error', false);
   }
 
   private notifyBackground(entry: BackgroundChat, what: string, persist: boolean): void {

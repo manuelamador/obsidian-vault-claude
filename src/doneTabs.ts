@@ -1,6 +1,7 @@
 // Tabs on the right margin of the panel, one for each chat that finished out of sight (in the panel's
-// background): the newest at the top. A tab opens its chat; hovered, it widens to the left to show the
-// chat's name and what happened, with × to take the tab away. A chat shown again loses its tab.
+// background): the newest at the top. A new tab shows itself open for a moment, then closes to its
+// edge. A tab opens its chat; hovered, it widens to the left to show the chat's name and what
+// happened, with × to take the tab away. A chat shown again loses its tab.
 import { setIcon } from 'obsidian';
 
 /** A finish out of sight: the chat, its name, how it ended, and the start of its last reply. */
@@ -15,10 +16,15 @@ export interface DoneTab {
 const MAX_TABS = 10;
 /** How much of the last reply a tab shows. */
 const TAB_TEXT_CHARS = 140;
+/** How long a new tab stays open before it closes to its edge. */
+const SHOWN_MS = 3000;
 
 export class DoneTabs {
   private readonly el: HTMLElement;
   private tabs: DoneTab[] = [];
+  /** The tab just added, shown open until SHOWN_MS have passed. */
+  private fresh: string | null = null;
+  private freshTimer = 0;
 
   constructor(parent: HTMLElement, private readonly open: (tab: DoneTab) => void) {
     this.el = parent.createDiv({ cls: 'vc-done-tabs' });
@@ -28,6 +34,12 @@ export class DoneTabs {
   /** A chat finished out of sight: its tab, at the top; one it had already is replaced. */
   add(tab: DoneTab): void {
     this.tabs = [tab, ...this.tabs.filter((each) => each.id !== tab.id)].slice(0, MAX_TABS);
+    this.fresh = tab.id;
+    window.clearTimeout(this.freshTimer);
+    this.freshTimer = window.setTimeout(() => {
+      this.fresh = null;
+      this.el.querySelector('.vc-done-tab.is-fresh')?.removeClass('is-fresh');
+    }, SHOWN_MS);
     this.draw();
   }
 
@@ -51,7 +63,7 @@ export class DoneTabs {
     this.el.toggle(this.tabs.length > 0);
     for (const tab of this.tabs) {
       const what = tab.outcome === 'done' ? 'Claude finished' : 'Claude stopped with an error';
-      const el = this.el.createDiv({ cls: `vc-done-tab is-${tab.outcome}`, attr: { role: 'button', tabindex: '0', 'aria-label': `${what} in “${tab.title}”: click to open it` } });
+      const el = this.el.createDiv({ cls: `vc-done-tab is-${tab.outcome}${tab.id === this.fresh ? ' is-fresh' : ''}`, attr: { role: 'button', tabindex: '0', 'aria-label': `${what} in “${tab.title}”: click to open it` } });
       el.createDiv({ cls: 'vc-done-tab-mark' });
       const body = el.createDiv({ cls: 'vc-done-tab-body' });
       body.createDiv({ cls: 'vc-done-tab-title', text: tab.title });
