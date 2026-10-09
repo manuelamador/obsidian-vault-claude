@@ -29,7 +29,7 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, sessionStamp, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
   filePathOf,
@@ -289,6 +289,12 @@ const PANEL_CLOSED_ANSWER = 'Not answered: the Claude panel was closed. Nothing 
 const ANSWER_WAIT_MS = 3000;
 /** How long the notice after Remove or Move from here on offers Undo. */
 const REMOVAL_UNDO_MS = 10_000;
+
+/** A Move's copy (see moveToNewChat): its id, and its file's stamp when made, to tell whether it was written to since. */
+interface MovedCopy {
+  id: string;
+  stamp: string | null;
+}
 
 /** A plan request without the plan's text: its file is read this many times, this far apart, until it is written (see showPlan). */
 const PLAN_READ_ATTEMPTS = 40;
@@ -589,6 +595,8 @@ export class ChatView extends ItemView {
   private findBar!: FindBar;
   /** Tabs on the margin for the chats that finished in this panel's background (see DoneTabs). */
   private doneTabs!: DoneTabs;
+  /** Timers deleting what a removal left once its Undo has passed (see removeFrom); cleared when the panel closes. */
+  private readonly removalTimers = new Set<number>();
   /** "Memo" beside Quote and Side chat over a selection in the chat (see saveMemoFromSelection). */
   private memoButton!: HTMLButtonElement;
   /** A question asked beside the chat, in a pane over its messages (see SideChat). */
@@ -1144,6 +1152,12 @@ export class ChatView extends ItemView {
   onResize(): void {
     this.updateStatusBarClearance();
     this.markSeen();
+    this.doneTabs?.layout();
+  }
+
+  /** Chat `id` is seen in another panel, or deleted: its tab here goes. */
+  dropDoneTab(id: string): void {
+    this.doneTabs?.remove(id);
   }
 
   applyPanelMargin(): void {
@@ -1152,6 +1166,9 @@ export class ChatView extends ItemView {
 
   async onClose(): Promise<void> {
     this.closing = true;
+    this.doneTabs.stop();
+    for (const timer of this.removalTimers) window.clearTimeout(timer);
+    this.removalTimers.clear();
     this.plugin.panelClosing(this);
     closeImage();
     this.sideChat.close();
@@ -2220,8 +2237,9 @@ export class ChatView extends ItemView {
       this.doneTabs.add({ id: entry.chatId, title: entry.title ?? 'Chat', outcome: succeeded ? 'done' : 'error', text: entry.lastText });
     }
     this.updateBackgroundIndicator();
-    // Its tab on the margin says so (see DoneTabs); a chat without an id has none, and a notice instead.
-    if (entry.chatId) entry.notice?.hide();
+    // Its tab on the margin says so (see DoneTabs); a notice as well when the panel is out of sight,
+    // where the tab cannot be seen, and instead for a chat without an id, which has none.
+    if (entry.chatId && this.isOnScreen()) entry.notice?.hide();
     else this.notifyBackground(entry, succeeded ? 'has finished' : 'stopped with an error', false);
   }
 
@@ -3214,10 +3232,11 @@ export class ChatView extends ItemView {
    * Removes message `uuid` and everything after it from chat `id`, on screen, in place, so the chat
    * keeps its id and what is linked to it: its process is ended, its file cut (see cutChat), and it is
    * opened again (unless `reopen` is false). A notice offers to put it back; `copy`, the chat the part
-   * removed was moved to, goes when it is. What it left beside the file goes once the offer has
-   * passed (see deleteCutLeftovers). Whether it was removed.
+   * removed was moved to (with its file's stamp then), goes when it is, unless it has changed since.
+   * What a removal left beside the file goes once the offer has passed (see deleteCutLeftovers); a
+   * move's copy still refers to it, and it stays. Whether it was removed.
    */
-  private async removeFrom(id: string, uuid: string, reopen: boolean, copy?: string): Promise<boolean> {
+  private async removeFrom(id: string, uuid: string, reopen: boolean, copy?: MovedCopy): Promise<boolean> {
     const root = this.plugin.vaultRoot();
     if (!root) return false;
     // Checked again: the chat may have changed while the dialog was open, or a copy was made.
@@ -3244,13 +3263,19 @@ export class ChatView extends ItemView {
     log('removed from a message', { chat: id, from: uuid });
     // Notes only the removed part changed no longer list the chat as having changed them.
     const dropped = await this.plugin.unlinkRemovedEdits(id, changed);
-    // What went with the part removed (project context, a summary of it) is no longer in the chat.
-    this.plugin.contextLeft(id, true);
+    // What went with the part removed is no longer in the chat: its summary, and the context the hook
+    // added to one of its messages, which then goes again.
+    const before = this.plugin.contextLeft(id, { sent: /<project_context>|<linked_chats>/.test(done.cut), summary: true });
     if (reopen) await this.openChat(item);
     let undoing = false;
     let leftovers = 0;
     const later = () => {
-      leftovers = window.setTimeout(() => void deleteCutLeftovers(id, root, done).catch((error: unknown) => log('deleting what a removal left failed', error)), REMOVAL_UNDO_MS + 1000);
+      if (copy) return;
+      leftovers = window.setTimeout(() => {
+        this.removalTimers.delete(leftovers);
+        void deleteCutLeftovers(id, root, done).catch((error: unknown) => log('deleting what a removal left failed', error));
+      }, REMOVAL_UNDO_MS + 1000);
+      this.removalTimers.add(leftovers);
     };
     later();
     const notice = createFragment((el) => {
@@ -3259,8 +3284,9 @@ export class ChatView extends ItemView {
         if (undoing) return;
         undoing = true;
         window.clearTimeout(leftovers);
+        this.removalTimers.delete(leftovers);
         void this.undoRemove(item, done, dropped, copy).then((put) => {
-          if (put) return;
+          if (put) return this.plugin.restoreContext(id, before);
           undoing = false;
           later();
         });
@@ -3275,15 +3301,20 @@ export class ChatView extends ItemView {
    * dropped (`dropped`); `copy`, the chat it was moved to, is deleted. The chat is shown again.
    * Whether it was put back.
    */
-  private async undoRemove(item: HistoryItem, done: { kept: string; cut: string }, dropped: string[], copy?: string): Promise<boolean> {
+  private async undoRemove(item: HistoryItem, done: { kept: string; cut: string }, dropped: string[], copy?: MovedCopy): Promise<boolean> {
     const root = this.plugin.vaultRoot();
     if (!root) return false;
-    const blocked = this.cutBlocked(item.id) ?? (copy ? this.cutBlocked(copy) : null);
+    const blocked = this.cutBlocked(item.id) ?? (copy ? this.cutBlocked(copy.id) : null);
     if (blocked) {
       new Notice(`It could not be put back: ${blocked}`);
       return false;
     }
-    if (this.chatId === item.id || (copy && this.chatId === copy)) this.newChat();
+    // A copy written to since holds more than the part moved: deleting it would lose that.
+    if (copy && (await sessionStamp(copy.id, root)) !== copy.stamp) {
+      new Notice('It was not put back: the new chat has messages of its own since. Copy what you need from it first, or move it back by hand.');
+      return false;
+    }
+    if (this.chatId === item.id || (copy && this.chatId === copy.id)) this.newChat();
     await this.plugin.processesEnded(item.id);
     const put = await uncutChat(item.id, root, done).catch((error: unknown) => {
       log('undoing a removal failed', error);
@@ -3292,7 +3323,7 @@ export class ChatView extends ItemView {
     if (put) {
       for (const path of dropped) this.plugin.linkNoteChat(path, item.id, false);
       // The moved part is back where it was: its copy would hold it a second time.
-      if (copy) await this.plugin.deleteChat(copy);
+      if (copy) await this.plugin.deleteChat(copy.id);
     }
     new Notice(put ? `Put back in “${item.title}”.` : 'It could not be put back: the chat has changed since.');
     await this.openChat(item);
@@ -3306,8 +3337,9 @@ export class ChatView extends ItemView {
     new ConfirmModal(this.app, 'Move to a new chat', `This moves ${this.removalWords(removal)}`, 'Move', async () => {
       // All of it to the end, as all of it is cut here.
       const copy = await this.branch(undefined, false, uuid, false, true);
-      if (!copy) return;
-      if (!(await this.removeFrom(removal.id, uuid, false, copy))) {
+      const root = this.plugin.vaultRoot();
+      if (!copy || !root) return;
+      if (!(await this.removeFrom(removal.id, uuid, false, { id: copy, stamp: await sessionStamp(copy, root) }))) {
         // Not cut here: the copy would hold the same messages a second time, and goes.
         await this.plugin.deleteChat(copy);
         return;
@@ -5291,7 +5323,7 @@ export class ChatView extends ItemView {
           this.renderCompaction(message.compact_metadata?.trigger, message.compact_metadata?.pre_tokens);
           void this.refreshMeters();
           // The summary that replaces the conversation does not carry the context the hook added: it goes again.
-          if (this.chatId) this.plugin.contextLeft(this.chatId, false);
+          if (this.chatId) this.plugin.contextLeft(this.chatId, { sent: true, summary: false });
         } else if (message.subtype === 'task_notification' && !message.ambient && !message.skip_transcript) {
           const { usage } = message;
           this.renderTaskNotice(
@@ -6740,7 +6772,8 @@ export class ChatView extends ItemView {
   private async goToMessage(message: string, needle: string): Promise<boolean> {
     // Compared, not put in a selector: the id comes from a link, and may be anything.
     const find = () =>
-      Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-text, .vc-user')).find((el) => (el.hasClass('vc-user') ? el.dataset.uuid : el.dataset.message) === message) ?? null;
+      // A queued message drawn from the file is known by the id it was sent with too (see sentUuidOf).
+      Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-text, .vc-user')).find((el) => (el.hasClass('vc-user') ? el.dataset.uuid === message || el.dataset.sentUuid === message : el.dataset.message === message)) ?? null;
     let el = find();
     if (!el && this.earlier) {
       await this.earlier.drawToMessage(message.split('#')[0]);

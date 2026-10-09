@@ -429,9 +429,12 @@ export class ClaudeSession {
                   const context = this.pendingContext.splice(0);
                   const parts = context.flatMap((each) => each.parts);
                   if (parts.length === 0) return {};
+                  // Only what fits goes, and only that is marked as gone (see contextBlock); the rest is offered again.
+                  const block = contextBlock(parts);
+                  const went = new Set(block.keys);
                   // The hook's own session id: a new chat's is not known to the panel yet.
-                  for (const each of context) each.delivered(input.session_id || this.sessionId, each.parts.map((part) => part.key));
-                  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: contextBlock(parts) } };
+                  for (const each of context) each.delivered(input.session_id || this.sessionId, each.parts.map((part) => part.key).filter((key) => went.has(key)));
+                  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: block.text } };
                 },
               ],
             },

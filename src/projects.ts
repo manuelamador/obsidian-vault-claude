@@ -200,20 +200,27 @@ export const CONTEXT_MAX_CHARS = 9500;
 export type ContextPart = { key: string; project: Parameters<typeof projectContextBlock>[0][number] } | { key: string; chat: Parameters<typeof linkedChatsBlock>[0][number] };
 
 /**
- * What goes with a message from `parts`: the projects' block, then the linked chats', within
- * `max` characters. The chats' digests share what the projects leave, each keeping its latest part.
+ * What goes with a message from `parts`: the projects' block, then the linked chats', within `max`
+ * characters, and the keys of the parts it holds. The chats' digests share what the projects leave,
+ * each keeping its latest part; when that is too little for any, they wait for a later message. A
+ * projects' block longer than `max` alone is cut, and still counts as gone.
  */
-export function contextBlock(parts: ContextPart[], max = CONTEXT_MAX_CHARS): string {
-  const projects = projectContextBlock(parts.flatMap((part) => ('project' in part ? [part.project] : [])));
-  const chats = parts.flatMap((part) => ('chat' in part ? [part.chat] : []));
+export function contextBlock(parts: ContextPart[], max = CONTEXT_MAX_CHARS): { text: string; keys: string[] } {
+  const projectParts = parts.filter((part): part is Extract<ContextPart, { project: unknown }> => 'project' in part);
+  const chatParts = parts.filter((part): part is Extract<ContextPart, { chat: unknown }> => 'chat' in part);
+  const projects = projectContextBlock(projectParts.map((part) => part.project));
+  const chats = chatParts.map((part) => part.chat);
   const join = (chatsBlock: string) => [projects, chatsBlock].filter(Boolean).join('\n\n');
+  const all = parts.map((part) => part.key);
   const whole = join(linkedChatsBlock(chats));
-  if (whole.length <= max || chats.length === 0) return whole.length <= max ? whole : `${whole.slice(0, max - 40)}\n[… the rest left out …]`;
+  if (whole.length <= max) return { text: whole, keys: all };
+  const onlyProjects = { text: projects.length <= max ? projects : `${projects.slice(0, max - 40)}\n[… the rest left out …]`, keys: projectParts.map((part) => part.key) };
+  if (chats.length === 0) return onlyProjects;
   const room = max - join(linkedChatsBlock(chats.map((chat) => ({ ...chat, digest: '' })))).length;
   const each = Math.floor(room / chats.length) - 40;
-  if (each < 200) return projects.slice(0, max);
+  if (each < 200) return onlyProjects;
   const cut = (digest: string) => (digest.length <= each ? digest : `[… earlier part left out …]\n\n${digest.slice(-each)}`);
-  return join(linkedChatsBlock(chats.map((chat) => ({ ...chat, digest: cut(chat.digest) }))));
+  return { text: join(linkedChatsBlock(chats.map((chat) => ({ ...chat, digest: cut(chat.digest) })))), keys: all };
 }
 
 /** A short fingerprint of a project's Context and Instructions, to tell whether they changed since they were sent. */

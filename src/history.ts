@@ -215,6 +215,7 @@ async function markCopies(
 
 /** The uuid of session `id`'s first prompt (see firstPrompts); null when there is none to read. */
 async function firstPromptId(id: string, dir: string): Promise<string | null> {
+  if (!isChatId(id)) return null;
   const file = await fs.open(sessionFile(id, dir), 'r').catch(() => null);
   if (!file) return null;
   try {
@@ -400,6 +401,7 @@ function sessionFile(id: string, dir: string): string {
 
 /** What tells whether session `id`'s file has changed since it was read: its time and size; null when it cannot be read. */
 export async function sessionStamp(id: string, dir: string): Promise<string | null> {
+  if (!isChatId(id)) return null;
   const stat = await fs.stat(sessionFile(id, dir)).catch(() => null);
   return stat ? `${stat.mtimeMs}:${stat.size}` : null;
 }
@@ -596,6 +598,8 @@ function rowMessage(row: SessionRow, id: string): SessionMessage | null {
 }
 
 async function readSession(id: string, dir: string, withEdits: boolean): Promise<LoadedChat> {
+  // Not passed on to the SDK's reader either, which would read it as a path.
+  if (!isChatId(id)) throw new Error(`not a chat id: ${id}`);
   let text: string;
   try {
     text = await fs.readFile(sessionFile(id, dir), 'utf8');
@@ -738,6 +742,7 @@ export function deleteSessionFile(id: string, dir: string): Promise<void> {
 
 /** Deletes the session as deleteSessionFile does, and resolves as well when it has no file to delete: never written, or gone already. */
 export async function deleteSessionIfAny(id: string, dir: string): Promise<void> {
+  if (!isChatId(id)) throw new Error(`not a chat id: ${id}`);
   try {
     await deleteSessionFile(id, dir);
   } catch (error) {
@@ -824,7 +829,7 @@ export function cutSessionText(text: string, from: string): { kept: string; cut:
   const lines = text.split('\n').filter((line) => line.trim());
   const rows = lines.map((line) => {
     try {
-      return JSON.parse(line) as { uuid?: string; type?: string; content?: unknown; message?: { content?: unknown } };
+      return JSON.parse(line) as { uuid?: string; type?: string; content?: unknown; message?: { content?: unknown }; attachment?: { type?: string; prompt?: unknown } };
     } catch {
       return {};
     }
@@ -832,12 +837,20 @@ export function cutSessionText(text: string, from: string): { kept: string; cut:
   const start = rows.findIndex((row) => row.uuid === from);
   if (start === -1) return null;
   const queued = (i: number) => rows[i].type === 'queue-operation';
+  // A prompt's text, as a message of yours or one taken up mid-turn; null for other rows (tool results).
+  const prompt = (row: (typeof rows)[number]): string | null => {
+    if (row.type === 'attachment' && row.attachment?.type === 'queued_command') return promptText({ message: { content: row.attachment.prompt } });
+    return row.type === 'user' ? promptText(row) : null;
+  };
   // Those of the prompt cut at, written just before it.
   let lead = start;
   while (lead > 0 && queued(lead - 1)) lead -= 1;
-  const cutTexts = new Set(rows.slice(start).flatMap((row) => (row.type === 'user' ? [promptText(row)] : [])).filter((each): each is string => each !== null));
+  // A prompt cut was queued after the last prompt kept: queue records before that one are a kept prompt's, whatever their text.
+  let lastKept = -1;
+  for (let i = 0; i < start; i += 1) if (prompt(rows[i]) !== null) lastKept = i;
+  const cutTexts = new Set(rows.slice(start).map(prompt).filter((each): each is string => each !== null));
   const keep = (i: number) => {
-    if (queued(i)) return i < lead && !(typeof rows[i].content === 'string' && cutTexts.has(rows[i].content as string));
+    if (queued(i)) return i < lead && !(i > lastKept && typeof rows[i].content === 'string' && cutTexts.has(rows[i].content as string));
     return i < start || (rows[i].uuid === undefined && KEPT_WHEN_CUT.has(rows[i].type ?? ''));
   };
   const kept = lines.filter((_, i) => keep(i));

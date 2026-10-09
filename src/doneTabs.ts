@@ -19,8 +19,8 @@ const TAB_TEXT_CHARS = 140;
 /** The most tabs shown, each its own; past it, or past the room the panel has, the rest are behind a "+N" tab. */
 const MAX_SHOWN = 5;
 /** A tab's height and the gap under it, and the panel's height the tabs keep clear of (see .vc-done-tabs). */
-const TAB_PITCH = 38;
-const TABS_MARGIN = 80;
+const TAB_PITCH = 34;
+const TABS_MARGIN = 104;
 /** How long a new tab stays open before it closes to its edge. */
 const SHOWN_MS = 3000;
 
@@ -38,6 +38,8 @@ export class DoneTabs {
 
   /** A chat finished out of sight: its tab, at the top; one it had already is replaced. */
   add(tab: DoneTab): void {
+    // Only what it shows is kept, not the whole reply.
+    tab = { ...tab, text: clip(tab.text) };
     this.tabs = [tab, ...this.tabs.filter((each) => each.id !== tab.id)].slice(0, MAX_TABS);
     this.fresh = tab.id;
     window.clearTimeout(this.freshTimer);
@@ -46,6 +48,17 @@ export class DoneTabs {
       this.el.querySelector('.vc-done-tab.is-fresh')?.removeClass('is-fresh');
     }, SHOWN_MS);
     this.draw();
+  }
+
+  /** The panel changed size: as many tabs as it has room for (see draw). */
+  layout(): void {
+    if (this.tabs.length > 0) this.draw();
+  }
+
+  /** The panel is closing: nothing is left to run. */
+  stop(): void {
+    window.clearTimeout(this.freshTimer);
+    this.tabs = [];
   }
 
   /** Chat `id` is seen: its tab goes. */
@@ -66,17 +79,18 @@ export class DoneTabs {
   private draw(): void {
     this.el.empty();
     this.el.toggle(this.tabs.length > 0);
+    // The messages keep clear of the tabs while there are any.
+    this.el.parentElement?.toggleClass('has-done-tabs', this.tabs.length > 0);
     // As many as the panel has room for, at most MAX_SHOWN; the rest behind one "+N" tab.
     const room = this.el.parentElement?.clientHeight ? Math.floor((this.el.parentElement.clientHeight - TABS_MARGIN) / TAB_PITCH) : MAX_SHOWN;
     const shown = this.tabs.length <= Math.min(MAX_SHOWN, room) ? this.tabs.length : Math.max(1, Math.min(MAX_SHOWN, room) - 1);
     for (const tab of this.tabs.slice(0, shown)) {
       const el = this.el.createDiv({ cls: `vc-done-tab is-${tab.outcome}${tab.id === this.fresh ? ' is-fresh' : ''}`, attr: { role: 'button', tabindex: '0', 'aria-label': `${whatOf(tab)} in “${tab.title}”: click to open it` } });
-      el.createDiv({ cls: 'vc-done-tab-mark' });
+      setIcon(el.createDiv({ cls: 'vc-done-tab-mark' }), tab.outcome === 'done' ? 'check' : 'alert-circle');
       const body = el.createDiv({ cls: 'vc-done-tab-body' });
       body.createDiv({ cls: 'vc-done-tab-title', text: tab.title });
       body.createDiv({ cls: 'vc-done-tab-what', text: whatOf(tab) });
-      const text = tab.text.replace(/\s+/g, ' ').trim();
-      if (text) body.createDiv({ cls: 'vc-done-tab-text', text: text.length > TAB_TEXT_CHARS ? `${text.slice(0, TAB_TEXT_CHARS)}…` : text });
+      if (tab.text) body.createDiv({ cls: 'vc-done-tab-text', text: tab.text });
       this.closeButton(el, tab);
       this.opens(el, tab);
     }
@@ -119,6 +133,12 @@ export class DoneTabs {
       }
     });
   }
+}
+
+/** The start of a reply, as a tab shows it: on one line, at most TAB_TEXT_CHARS. */
+function clip(text: string): string {
+  const line = text.replace(/\s+/g, ' ').trim();
+  return line.length > TAB_TEXT_CHARS ? `${line.slice(0, TAB_TEXT_CHARS)}…` : line;
 }
 
 /** How a tab's chat ended, in words. */

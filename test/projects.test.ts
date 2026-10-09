@@ -129,10 +129,14 @@ test('what goes with a message stays under the hook limit, the digests cut to sh
     { key: 'chat:a', chat: { id: 'a', title: 'A', digest: `${'x'.repeat(8000)}END-A` } },
     { key: 'chat:b', chat: { id: 'b', title: 'B', digest: `${'y'.repeat(8000)}END-B` } },
   ];
-  const block = contextBlock(parts);
+  const { text: block, keys } = contextBlock(parts);
   assert.ok(block.length <= CONTEXT_MAX_CHARS, String(block.length));
+  assert.deepEqual(keys, ['P.md', 'chat:a', 'chat:b']);
   assert.match(block, /<project_context>/);
   assert.match(block, /END-A/);
   assert.match(block, /END-B/);
-  assert.equal(contextBlock(parts.slice(0, 1)), projectContextBlock([project]));
+  assert.equal(contextBlock(parts.slice(0, 1)).text, projectContextBlock([project]));
+  // Too many to share the room: the digests wait, and are not counted as gone.
+  const many: ContextPart[] = [parts[0], ...Array.from({ length: 40 }, (_, i) => ({ key: `chat:${i}`, chat: { id: `${i}`, title: `C${i}`, digest: 'z'.repeat(1000) } }))];
+  assert.deepEqual(contextBlock(many).keys, ['P.md']);
 });

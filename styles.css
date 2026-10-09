@@ -3135,14 +3135,14 @@ body:has(.vc-pick-up) .popover.hover-popover {
    narrow mark each, widening to the left on hover to show the chat, what happened, and × to remove it. */
 .vc-done-tabs {
   position: absolute;
-  top: 40px;
+  top: 64px;
   right: 0;
   z-index: 5;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 4px;
-  max-height: calc(100% - 80px);
+  max-height: calc(100% - 104px);
   pointer-events: none;
 }
 
@@ -3151,24 +3151,46 @@ body:has(.vc-pick-up) .popover.hover-popover {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  width: 18px;
-  min-height: 34px;
+  width: 14px;
+  min-height: 30px;
   overflow: hidden;
   padding: 0;
-  border-radius: 12px 0 0 12px;
-  background: var(--interactive-accent);
-  box-shadow: var(--shadow-s);
+  border-radius: 10px 0 0 10px;
+  background: color-mix(in srgb, var(--interactive-accent) 80%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   cursor: pointer;
   transition: width 160ms ease-out, background-color 160ms ease-out;
 }
 
 .vc-done-tab.is-error {
-  background: var(--text-error);
+  background: color-mix(in srgb, var(--text-error) 80%, transparent);
 }
 
 .vc-done-tab-mark {
-  flex: 0 0 18px;
+  flex: 0 0 14px;
   align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-on-accent);
+}
+
+.vc-done-tab-mark .svg-icon {
+  width: 10px;
+  height: 10px;
+  stroke-width: 3px;
+}
+
+/* Opened, the strip is a thin bar of its colour, without its icon. */
+.vc-done-tab:hover .vc-done-tab-mark .svg-icon,
+.vc-done-tab:focus-visible .vc-done-tab-mark .svg-icon,
+.vc-done-tab.is-fresh .vc-done-tab-mark .svg-icon {
+  display: none;
+}
+
+/* While there are tabs, the messages keep clear of them. */
+.vc-messages-wrap.has-done-tabs .vc-messages {
+  padding-right: max(var(--vc-side-margin), 22px);
 }
 
 .vc-done-tab-body,

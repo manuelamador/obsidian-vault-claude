@@ -128,3 +128,19 @@ test('a cut takes the queue records holding the text of the prompts it removes',
   assert.ok(!result.kept.includes('second'));
   assert.ok(result.kept.includes('"content":"first"'));
 });
+
+test('a cut keeps the queue records of kept prompts with the text of one it removes, and takes those of prompts taken up mid-turn', () => {
+  const rows = [
+    { type: 'queue-operation', operation: 'enqueue', content: 'continue' },
+    { type: 'user', uuid: 'u1', message: { content: 'continue' } },
+    { type: 'assistant', uuid: 'a1' },
+    { type: 'queue-operation', operation: 'enqueue', content: 'and this' },
+    { type: 'queue-operation', operation: 'enqueue', content: 'continue' },
+    { type: 'user', uuid: 'u2', message: { content: 'continue' } },
+    { type: 'attachment', uuid: 'q1', attachment: { type: 'queued_command', prompt: 'and this' } },
+  ];
+  const result = cutSessionText(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'u2');
+  assert.ok(result);
+  const kept = result.kept.trim().split('\n').map((line) => JSON.parse(line) as { content?: string; uuid?: string });
+  assert.deepEqual(kept.map((row) => row.uuid ?? row.content), ['continue', 'u1', 'a1']);
+});

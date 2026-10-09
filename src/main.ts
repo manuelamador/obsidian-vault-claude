@@ -1159,6 +1159,8 @@ export default class VaultClaudePlugin extends Plugin {
    * made by sending a message there, which is then offered with it at once (see listHistory).
    */
   recordChat(id: string, title: string, copyOf?: string): void {
+    // A chat new to the listing: what reads a recent one (see recentListing) lists again.
+    this.listedAt = 0;
     if (this.isPanelChat(id)) return;
     this.chats.unshift(copyOf ? { id, title, copyOf } : { id, title });
     const original = copyOf ? this.lastListing?.find((item) => item.id === copyOf) : undefined;
@@ -1781,6 +1783,9 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Panel `view` shows another chat (or a new one): the Connections pane follows it. */
   chatShown(view: ChatView): void {
+    // Seen there: its tab in the other panels goes (see DoneTabs).
+    const shown = view.connectionsChat()?.id;
+    if (shown) for (const other of this.chatViews()) if (other !== view) other.dropDoneTab(shown);
     const pane = this.connectionsPane();
     if (pane) void this.followPanel(pane, view);
   }
@@ -1976,15 +1981,28 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * The context that went with chat `id` has left its conversation (compacted, or cut away): it is
-   * sent again with the next message. `cut`: part of the chat was removed, so its stored summary,
-   * which holds that part, goes too.
+   * What went with chat `id` may have left its conversation: `sent`, the context its hook added
+   * (compacted, or cut away with the message it came with), which then goes again with the next
+   * message; `summary`, its stored summary, which holds a part cut away. What was there before, for
+   * Undo to put back (see restoreContext).
    */
-  contextLeft(id: string, cut: boolean): void {
+  contextLeft(id: string, left: { sent: boolean; summary: boolean }): { state: ChatProjectState; summary?: { text: string; at: number } } {
     const state = this.projectState(id);
-    if (state.sent?.length) this.setProjectState(id, { ...state, sent: undefined, sentHash: undefined });
-    if (cut && this.chatSummaries[id]) {
+    const before = { state: { ...state }, summary: this.chatSummaries[id] };
+    if (left.sent && state.sent?.length) this.setProjectState(id, { ...state, sent: undefined, sentHash: undefined });
+    if (left.summary && this.chatSummaries[id]) {
       delete this.chatSummaries[id];
+      this.saveSoon();
+    }
+    for (const view of this.chatViews()) view.projectsChanged();
+    return before;
+  }
+
+  /** Puts back what contextLeft took from chat `id`: the part it came with is back. */
+  restoreContext(id: string, before: ReturnType<VaultClaudePlugin['contextLeft']>): void {
+    this.setProjectState(id, { ...this.projectState(id), sent: before.state.sent, sentHash: before.state.sentHash });
+    if (before.summary) {
+      this.chatSummaries[id] = before.summary;
       this.saveSoon();
     }
     for (const view of this.chatViews()) view.projectsChanged();
@@ -2869,6 +2887,7 @@ export default class VaultClaudePlugin extends Plugin {
     }
     this.chats = this.chats.filter((chat) => chat.id !== id);
     this.forgetChatData(id);
+    for (const view of this.chatViews()) view.dropDoneTab(id);
     log('chat deleted', { id });
     await this.saveSettings();
     // The Connections pane drawn again without it, staying where it is; when the panel it follows
