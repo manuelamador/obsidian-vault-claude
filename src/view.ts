@@ -47,6 +47,7 @@ import { hintAbove } from './hint';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
+import { DoneTabs } from './doneTabs';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -332,6 +333,8 @@ interface BackgroundChat {
   modeBeforePlan: PermissionMode;
   /** Its messages still queued, by id, with their text and chips: not yet in its file, so drawn again from here. */
   queued: Map<string, { text: string; chips: Chip[] }>;
+  /** The text of its last reply so far, for the tab its finish leaves (see DoneTabs). */
+  lastText: string;
   /** A new chat sent to the background before its id came: what it chose (see ChatView.startOf), kept under its id at its init. */
   start: ChatStart | null;
 }
@@ -584,6 +587,8 @@ export class ChatView extends ItemView {
   /** Counts the chats opened or started in this panel: an open still reading its file gives way when it changes. */
   private chatGeneration = 0;
   private findBar!: FindBar;
+  /** Tabs on the margin for the chats that finished in this panel's background (see DoneTabs). */
+  private doneTabs!: DoneTabs;
   /** "Memo" beside Quote and Side chat over a selection in the chat (see saveMemoFromSelection). */
   private memoButton!: HTMLButtonElement;
   /** A question asked beside the chat, in a pane over its messages (see SideChat). */
@@ -877,6 +882,7 @@ export class ChatView extends ItemView {
     this.register(() => sweeper.disconnect());
     this.draw = this.liveDraw = { parent: this.messagesEl, turn: null, group: null, liveText: null, turnHadText: false };
     this.promptNav = new PromptNav(messagesWrap, this.messagesEl, () => this.earlier?.listed() ?? []);
+    this.doneTabs = new DoneTabs(messagesWrap, (tab) => void this.app.workspace.revealLeaf(this.leaf).then(() => this.openChatId(tab.id, tab.title)));
     this.quoteButton = messagesWrap.createEl('button', { cls: 'vc-quote-button', text: 'Quote', attr: { 'aria-label': 'Quote the selected text in your next message' } });
     this.quoteButton.hide();
     // Pressing it must not clear the selection it is about to quote.
@@ -1982,6 +1988,7 @@ export class ChatView extends ItemView {
       sentIds: this.sentIds,
       modeBeforePlan: this.modeBeforePlan,
       start: this.chatId || this.scratch ? null : this.startOf(),
+      lastText: '',
     };
     this.tasks = new Set();
     for (const approval of this.openApprovals) this.adoptApproval(entry, approval);
@@ -2041,6 +2048,10 @@ export class ChatView extends ItemView {
           // A subagent's calls too: its edits change notes as well.
           for (const block of message.message.content) {
             if (block.type === 'tool_use') entry.toolCalls.set(block.id, { name: block.name, input: (block.input ?? {}) as Record<string, unknown> });
+          }
+          if (message.parent_tool_use_id === null) {
+            const text = message.message.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n').trim();
+            if (text) entry.lastText = text;
           }
         } else if (message.type === 'user' && typeof message.message.content !== 'string') {
           this.linkBackgroundEdits(entry, message.message.content, message.tool_use_result);
@@ -2204,7 +2215,10 @@ export class ChatView extends ItemView {
     this.closeSession(entry.session);
     if (!this.isOnScreen()) this.unseen = succeeded ? 'done' : 'error';
     // In the background, so not seen whether or not this panel is visible.
-    if (entry.chatId) this.plugin.markChatUnseen(entry.chatId, succeeded ? 'done' : 'error');
+    if (entry.chatId) {
+      this.plugin.markChatUnseen(entry.chatId, succeeded ? 'done' : 'error');
+      this.doneTabs.add({ id: entry.chatId, title: entry.title ?? 'Chat', outcome: succeeded ? 'done' : 'error', text: entry.lastText });
+    }
     this.updateBackgroundIndicator();
     this.notifyBackground(entry, succeeded ? 'has finished' : 'stopped with an error', false);
   }
@@ -2320,6 +2334,7 @@ export class ChatView extends ItemView {
     this.restoreDraft();
     this.seeChat();
     this.scrollToBottom(true);
+    if (entry.chatId) this.doneTabs.remove(entry.chatId);
     this.plugin.chatShown(this);
   }
 
@@ -2409,6 +2424,7 @@ export class ChatView extends ItemView {
 
   /** Called for every rename (from this panel, another one, or the history). */
   onChatRenamed(id: string, title: string): void {
+    this.doneTabs.rename(id, title);
     if (id === this.chatId && !this.scratch) {
       this.titleFromClaude = true;
       this.setChatTitle(title);
@@ -2603,6 +2619,7 @@ export class ChatView extends ItemView {
     const opened = await this.openChatHere(item, branch);
     const shown = performance.now();
     if (opened) this.remember(from);
+    if (opened) this.doneTabs.remove(item.id);
     this.plugin.chatShown(this);
     // Once the browser has laid out and painted what was drawn: the wait as seen.
     window.requestAnimationFrame(() =>

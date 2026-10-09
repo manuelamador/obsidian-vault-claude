@@ -237,6 +237,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
   <img src="docs/tab-icons.png" width="350" alt="Two Claude panels open as tabs in the right sidebar, each with its robot icon; pointing at one shows “Claude: Demo — Solow model”">
 
+- A chat that finishes while it runs in the panel's background leaves a tab on the panel's right edge, newest at the top (at most 10). Point at a tab to see the chat, whether it finished or stopped with an error, and the start of its reply; click it to open the chat, or × to remove the tab.
 - Background agents can keep running after a reply ends. **Stop N tasks** beside Send, or ■ in history, stops them. A dot on the tab icon indicates running tasks.
 
   <img src="docs/background-tasks.png" width="480" alt="The input after a reply that left two background agents running: “Stop 2 tasks” beside Send">

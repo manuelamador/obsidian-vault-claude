@@ -3130,3 +3130,106 @@ body:has(.vc-pick-up) .popover.hover-popover {
   fill: var(--text-normal);
   font-weight: var(--font-semibold);
 }
+
+/* Tabs on the panel's right margin, one for each chat that finished in its background (see doneTabs.ts): a
+   narrow mark each, widening to the left on hover to show the chat, what happened, and × to remove it. */
+.vc-done-tabs {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  max-height: calc(100% - 80px);
+  pointer-events: none;
+}
+
+.vc-done-tab {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 10px;
+  min-height: 26px;
+  overflow: hidden;
+  padding: 0;
+  border-radius: var(--radius-s) 0 0 var(--radius-s);
+  background: var(--interactive-accent);
+  box-shadow: var(--shadow-s);
+  cursor: pointer;
+  transition: width 120ms ease-out, background-color 120ms ease-out;
+}
+
+.vc-done-tab.is-error {
+  background: var(--text-error);
+}
+
+.vc-done-tab-mark {
+  flex: 0 0 10px;
+  align-self: stretch;
+}
+
+.vc-done-tab-body,
+.vc-done-tab-close {
+  display: none;
+}
+
+.vc-done-tab:hover,
+.vc-done-tab:focus-visible {
+  width: min(280px, 80vw);
+  padding: 6px 4px 6px 0;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-right: none;
+}
+
+.vc-done-tab:hover .vc-done-tab-mark,
+.vc-done-tab:focus-visible .vc-done-tab-mark {
+  flex-basis: 4px;
+  border-radius: 2px;
+  background: var(--interactive-accent);
+}
+
+.vc-done-tab.is-error:hover .vc-done-tab-mark,
+.vc-done-tab.is-error:focus-visible .vc-done-tab-mark {
+  background: var(--text-error);
+}
+
+.vc-done-tab:hover .vc-done-tab-body,
+.vc-done-tab:focus-visible .vc-done-tab-body {
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+
+.vc-done-tab:hover .vc-done-tab-close,
+.vc-done-tab:focus-visible .vc-done-tab-close {
+  display: flex;
+  flex: 0 0 auto;
+  padding: 2px;
+}
+
+.vc-done-tab-title {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vc-done-tab-what {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.vc-done-tab-text {
+  margin-top: 2px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
