@@ -3238,3 +3238,50 @@ body:has(.vc-pick-up) .popover.hover-popover {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* The "+N" tab: the count in its strip; opened, a row for each chat behind it. */
+.vc-done-more .vc-done-tab-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  color: var(--text-on-accent);
+}
+
+.vc-done-more:hover .vc-done-tab-mark {
+  color: transparent;
+}
+
+.vc-done-more-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 4px;
+  border-left: 3px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.vc-done-more-row.is-error {
+  border-left-color: var(--text-error);
+}
+
+.vc-done-more-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.vc-done-more-row .vc-done-tab-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.vc-done-more:hover .vc-done-more-row .vc-done-tab-close {
+  display: flex;
+}
+
+.vc-done-more .vc-done-tab-body {
+  max-height: 260px;
+  overflow-y: auto;
+}
