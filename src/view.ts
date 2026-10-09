@@ -2112,7 +2112,10 @@ export class ChatView extends ItemView {
         this.updateBackgroundIndicator();
         const reason = error ? `stopped with an error (${error.message})` : 'stopped unexpectedly';
         log('background chat ended', { chatId: entry.chatId, error: error?.message ?? null });
-        this.notifyBackground(entry, reason, true);
+        // As a finish (see finishBackground): a tab, and a notice only where the tab cannot be seen.
+        if (entry.chatId) this.doneTabs.add({ id: entry.chatId, title: entry.title ?? 'Chat', outcome: 'error', text: error?.message ?? 'Claude Code stopped unexpectedly.' });
+        if (entry.chatId && this.isOnScreen()) entry.notice?.hide();
+        else this.notifyBackground(entry, reason, true);
       },
     };
   }
