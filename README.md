@@ -261,7 +261,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 **See how a chat fits with your other work.** The Connections tab maps the chat in the panel: the notes it worked on, grouped by folder, and the other chats that share those notes or are linked with it. It follows the panel as you change chat.
 
-<img src="docs/connections.png" width="800" alt="The Connections tab beside the panel: the map of the chat “Demo — Solow model”, with no project, linked to the note it edited, in its folder's arc, and through that note to two other chats that share it, “demo chat” and “demo extension”; the panel on the right shows the chat, a reply with the steady-state equations and a figure embedded in the reply">
+<img src="docs/connections.webp" width="800" alt="The Connections tab beside the panel: the map of the chat “Demo — Solow model”, with no project, linked to the note it edited, in its folder’s arc, and through that note to two other chats that share it, “demo extension” and “demo chat”; in the panel, the chat’s reply with the steady-state equations and a figure embedded in a reply, and on the panel’s right edge a tab opened for “demo chat”, which finished in the background: “Claude finished”, the start of its reply, and × to remove the tab">
 
 <details>
 <summary>Connections, projects and links between chats</summary>
