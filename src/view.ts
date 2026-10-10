@@ -79,6 +79,7 @@ import {
   branchTitle,
   chatToMarkdown,
   COMPACTION_DETAIL,
+  accountErrorText,
   compactionText,
   messagePrompt,
   promptBubble,
@@ -597,6 +598,8 @@ export class ChatView extends ItemView {
   private doneTabs!: DoneTabs;
   /** Timers deleting what a removal left once its Undo has passed (see removeFrom); cleared when the panel closes. */
   private readonly removalTimers = new Set<number>();
+  /** Claude Code refused the sign-in: the next message starts its process afresh (see ensureSession). */
+  private restartSession = false;
   /** "Memo" beside Quote and Side chat over a selection in the chat (see saveMemoFromSelection). */
   private memoButton!: HTMLButtonElement;
   /** A question asked beside the chat, in a pane over its messages (see SideChat). */
@@ -2902,6 +2905,8 @@ export class ChatView extends ItemView {
               const text = block.text;
               timed('replies', () => this.finishText(text, replyKey(message.uuid, textIndex)));
               textIndex += 1;
+              const note = accountErrorText((message as { error?: unknown }).error);
+              if (note) this.renderNotice(note);
             } else if (block.type === 'thinking' && block.thinking) {
               const thinking = block.thinking;
               timed('thinking', () => this.renderThinking(thinking));
@@ -4174,6 +4179,12 @@ export class ChatView extends ItemView {
   }
 
   private ensureSession(): ClaudeSession | null {
+    // After a failed sign-in, a fresh process, which reads the sign-in again (see accountErrorText).
+    if (this.session && this.restartSession && !this.busy) {
+      this.closeSession(this.session);
+      this.session = null;
+    }
+    this.restartSession = false;
     if (this.session) return this.session;
     const launch = this.plugin.launchOrNotice();
     if (!launch) return null;
@@ -5387,6 +5398,12 @@ export class ChatView extends ItemView {
             if (!block.text.trim()) continue;
             this.finishText(block.text, replyKey(message.uuid, textIndex));
             textIndex += 1;
+            const note = accountErrorText(message.error);
+            if (note) {
+              this.renderNotice(note);
+              // Its process holds the failed sign-in: the next message starts a fresh one.
+              if (message.error === 'authentication_failed') this.restartSession = true;
+            }
           } else if (block.type === 'thinking') this.renderThinking(block.thinking);
           else if (block.type === 'tool_use') {
             const input = (block.input ?? {}) as Record<string, unknown>;

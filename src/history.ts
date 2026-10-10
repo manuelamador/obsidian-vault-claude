@@ -529,6 +529,8 @@ interface SessionRow {
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;
+  /** An error Claude Code wrote as a reply (see accountErrorText): its kind. */
+  error?: string;
   /** What Claude Code attached to the chat: a queued message taken up mid-turn is one (`queued_command`). */
   attachment?: { type?: string; prompt?: unknown; source_uuid?: string; commandMode?: string; origin?: { kind?: string } | null };
   /** A queue operation's: what it did, why, and to which message (by the uuid it was sent with). */
@@ -594,6 +596,7 @@ function rowMessage(row: SessionRow, id: string): SessionMessage | null {
     parent_tool_use_id: null,
     parent_agent_id: null,
     message: row.message,
+    ...(row.error ? { error: row.error } : {}),
   } as unknown as SessionMessage;
 }
 

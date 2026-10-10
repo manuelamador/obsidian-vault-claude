@@ -55,6 +55,30 @@ export function compactionText(trigger: unknown, preTokens: unknown): string {
 }
 
 /** What compaction means, shown when pointing at the divider. */
+/**
+ * What to do about an error Claude Code reports on a reply (an assistant message's `error`) that
+ * concerns the account rather than the request: in plain words, for a notice under it. Null for
+ * the others (rate limits, overload and the like), whose own text says enough.
+ */
+export function accountErrorText(error: unknown): string | null {
+  switch (error) {
+    case 'authentication_failed':
+      return 'Claude Code’s sign-in has expired or was refused. To sign in again, run claude in a terminal and type /login. Then send your message again: the panel starts Claude Code afresh for it.';
+    case 'oauth_org_not_allowed':
+      return 'Your Claude account’s organisation does not allow Claude Code. Sign in with another account: run claude in a terminal and type /login.';
+    case 'account_on_hold':
+      return 'Your Claude account is on hold. See claude.ai for why.';
+    case 'verification_required':
+      return 'Your Claude account needs verifying. Sign in at claude.ai to do it, then send your message again.';
+    case 'billing_error':
+      return 'Claude Code was refused for a billing reason. Check your plan or credits at claude.ai.';
+    case 'cloud_credential_error':
+      return 'Claude Code could not use its cloud credentials. Check them in a terminal (run claude), then send your message again.';
+    default:
+      return null;
+  }
+}
+
 export const COMPACTION_DETAIL = 'From here on, Claude works from a summary of the earlier conversation.';
 
 /**

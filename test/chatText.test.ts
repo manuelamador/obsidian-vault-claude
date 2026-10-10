@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { bubbleOf, chatToMarkdown, messageSearchText, startsTurn, withQuote } from '../src/chatText';
+import { accountErrorText, bubbleOf, chatToMarkdown, messageSearchText, startsTurn, withQuote } from '../src/chatText';
 import { promptSummary } from '../src/earlierTurns';
 import { answer, message, prompt } from './transcript';
 
@@ -54,4 +54,10 @@ test("a reply's text as it reads drawn: no equations, links as their text, no em
   const { shownText } = await import('../src/chatText');
   assert.equal(shownText('A **bold** move, $\\frac{a}{b}$ and [the paper](https://x.org) in `code`, file_name kept.'), 'A bold move,   and the paper in code, file_name kept.');
   assert.equal(shownText('## Heading\n> quoted [[Note|alias]]\n$$\nx\n$$'), 'Heading\nquoted alias\n ');
+});
+
+test('an expired sign-in gets a plain note saying how to sign in again; other errors none', () => {
+  assert.match(accountErrorText('authentication_failed') ?? '', /\/login/);
+  assert.equal(accountErrorText('rate_limit'), null);
+  assert.equal(accountErrorText(undefined), null);
 });
