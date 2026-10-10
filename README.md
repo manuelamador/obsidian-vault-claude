@@ -237,7 +237,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
   <img src="docs/tab-icons.png" width="350" alt="Two Claude panels open as tabs in the right sidebar, each with its robot icon; pointing at one shows “Claude: Demo — Solow model”">
 
-- A chat that finishes while it runs in the panel's background leaves a tab on the panel's right edge, newest at the top, in place of a notice; past five, or what the panel has room for, the rest wait behind a **+N** tab that lists them. A new tab shows itself open for a few seconds, then closes to the edge. Point at a tab to see the chat, whether it finished or stopped with an error, and the start of its reply; click it to open the chat, or × to remove the tab.
+- A chat that finishes while it runs in the panel's background leaves a tab on the panel's right edge, marked ✓ when it finished and ! when it stopped with an error, newest at the top, in place of a notice (a notice still comes when the panel is out of sight); past five, or what the panel has room for, the rest wait behind a **+N** tab that lists them. A new tab shows itself open for a few seconds, then closes to the edge. Point at a tab to see the chat, whether it finished or stopped with an error, and the start of its reply; click it to open the chat, or × to remove the tab.
 - Background agents can keep running after a reply ends. **Stop N tasks** beside Send, or ■ in history, stops them. A dot on the tab icon indicates running tasks.
 
   <img src="docs/background-tasks.png" width="480" alt="The input after a reply that left two background agents running: “Stop 2 tasks” beside Send">
@@ -251,7 +251,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
   <img src="docs/notes-menu.png" width="510" alt="The notes menu open from the button beside the paperclip, headed “Notes in this chat · ⌥-click to attach”: under Memos, This chat's memos in a table and the chat's one memo; under Changed, the note the chat changed; under Mentioned, a note it mentioned">
 
 - Scratch is first in history. Adjust its idle timeout in settings or clear it with its trash button. Under a reply in the scratch chat, **Continue as a chat** copies the conversation up to that reply into an ordinary chat, which stays in the history when the scratch chat starts over.
-- **The arrow beside one of your messages** opens a menu: **Copy from here on to a new chat** starts a new chat from that message onward; **Move from here on to a new chat** does the same and removes those messages here; **Send this message to another chat…** puts the message's text in another chat's input, removing it here or not; **Remove from here on** deletes that message and everything after it. For 10 seconds after a move or a removal, **Undo** in the notice puts the messages back; after a move it also deletes the new chat. The notes those replies changed stay as they are, but no longer list the chat as having changed them.
+- **The arrow beside one of your messages** opens a menu: **Copy from here on to a new chat** starts a new chat from that message onward; **Move from here on to a new chat** does the same and removes those messages here; **Send this message to another chat…** puts the message's text in another chat's input, removing it here or not; **Remove from here on** deletes that message and everything after it. For 10 seconds after a move or a removal, **Undo** in the notice puts the messages back; after a move it also deletes the new chat, unless you have written in it since. The notes those replies changed stay as they are, but no longer list the chat as having changed them.
 
   <img src="docs/copy-from-here.png" width="178" alt="The arrow button to the left of a message of yours, “Add a diagram”, shown when you point at the message">
 
@@ -354,6 +354,7 @@ Open chat · New chat · New chat in a new tab · Chat history · Pick up where 
 - **"Claude Code executable not found":** install Claude Code with the native installer (see Requirements), or set its path under **Settings → Vault Claude → Claude Code executable**.
 - **A notice that Claude Code is far from the plugin's SDK version:** update Claude Code (`claude update`), or the plugin if Claude Code is ahead.
 - **Windows, with Claude Code installed through npm:** the plugin cannot start `claude.cmd`; install it with the native Windows installer, which provides `claude.exe`.
+- **"Failed to authenticate" in a reply:** Claude Code's sign-in has expired. Run `claude` in a terminal, type `/login`, then send your message again; the panel starts Claude Code afresh for it.
 - **Anything else:** attach the diagnostic log (see Your data) to a bug report; it holds your vault's path.
 
 ## Alternatives
