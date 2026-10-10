@@ -3206,6 +3206,8 @@ body:has(.vc-pick-up) .popover.hover-popover {
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-right: none;
+  /* Opened, it stands over the chat as a pop-over does. */
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25);
 }
 
 .vc-done-tab:hover .vc-done-tab-mark,
