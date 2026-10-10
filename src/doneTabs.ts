@@ -85,7 +85,8 @@ export class DoneTabs {
     const room = this.el.parentElement?.clientHeight ? Math.floor((this.el.parentElement.clientHeight - TABS_MARGIN) / TAB_PITCH) : MAX_SHOWN;
     const shown = this.tabs.length <= Math.min(MAX_SHOWN, room) ? this.tabs.length : Math.max(1, Math.min(MAX_SHOWN, room) - 1);
     for (const tab of this.tabs.slice(0, shown)) {
-      const el = this.el.createDiv({ cls: `vc-done-tab is-${tab.outcome}${tab.id === this.fresh ? ' is-fresh' : ''}`, attr: { role: 'button', tabindex: '0', 'aria-label': `${whatOf(tab)} in “${tab.title}”: click to open it` } });
+      // No aria-label: Obsidian would show it as a tooltip repeating what the opened tab says.
+      const el = this.el.createDiv({ cls: `vc-done-tab is-${tab.outcome}${tab.id === this.fresh ? ' is-fresh' : ''}`, attr: { role: 'button', tabindex: '0' } });
       setIcon(el.createDiv({ cls: 'vc-done-tab-mark' }), tab.outcome === 'done' ? 'check' : 'alert-circle');
       const body = el.createDiv({ cls: 'vc-done-tab-body' });
       body.createDiv({ cls: 'vc-done-tab-title', text: tab.title });
@@ -97,12 +98,12 @@ export class DoneTabs {
     const rest = this.tabs.slice(shown);
     if (rest.length === 0) return;
     // Opened on hover, as a tab is: a row for each, to open or take away.
-    const more = this.el.createDiv({ cls: 'vc-done-tab vc-done-more', attr: { 'aria-label': `${rest.length} more chats finished` } });
+    const more = this.el.createDiv({ cls: 'vc-done-tab vc-done-more' });
     more.createDiv({ cls: 'vc-done-tab-mark', text: `+${rest.length}` });
     const list = more.createDiv({ cls: 'vc-done-tab-body' });
     list.createDiv({ cls: 'vc-done-tab-what', text: `${rest.length} more finished` });
     for (const tab of rest) {
-      const row = list.createDiv({ cls: `vc-done-more-row is-${tab.outcome}`, attr: { role: 'button', tabindex: '0', 'aria-label': `${whatOf(tab)}: click to open it` } });
+      const row = list.createDiv({ cls: `vc-done-more-row is-${tab.outcome}`, attr: { role: 'button', tabindex: '0' } });
       row.createDiv({ cls: 'vc-done-tab-title', text: tab.title });
       this.closeButton(row, tab);
       this.opens(row, tab);
