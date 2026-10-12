@@ -2925,6 +2925,8 @@ export default class VaultClaudePlugin extends Plugin {
     if (!chat || chat.title === title) return;
     chat.title = title;
     void this.saveSettings();
+    // Its name on the maps, and over its links.
+    this.connectionsSoon(0);
   }
 
   /** "Edit selection with Claude" for the editor's selection, or for writing at the cursor. */

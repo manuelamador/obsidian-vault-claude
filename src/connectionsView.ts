@@ -495,6 +495,11 @@ export const CONNECTIONS_VIEW_TYPE = 'vault-claude-connections';
  * outside. Nodes on both the map before and the one after glide from one place to the other. Each
  * move to a project and back is a step in the tab's history, for its ← and →.
  */
+/** The heading of the links under the map of chat `title`. */
+function linksHeading(title: string): string {
+  return `Links of “${shortLabel(title, 50)}”`;
+}
+
 export class ConnectionsView extends ItemView {
   /** The map of the panel's chat (null: no chat with connections in the panel). */
   private host: ChatMapHost | null = null;
@@ -687,7 +692,11 @@ export class ConnectionsView extends ItemView {
     else this.drawOwn();
     // Set by the drawing above, which TypeScript does not follow.
     (this.drawing as MapDrawing | null)?.glide(previous);
-    if (this.links) return this.links.redraw();
+    // Kept across redraws, its heading follows a rename of the chat.
+    if (this.links) {
+      this.linksEl.querySelector('summary')?.setText(linksHeading(host.baseline.title));
+      return this.links.redraw();
+    }
     if (host.lookOnly) {
       this.linksEl.empty();
       this.linksEl.createDiv({ cls: 'vc-project-empty', text: 'Links between chats can be made once you send this chat a message.' });
@@ -695,7 +704,7 @@ export class ConnectionsView extends ItemView {
     }
     const links = this.linksEl.createEl('details');
     links.open = this.linksOpen;
-    links.createEl('summary', { text: `Links of “${shortLabel(host.baseline.title, 50)}”` });
+    links.createEl('summary', { text: linksHeading(host.baseline.title) });
     links.addEventListener('toggle', () => (this.linksOpen = links.open));
     this.links = { ...host.drawLinks(links.createDiv()), chat: host.baseline.id };
   }
