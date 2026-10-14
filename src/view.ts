@@ -48,6 +48,8 @@ import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { DoneTabs, type DoneTab } from './doneTabs';
+import { emailMarkdown, renderEmailCards } from './emailCards';
+import { emailMessages, resultText, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -176,9 +178,9 @@ function answeredBy(message: SDKMessage & { type: 'stream_event' | 'assistant' }
  * The tool results in a message of yours, each with its tool call's id and whether it failed. The
  * structured result belongs to the message, so it goes with a result only when that is the only one.
  */
-function toolResults(content: Exclude<SDKUserMessage['message']['content'], string>, structured: unknown): { id: string; isError: boolean; structured: unknown }[] {
+function toolResults(content: Exclude<SDKUserMessage['message']['content'], string>, structured: unknown): { id: string; isError: boolean; structured: unknown; text: string }[] {
   const results = content.flatMap((block) => (block.type === 'tool_result' ? [block] : []));
-  return results.map((block) => ({ id: block.tool_use_id, isError: block.is_error === true, structured: results.length === 1 ? structured : undefined }));
+  return results.map((block) => ({ id: block.tool_use_id, isError: block.is_error === true, structured: results.length === 1 ? structured : undefined, text: resultText(block.content) }));
 }
 
 function clearSettle(entry: BackgroundChat): void {
@@ -2900,7 +2902,7 @@ export class ChatView extends ItemView {
           if (Array.isArray(content)) {
             for (const block of content as ContentBlock[]) {
               if (block.type !== 'tool_result' || !block.tool_use_id) continue;
-              timed('tool results', () => this.finishTool(block.tool_use_id ?? '', block.is_error === true, edits?.get(block.tool_use_id ?? ''), true));
+              timed('tool results', () => this.finishTool(block.tool_use_id ?? '', block.is_error === true, edits?.get(block.tool_use_id ?? ''), true, resultText((block as { content?: unknown }).content)));
             }
           }
           const prompt = messagePrompt(message);
@@ -5423,7 +5425,7 @@ export class ChatView extends ItemView {
         if (typeof message.message.content === 'string') break;
         for (const result of toolResults(message.message.content, message.tool_use_result)) {
           if (message.parent_tool_use_id === null) {
-            this.finishTool(result.id, result.isError, result.structured);
+            this.finishTool(result.id, result.isError, result.structured, false, result.text);
             continue;
           }
           const call = this.agentCalls.get(result.id);
@@ -5744,16 +5746,29 @@ export class ChatView extends ItemView {
   }
 
   /** Marks a tool call finished; an edit to a file also joins the reply's changed files. `structured` is its tool_use_result (live only). */
-  /** `saved`: a result drawn from a saved chat rather than one just made. */
-  private finishTool(id: string, isError: boolean, structured?: unknown, saved = false): void {
+  /** `saved`: a result drawn from a saved chat rather than one just made. `text`: the result's text, whose messages a Gmail tool's shows as cards (see renderEmailCards). */
+  private finishTool(id: string, isError: boolean, structured?: unknown, saved = false, text = ''): void {
     const entry = this.tools.get(id);
     if (!entry) return;
-    if (!isError && entry.status === 'running') this.renderEdit(entry.name, entry.input, structured, saved);
+    if (!isError && entry.status === 'running') {
+      this.renderEdit(entry.name, entry.input, structured, saved);
+      const messages = text ? emailMessages(entry.name, text) : null;
+      if (messages) this.renderEmails(messages);
+    }
     entry.status = isError ? 'error' : 'done';
     entry.lineEl?.removeClass('is-running');
     entry.lineEl?.toggleClass('is-error', isError);
     if (entry.group) this.updateToolGroup(entry.group);
     if (this.busy && this.drawingLive() && ![...this.tools.values()].some((other) => other.status === 'running')) this.setPhase('Working…');
+  }
+
+  /** Cards for the messages a Gmail tool read, in the reply: to open in Gmail, quote, or save as a note. */
+  private renderEmails(messages: EmailMessage[]): void {
+    renderEmailCards(this.container(), messages, {
+      quote: (message) => this.addToInput(emailMarkdown(message), 'Email quoted'),
+      save: (message) => void this.replyToNewNote(emailMarkdown(message), message.subject),
+    });
+    this.scrollToBottom();
   }
 
   /**

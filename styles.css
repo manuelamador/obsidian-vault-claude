@@ -3309,3 +3309,95 @@ body:has(.vc-pick-up) .popover.hover-popover {
   max-height: 260px;
   overflow-y: auto;
 }
+
+/* Cards for the messages Claude read with Claude Code's Gmail tools (see emailCards.ts). */
+.vc-email-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+
+.vc-email-card {
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+
+.vc-email-card.is-unread {
+  border-left-color: var(--interactive-accent);
+}
+
+.vc-email-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.vc-email-sender {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.vc-email-card.is-unread .vc-email-sender,
+.vc-email-card.is-unread .vc-email-subject {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.vc-email-count {
+  padding: 0 5px;
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-email-date {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.vc-email-subject {
+  margin-top: 2px;
+}
+
+.vc-email-text {
+  margin-top: 2px;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.vc-email-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.vc-email-card:hover .vc-email-actions,
+.vc-email-card:focus-within .vc-email-actions {
+  opacity: 1;
+}
+
+.vc-email-actions .clickable-icon {
+  padding: 2px 4px;
+}
+
+.vc-email-more {
+  align-self: flex-start;
+  font-size: var(--font-ui-smaller);
+}
