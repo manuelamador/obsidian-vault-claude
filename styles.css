@@ -3314,17 +3314,25 @@ body:has(.vc-pick-up) .popover.hover-popover {
 .vc-email-cards {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 6px 0 10px;
+  gap: var(--size-4-2);
+  margin: var(--size-4-2) 0 var(--size-4-3);
 }
 
+/* Framed and lifted like the cards waiting on you (.vc-permission), so each message stands apart
+   from the reply around it; an unread one keeps its accent edge. */
 .vc-email-card {
-  padding: 8px 10px;
+  padding: var(--size-4-2) var(--size-4-3);
   border: 1px solid var(--background-modifier-border);
   border-left: 3px solid var(--background-modifier-border);
-  border-radius: var(--radius-s);
-  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
   font-size: var(--font-ui-small);
+  transition: box-shadow 120ms ease-out;
+}
+
+.vc-email-card.is-expandable:hover {
+  box-shadow: var(--shadow-l);
 }
 
 .vc-email-card.is-unread {
@@ -3368,6 +3376,8 @@ body:has(.vc-pick-up) .popover.hover-popover {
 
 .vc-email-subject {
   margin-top: 2px;
+  font-weight: var(--font-medium);
+  color: var(--text-normal);
 }
 
 .vc-email-text {
