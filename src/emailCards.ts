@@ -1,7 +1,7 @@
 // Cards for the messages Claude read with Claude Code's Gmail tools (see emailMessages.ts): who sent
-// each, its subject, when, and the start of its text; to open in Gmail, quote in the next message, or
-// save as a note. A long search shows its first cards, the rest a click away; an opened thread shows its
-// messages framed together, in place of its card in the search.
+// each, its subject, when, and the start of its text; to open in Gmail, quote in the next message,
+// start a new chat about it, or save as a note. A long search shows its first cards, the rest a click
+// away; an opened thread shows its messages framed together, in place of its card in the search.
 import { setIcon } from 'obsidian';
 import { formatDate } from './history';
 import type { EmailMessage } from './emailMessages';
@@ -13,6 +13,8 @@ const CARD_TEXT_CHARS = 220;
 
 export interface EmailCardActions {
   quote: (message: EmailMessage) => void;
+  /** A new chat, with the message quoted in its input. */
+  chat: (message: EmailMessage) => void;
   save: (message: EmailMessage) => void;
 }
 
@@ -66,6 +68,7 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
     setIcon(open, 'external-link');
   }
   button('quote', 'Quote in your next message', () => actions.quote(message));
+  button('message-square-plus', 'New chat about this message', () => actions.chat(message));
   button('file-plus', 'Save as a note', () => actions.save(message));
   return card;
 }

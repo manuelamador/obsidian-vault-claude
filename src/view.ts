@@ -5762,10 +5762,14 @@ export class ChatView extends ItemView {
     if (this.busy && this.drawingLive() && ![...this.tools.values()].some((other) => other.status === 'running')) this.setPhase('Working…');
   }
 
-  /** Cards for the messages a Gmail tool read, in the reply: to open in Gmail, quote, or save as a note. */
+  /** Cards for the messages a Gmail tool read, in the reply: to open in Gmail, quote, start a new chat about, or save as a note. */
   private renderEmails(messages: EmailMessage[], thread: boolean): void {
     (thread ? renderEmailThread : renderEmailCards)(this.container(), messages, {
       quote: (message) => this.addToInput(emailMarkdown(message), 'Email quoted'),
+      chat: (message) => {
+        this.startNewChat();
+        this.addToInput(emailMarkdown(message), 'Email quoted in a new chat');
+      },
       save: (message) => void this.replyToNewNote(emailMarkdown(message), message.subject),
     });
     this.scrollToBottom();
