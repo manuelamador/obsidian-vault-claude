@@ -42,3 +42,10 @@ test('Gmail\'s HTML escapes in snippets and subjects become characters', () => {
   assert.equal(one?.[0].text, 'a <b>');
   assert.equal(one?.[0].subject, 'R&D');
 });
+
+test('a metadata-only search leaves the subject empty; a message without one says so', () => {
+  const meta = emailMessages('mcp__claude_ai_Gmail__search_threads', JSON.stringify({ threads: [{ messages: [msg({ subject: undefined, snippet: undefined })] }] }));
+  assert.equal(meta?.[0].subject, '');
+  assert.equal(meta?.[0].text, '');
+  assert.equal(emailMessages('mcp__claude_ai_Gmail__get_message', JSON.stringify(msg({ subject: '' })))?.[0].subject, '(no subject)');
+});

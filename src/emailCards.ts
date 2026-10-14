@@ -22,7 +22,7 @@ export function emailDate(message: EmailMessage): string {
 
 /** `message` as Markdown, to quote or save: who, when and what, then its text. */
 export function emailMarkdown(message: EmailMessage): string {
-  const head = [`**${message.subject}**`, `From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`];
+  const head = [`**${message.subject || '(no subject)'}**`, `From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`];
   if (message.url) head.push(`[Open in Gmail](${message.url})`);
   return [...head, '', ...(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
 }
@@ -37,7 +37,7 @@ export function renderEmailCards(parent: HTMLElement, messages: EmailMessage[], 
     head.createSpan({ cls: 'vc-email-sender', text: message.sender });
     if (message.count) head.createSpan({ cls: 'vc-email-count', text: String(message.count) });
     head.createSpan({ cls: 'vc-email-date', text: emailDate(message) });
-    card.createDiv({ cls: 'vc-email-subject', text: message.subject });
+    if (message.subject) card.createDiv({ cls: 'vc-email-subject', text: message.subject });
     const text = message.text.length > CARD_TEXT_CHARS ? `${message.text.slice(0, CARD_TEXT_CHARS)}…` : message.text;
     const textEl = text ? card.createDiv({ cls: 'vc-email-text', text }) : null;
     // A thread or a message carries the whole text: a click on the card opens it there, and closes it again.

@@ -62,7 +62,9 @@ function message(raw: RawMessage, count?: number): EmailMessage {
   return {
     sender: decodeEntities(str(raw.sender)) || 'Unknown sender',
     to: Array.isArray(raw.toRecipients) ? raw.toRecipients.filter((each): each is string => typeof each === 'string') : [],
-    subject: decodeEntities(str(raw.subject)) || '(no subject)',
+    // A search asked for metadata only carries no subject at all: left empty rather than shown as
+    // "(no subject)", which would say the message has none.
+    subject: raw.subject === undefined ? '' : decodeEntities(str(raw.subject)) || '(no subject)',
     time: Date.parse(str(raw.date)),
     text: decodeEntities(str(raw.snippet)) || body.replace(/\s+/g, ' '),
     unread: labels.includes('UNREAD'),
