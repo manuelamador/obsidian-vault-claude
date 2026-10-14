@@ -8,6 +8,7 @@ import { deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMes
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
+import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
 import { vaultRelative } from './toolSummary';
@@ -144,6 +145,8 @@ interface PluginData {
   scratch?: { id: string; usedAt: number };
   sideSessions?: string[];
   pickUp?: PickUpState;
+  /** The panels' tabs for chats that finished in their background (see DoneTabs), shown again at the next start. */
+  doneTabs?: DoneTab[];
   chatProjects?: Record<string, ChatProjectState>;
   chatLinks?: Record<string, string[]>;
   chatSummaries?: Record<string, { text: string; at: number }>;
@@ -163,6 +166,10 @@ export default class VaultClaudePlugin extends Plugin {
   ticks: Record<string, Record<string, number[]>> = {};
   /** Pick up where you left off: the chats set aside (see pickUp.ts). */
   pickUp: PickUpState = { hidden: {} };
+  /** The panels' margin tabs as last kept (see doneTabsChanged). */
+  private doneTabs: DoneTab[] = [];
+  /** Whether a panel has taken the tabs kept from the last run (see takeKeptDoneTabs). */
+  private doneTabsTaken = false;
   /** Per chat, what its projects sent with it and what it chose to send (see ChatProjectState). */
   chatProjects: Record<string, ChatProjectState> = {};
   /** Chats linked from a message of another (see linkChats): chat id → the chats it linked to. */
@@ -178,6 +185,23 @@ export default class VaultClaudePlugin extends Plugin {
   private notesCache: Map<string, Set<string>> | null = null;
   private weightsCache: Map<string, Map<string, number>> | null = null;
   private hubsCache: Set<string> | null = null;
+  /** The margin tabs kept from the last run, once: for the first panel opened; the others start with none. */
+  takeKeptDoneTabs(): DoneTab[] {
+    if (this.doneTabsTaken) return [];
+    this.doneTabsTaken = true;
+    // Not those whose chat has gone since.
+    return this.doneTabs.filter((tab) => this.isPanelChat(tab.id) || !this.lastListing || this.lastListing.some((item) => item.id === tab.id));
+  }
+
+  /** A panel's margin tabs changed: all panels' tabs are kept, for the next start. */
+  doneTabsChanged(): void {
+    // Until a panel has taken them, those of the last run are kept as well.
+    const kept = this.doneTabsTaken ? [] : this.doneTabs;
+    const tabs = [...this.chatViews().flatMap((view) => view.doneTabList()), ...kept];
+    this.doneTabs = tabs.filter((tab, i) => tabs.findIndex((each) => each.id === tab.id) === i);
+    this.saveSoon();
+  }
+
   /** The panel whose chat the Connections pane shows (see chatShown): the last to show a chat. */
   private connectionsPanel: ChatView | null = null;
   /** The pane's map read again soon, after its data changed (see connectionsSoon). */
@@ -259,7 +283,7 @@ export default class VaultClaudePlugin extends Plugin {
     await this.loadSettings();
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
     // Opened again with the workspace: it shows the chat of the first panel.
-    this.registerView(CONNECTIONS_VIEW_TYPE, (leaf) => new ConnectionsView(leaf, (pane) => void this.followPanel(pane, this.connectionsPanel ?? this.chatViews()[0] ?? null)));
+    this.registerView(CONNECTIONS_VIEW_TYPE, (leaf) => new ConnectionsView(leaf, (pane) => void this.followPanel(pane, this.connectionsPanel ?? this.chatViews()[0] ?? null), () => this.confirmRebuildConnections()));
     // Links in replies show Obsidian's page preview, with the modifier key held unless the Page preview settings say otherwise.
     this.registerHoverLinkSource(VIEW_TYPE, { display: 'Vault Claude', defaultMod: true });
     this.addRibbonIcon('bot', 'Open Claude', () => void this.activateView());
@@ -3114,6 +3138,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.chatProjects = raw.chatProjects && typeof raw.chatProjects === 'object' ? raw.chatProjects : {};
     this.chatLinks = raw.chatLinks && typeof raw.chatLinks === 'object' ? raw.chatLinks : {};
     this.chatSummaries = raw.chatSummaries && typeof raw.chatSummaries === 'object' ? raw.chatSummaries : {};
+    this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
     this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};
     this.models = Array.isArray(raw.models) ? raw.models : [];
     this.modelsFetchedAt = typeof raw.modelsFetchedAt === 'number' ? raw.modelsFetchedAt : 0;
@@ -3166,6 +3191,7 @@ export default class VaultClaudePlugin extends Plugin {
       chatProjects: this.chatProjects,
       chatLinks: this.chatLinks,
       chatSummaries: this.chatSummaries,
+      doneTabs: this.doneTabs,
       frontmatterGuidance: this.frontmatterGuidance,
     };
   }

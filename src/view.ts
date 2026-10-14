@@ -47,7 +47,7 @@ import { hintAbove } from './hint';
 import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './contextSize';
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
-import { DoneTabs } from './doneTabs';
+import { DoneTabs, type DoneTab } from './doneTabs';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -893,7 +893,9 @@ export class ChatView extends ItemView {
     this.register(() => sweeper.disconnect());
     this.draw = this.liveDraw = { parent: this.messagesEl, turn: null, group: null, liveText: null, turnHadText: false };
     this.promptNav = new PromptNav(messagesWrap, this.messagesEl, () => this.earlier?.listed() ?? []);
-    this.doneTabs = new DoneTabs(messagesWrap, (tab) => void this.app.workspace.revealLeaf(this.leaf).then(() => this.openChatId(tab.id, tab.title)));
+    this.doneTabs = new DoneTabs(messagesWrap, (tab) => void this.app.workspace.revealLeaf(this.leaf).then(() => this.openChatId(tab.id, tab.title)), () => this.plugin.doneTabsChanged());
+    // Those of before Obsidian started again, in the first panel opened.
+    this.doneTabs.restore(this.plugin.takeKeptDoneTabs());
     this.quoteButton = messagesWrap.createEl('button', { cls: 'vc-quote-button', text: 'Quote', attr: { 'aria-label': 'Quote the selected text in your next message' } });
     this.quoteButton.hide();
     // Pressing it must not clear the selection it is about to quote.
@@ -1156,6 +1158,11 @@ export class ChatView extends ItemView {
     this.updateStatusBarClearance();
     this.markSeen();
     this.doneTabs?.layout();
+  }
+
+  /** This panel's tabs for chats that finished in its background (see DoneTabs). */
+  doneTabList(): DoneTab[] {
+    return this.doneTabs?.list() ?? [];
   }
 
   /** Chat `id` is seen in another panel, or deleted: its tab here goes. */

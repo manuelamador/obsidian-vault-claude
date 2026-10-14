@@ -1,7 +1,8 @@
 // Tabs on the right margin of the panel, one for each chat that finished out of sight (in the panel's
 // background): the newest at the top. A new tab shows itself open for a moment, then closes to its
 // edge. A tab opens its chat; hovered, it widens to the left to show the chat's name and what
-// happened, with × to take the tab away. A chat shown again loses its tab.
+// happened, with × to take the tab away. A chat shown again loses its tab. The tabs are kept by the
+// plugin, so that they come back when Obsidian starts again (see VaultClaudePlugin.doneTabsChanged).
 import { setIcon } from 'obsidian';
 
 /** A finish out of sight: the chat, its name, how it ended, and the start of its last reply. */
@@ -31,8 +32,21 @@ export class DoneTabs {
   private fresh: string | null = null;
   private freshTimer = 0;
 
-  constructor(parent: HTMLElement, private readonly open: (tab: DoneTab) => void) {
+  /** `changed`: the tabs changed (one added, removed or renamed), for them to be kept. */
+  constructor(parent: HTMLElement, private readonly open: (tab: DoneTab) => void, private readonly changed: () => void = () => undefined) {
     this.el = parent.createDiv({ cls: 'vc-done-tabs' });
+    this.draw();
+  }
+
+  /** The tabs, newest first. */
+  list(): DoneTab[] {
+    return [...this.tabs];
+  }
+
+  /** Tabs kept from before Obsidian started again: shown as they were, closed to the edge. */
+  restore(tabs: DoneTab[]): void {
+    if (tabs.length === 0) return;
+    this.tabs = [...this.tabs, ...tabs.filter((tab) => !this.tabs.some((each) => each.id === tab.id))].slice(0, MAX_TABS);
     this.draw();
   }
 
@@ -48,6 +62,7 @@ export class DoneTabs {
       this.el.querySelector('.vc-done-tab.is-fresh')?.removeClass('is-fresh');
     }, SHOWN_MS);
     this.draw();
+    this.changed();
   }
 
   /** The panel changed size: as many tabs as it has room for (see draw). */
@@ -66,6 +81,7 @@ export class DoneTabs {
     if (!this.tabs.some((each) => each.id === id)) return;
     this.tabs = this.tabs.filter((each) => each.id !== id);
     this.draw();
+    this.changed();
   }
 
   /** Chat `id` renamed: its tab says so. */
@@ -74,6 +90,7 @@ export class DoneTabs {
     if (!tab) return;
     tab.title = title;
     this.draw();
+    this.changed();
   }
 
   private draw(): void {

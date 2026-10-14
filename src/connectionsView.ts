@@ -525,8 +525,16 @@ export class ConnectionsView extends ItemView {
     leaf: WorkspaceLeaf,
     /** Asks for the map of the panel's chat (see follow), once the pane is open. */
     private readonly opened: (view: ConnectionsView) => void,
+    /** Rebuild connections from chat files, after asking (see VaultClaudePlugin.confirmRebuildConnections). */
+    private readonly rebuild: () => void = () => undefined,
   ) {
     super(leaf);
+  }
+
+  /** The tab's ⋯ menu: Rebuild connections, besides Obsidian's own items. */
+  onPaneMenu(menu: Menu, source: string): void {
+    menu.addItem((item) => item.setTitle('Rebuild connections from chat files…').setIcon('refresh-cw').setSection('action').onClick(() => this.rebuild()));
+    super.onPaneMenu(menu, source);
   }
 
   getViewType(): string {
