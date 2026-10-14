@@ -3379,6 +3379,23 @@ body:has(.vc-pick-up) .popover.hover-popover {
   overflow: hidden;
 }
 
+.vc-email-card.is-expandable {
+  cursor: pointer;
+}
+
+.vc-email-card.is-expanded {
+  cursor: auto;
+}
+
+.vc-email-card.is-expanded .vc-email-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  white-space: pre-wrap;
+  user-select: text;
+  color: var(--text-normal);
+}
+
 .vc-email-actions {
   display: flex;
   justify-content: flex-end;

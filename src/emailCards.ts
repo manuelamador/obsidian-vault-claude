@@ -24,7 +24,7 @@ export function emailDate(message: EmailMessage): string {
 export function emailMarkdown(message: EmailMessage): string {
   const head = [`**${message.subject}**`, `From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`];
   if (message.url) head.push(`[Open in Gmail](${message.url})`);
-  return [...head, '', message.text].map((line) => (line ? `> ${line}` : '>')).join('\n');
+  return [...head, '', ...(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
 }
 
 /** Cards for `messages` in `parent`. */
@@ -39,7 +39,23 @@ export function renderEmailCards(parent: HTMLElement, messages: EmailMessage[], 
     head.createSpan({ cls: 'vc-email-date', text: emailDate(message) });
     card.createDiv({ cls: 'vc-email-subject', text: message.subject });
     const text = message.text.length > CARD_TEXT_CHARS ? `${message.text.slice(0, CARD_TEXT_CHARS)}…` : message.text;
-    if (text) card.createDiv({ cls: 'vc-email-text', text });
+    const textEl = text ? card.createDiv({ cls: 'vc-email-text', text }) : null;
+    // A thread or a message carries the whole text: a click on the card opens it there, and closes it again.
+    if (message.body && textEl) {
+      const body = message.body;
+      card.addClass('is-expandable');
+      card.setAttr('aria-expanded', 'false');
+      card.setAttr('title', 'Show the whole message');
+      card.addEventListener('click', (evt) => {
+        if ((evt.target as HTMLElement).closest('.vc-email-actions, a, button')) return;
+        if (window.getSelection()?.toString()) return;
+        const open = !card.hasClass('is-expanded');
+        card.toggleClass('is-expanded', open);
+        card.setAttr('aria-expanded', String(open));
+        card.setAttr('title', open ? 'Show less' : 'Show the whole message');
+        textEl.setText(open ? body : text);
+      });
+    }
     const buttons = card.createDiv({ cls: 'vc-email-actions' });
     const button = (icon: string, label: string, run: () => void) => {
       const el = buttons.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': label } });

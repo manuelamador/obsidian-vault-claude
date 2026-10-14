@@ -11,6 +11,8 @@ export interface EmailMessage {
   time: number;
   /** Gmail's snippet, or the start of the message's text. */
   text: string;
+  /** The message's whole text, when the tool gave it (a thread or a message, not a search). */
+  body?: string;
   unread: boolean;
   /** Where Gmail shows it, when the tool gave the link. */
   url?: string;
@@ -39,17 +41,32 @@ interface RawMessage {
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' };
+
+/** `text` with the HTML escapes Gmail leaves in snippets (`&lt;`, `&#39;`, …) turned back into characters. */
+export function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, code: string) => {
+    if (code[0] === '#') {
+      const point = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+      return Number.isFinite(point) && point > 0 && point <= 0x10ffff ? String.fromCodePoint(point) : whole;
+    }
+    return ENTITIES[code.toLowerCase()] ?? whole;
+  });
+}
+
 function message(raw: RawMessage, count?: number): EmailMessage {
   const labels = Array.isArray(raw.labelIds) ? raw.labelIds : [];
-  const body = str(raw.plaintextBody).replace(/\s+/g, ' ').trim();
+  const full = str(raw.plaintextBody).replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  const body = decodeEntities(full);
   const url = str(raw.viewUrl);
   return {
-    sender: str(raw.sender) || 'Unknown sender',
+    sender: decodeEntities(str(raw.sender)) || 'Unknown sender',
     to: Array.isArray(raw.toRecipients) ? raw.toRecipients.filter((each): each is string => typeof each === 'string') : [],
-    subject: str(raw.subject) || '(no subject)',
+    subject: decodeEntities(str(raw.subject)) || '(no subject)',
     time: Date.parse(str(raw.date)),
-    text: str(raw.snippet) || body,
+    text: decodeEntities(str(raw.snippet)) || body.replace(/\s+/g, ' '),
     unread: labels.includes('UNREAD'),
+    ...(body ? { body } : {}),
     ...(url ? { url } : {}),
     ...(count && count > 1 ? { count } : {}),
   };
