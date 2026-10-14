@@ -48,8 +48,8 @@ import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { DoneTabs, type DoneTab } from './doneTabs';
-import { emailMarkdown, renderEmailCards } from './emailCards';
-import { emailMessages, resultText, type EmailMessage } from './emailMessages';
+import { emailMarkdown, renderEmailCards, renderEmailThread } from './emailCards';
+import { emailMessages, readsThread, resultText, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -5753,7 +5753,7 @@ export class ChatView extends ItemView {
     if (!isError && entry.status === 'running') {
       this.renderEdit(entry.name, entry.input, structured, saved);
       const messages = text ? emailMessages(entry.name, text) : null;
-      if (messages) this.renderEmails(messages);
+      if (messages) this.renderEmails(messages, readsThread(entry.name));
     }
     entry.status = isError ? 'error' : 'done';
     entry.lineEl?.removeClass('is-running');
@@ -5763,8 +5763,8 @@ export class ChatView extends ItemView {
   }
 
   /** Cards for the messages a Gmail tool read, in the reply: to open in Gmail, quote, or save as a note. */
-  private renderEmails(messages: EmailMessage[]): void {
-    renderEmailCards(this.container(), messages, {
+  private renderEmails(messages: EmailMessage[], thread: boolean): void {
+    (thread ? renderEmailThread : renderEmailCards)(this.container(), messages, {
       quote: (message) => this.addToInput(emailMarkdown(message), 'Email quoted'),
       save: (message) => void this.replyToNewNote(emailMarkdown(message), message.subject),
     });

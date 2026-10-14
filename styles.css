@@ -3428,3 +3428,32 @@ body:has(.vc-pick-up) .popover.hover-popover {
   align-self: flex-start;
   font-size: var(--font-ui-smaller);
 }
+
+/* An opened thread: its messages framed together under the subject, in place of its search card. */
+.vc-email-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  background: var(--background-secondary);
+}
+
+.vc-email-thread-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 var(--size-4-1);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.vc-email-thread-subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

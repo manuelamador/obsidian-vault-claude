@@ -18,6 +18,8 @@ export interface EmailMessage {
   url?: string;
   /** Messages in its thread, for a search, which lists threads by their last message. */
   count?: number;
+  /** Gmail's id for its thread: how an opened thread finds its card in a search shown before it. */
+  threadId?: string;
 }
 
 /** The Gmail tools whose results are messages: a search, a thread, a message. */
@@ -26,6 +28,11 @@ const GMAIL_READ = /^mcp__.*gmail.*__(search_threads|get_thread|get_message)$/i;
 /** Whether tool `name` reads mail (see GMAIL_READ). */
 export function readsMail(name: string): boolean {
   return GMAIL_READ.test(name);
+}
+
+/** Whether tool `name` reads a whole thread, whose messages the chat shows together (see renderEmailThread). */
+export function readsThread(name: string): boolean {
+  return readsMail(name) && /__get_thread$/i.test(name);
 }
 
 interface RawMessage {
@@ -37,6 +44,7 @@ interface RawMessage {
   plaintextBody?: unknown;
   labelIds?: unknown;
   viewUrl?: unknown;
+  threadId?: unknown;
 }
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
@@ -59,6 +67,7 @@ function message(raw: RawMessage, count?: number): EmailMessage {
   const full = str(raw.plaintextBody).replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   const body = decodeEntities(full);
   const url = str(raw.viewUrl);
+  const threadId = str(raw.threadId);
   return {
     sender: decodeEntities(str(raw.sender)) || 'Unknown sender',
     to: Array.isArray(raw.toRecipients) ? raw.toRecipients.filter((each): each is string => typeof each === 'string') : [],
@@ -71,6 +80,7 @@ function message(raw: RawMessage, count?: number): EmailMessage {
     ...(body ? { body } : {}),
     ...(url ? { url } : {}),
     ...(count && count > 1 ? { count } : {}),
+    ...(threadId ? { threadId } : {}),
   };
 }
 

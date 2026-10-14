@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeEntities, emailMessages, readsMail, resultText } from '../src/emailMessages';
+import { decodeEntities, emailMessages, readsMail, resultText, readsThread } from '../src/emailMessages';
 
 const msg = (over: Record<string, unknown> = {}) => ({ sender: 'a@b.c', subject: 'Hello', date: '2026-09-24T17:28:34Z', snippet: 'Hi there', toRecipients: ['me@x.y'], labelIds: ['UNREAD'], viewUrl: 'https://mail.google.com/x', ...over });
 
@@ -48,4 +48,12 @@ test('a metadata-only search leaves the subject empty; a message without one say
   assert.equal(meta?.[0].subject, '');
   assert.equal(meta?.[0].text, '');
   assert.equal(emailMessages('mcp__claude_ai_Gmail__get_message', JSON.stringify(msg({ subject: '' })))?.[0].subject, '(no subject)');
+});
+
+test('messages carry their thread id, and get_thread reads a thread', () => {
+  const search = JSON.stringify({ threads: [{ id: 't1', messageCount: 2, messages: [{ sender: 'a', subject: 's', threadId: 't1' }, { sender: 'b', subject: 's', threadId: 't1' }] }] });
+  assert.equal(emailMessages('mcp__claude_ai_Gmail__search_threads', search)?.[0].threadId, 't1');
+  assert.equal(readsThread('mcp__claude_ai_Gmail__get_thread'), true);
+  assert.equal(readsThread('mcp__claude_ai_Gmail__search_threads'), false);
+  assert.equal(readsThread('mcp__other__get_thread'), false);
 });
