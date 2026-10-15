@@ -65,7 +65,7 @@ import { ChoiceModal, ConfirmModal, HistoryModal, RenameModal, confirmDelete } f
 import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
-import type { ChatDraft, ChatProjectState } from './main';
+import type { ChatDraft, ChatProjectState, MailThread } from './main';
 import { contextHash, type ContextPart } from './projects';
 import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
@@ -509,6 +509,9 @@ export class ChatView extends ItemView {
   /** A chat not started yet: what it chose to send (see ChatProjectState), which goes to the plugin's record once it has an id. */
   private projectLocal: ChatProjectState = {};
   private noteChatsEl!: HTMLElement;
+  /** The line above the input naming the email threads the note's chats read (see updateNoteChats). */
+  private noteMailEl!: HTMLElement;
+  private noteMail: MailThread[] = [];
   private draftEl!: HTMLElement;
   /** The note this chat's message is being written in, while one is open. */
   private draftPath: string | null = null;
@@ -989,6 +992,9 @@ export class ChatView extends ItemView {
     this.noteChatsEl = footer.createDiv({ cls: 'vc-note-chats vc-note-chats-offer' });
     this.noteChatsEl.hide();
     this.registerDomEvent(this.noteChatsEl, 'click', (evt) => this.openNoteChats(evt));
+    this.noteMailEl = footer.createDiv({ cls: 'vc-note-chats vc-note-mail' });
+    this.noteMailEl.hide();
+    this.registerDomEvent(this.noteMailEl, 'click', (evt) => this.openNoteMail(evt));
     this.contextRow = footer.createDiv({ cls: 'vc-context-row' });
     this.registerDomEvent(this.contextRow, 'click', (evt) => this.onContextClick(evt));
     this.draftEl = footer.createDiv({ cls: 'vc-note-chats vc-draft-line' });
@@ -4523,12 +4529,32 @@ export class ChatView extends ItemView {
     const openPart = open === 0 ? '' : count === 1 ? ' · open' : ` · ${open} open`;
     // The note's name is on the chip just below.
     const text = count > 0 ? `${count} ${other}chat${count === 1 ? '' : 's'} about this note${openPart}` : '';
+    // The email threads those chats read, this one's included.
+    this.noteMail = this.plugin.mailOfChats(all.map((entry) => entry.id));
+    this.noteMailEl.toggle(this.noteMail.length > 0);
+    this.noteMailEl.setText(`${this.noteMail.length} email thread${this.noteMail.length === 1 ? '' : 's'} read about this note`);
+    this.noteMailEl.setAttr('aria-label', 'Choose one to open in Gmail');
     if (text === this.noteChatsText) return;
     this.noteChatsText = text;
     this.noteChatsEl.toggle(count > 0);
     if (count === 0) return;
     this.noteChatsEl.setText(text);
     this.noteChatsEl.setAttr('aria-label', count === 1 ? 'Open it · ⌥-click to take it off this note' : 'Choose one to open');
+  }
+
+  /** The email threads the note's chats read (see updateNoteChats), to open in Gmail. */
+  private openNoteMail(evt: MouseEvent): void {
+    const menu = new Menu();
+    for (const thread of this.noteMail.slice(0, 15)) {
+      menu.addItem((item) =>
+        item
+          .setTitle(thread.at ? `${thread.subject} · ${formatDate(thread.at).slice(0, 10)}` : thread.subject)
+          .setIcon('mail')
+          .setDisabled(!thread.url)
+          .onClick(() => thread.url && window.open(thread.url)),
+      );
+    }
+    menu.showAtMouseEvent(evt);
   }
 
   /** A chat was taken off a note (see VaultClaudePlugin.removeNoteChat): the line above the input is counted again. */
@@ -5770,6 +5796,9 @@ export class ChatView extends ItemView {
 
   /** Cards for the messages a Gmail tool read, in the reply: to open in Gmail, quote, start a new chat about, or save as a note. */
   private renderEmails(messages: EmailMessage[], thread: boolean): void {
+    // The threads read are the chat's: the line above the input and the Connections pane show them.
+    const chat = this.chatId ?? this.resumeId;
+    if (chat && !this.scratch) this.plugin.recordMail(chat, messages);
     (thread ? renderEmailThread : renderEmailCards)(this.container(), messages, {
       quote: (message) => this.addToInput(emailMarkdown(message), 'Email quoted'),
       chat: (message) => {

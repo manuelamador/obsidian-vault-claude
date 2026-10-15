@@ -139,6 +139,8 @@ async function main(): Promise<void> {
     restoreContext: () => undefined,
     takeKeptDoneTabs: (): unknown[] => [],
     doneTabsChanged: () => undefined,
+    recordMail: () => undefined,
+    mailOfChats: (): unknown[] => [],
     setHomeProject: async () => undefined,
     projectParts: async () => ({ context: '', instructions: '' }),
     sideSessions: [] as string[],

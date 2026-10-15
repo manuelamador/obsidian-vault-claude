@@ -44,6 +44,8 @@ interface MapActions {
 
 export interface ChatMapHost extends MapActions {
   title: string;
+  /** The email threads the chat read with the Gmail connector (see VaultClaudePlugin.recordMail), newest first. */
+  mail: { subject: string; url?: string; at: number }[];
   /** Notes linked to many chats (see hubNotes): drawn, joining no chats. */
   hubs: ReadonlySet<string>;
   notes: MapNote[];
@@ -512,6 +514,9 @@ export class ConnectionsView extends ItemView {
   private mapEl!: HTMLElement;
   private footEl!: HTMLElement;
   private linksEl!: HTMLElement;
+  /** The email threads the chat read, listed under its links (see drawMail). */
+  private mailEl!: HTMLElement;
+  private mailOpen = false;
   /** Whether the links are unfolded, kept from one map to the next. */
   private linksOpen = false;
   /** Each change of map counts: a map read for an earlier one is not drawn. */
@@ -558,6 +563,7 @@ export class ConnectionsView extends ItemView {
     this.mapEl = contentEl.createDiv({ cls: 'vc-map-area' });
     this.footEl = contentEl.createDiv({ cls: 'vc-map-foot' });
     this.linksEl = contentEl.createDiv({ cls: 'vc-map-links' });
+    this.mailEl = contentEl.createDiv({ cls: 'vc-map-links vc-map-mail' });
     this.draw();
     this.opened(this);
   }
@@ -688,6 +694,7 @@ export class ConnectionsView extends ItemView {
     this.drawing = null;
     for (const el of [this.barEl, this.actionEl, this.mapEl, this.footEl]) el.empty();
     const { host } = this;
+    this.drawMail();
     // The links stay while the map is redrawn for the same chat, drawn again in place: a summary of a
     // linked chat still being written is not stopped by the map changing around it.
     if (this.links && this.links.chat !== host?.baseline.id) this.stopLinks();
@@ -717,6 +724,25 @@ export class ConnectionsView extends ItemView {
     this.links = { ...host.drawLinks(links.createDiv()), chat: host.baseline.id };
   }
 
+
+  /** The email threads the chat on the map read, folded under its links, each opening in Gmail; nothing when it read none. */
+  private drawMail(): void {
+    this.mailEl.empty();
+    const mail = this.host && !this.project ? this.host.mail : [];
+    if (mail.length === 0) return;
+    const fold = this.mailEl.createEl('details');
+    fold.open = this.mailOpen;
+    fold.createEl('summary', { text: `Mail read in this chat (${mail.length})` });
+    fold.addEventListener('toggle', () => (this.mailOpen = fold.open));
+    const list = fold.createDiv({ cls: 'vc-map-mail-list' });
+    for (const thread of mail) {
+      const row = list.createDiv({ cls: 'vc-map-mail-row' });
+      setIcon(row.createSpan({ cls: 'vc-map-mail-icon' }), 'mail');
+      if (thread.url) row.createEl('a', { text: thread.subject, href: thread.url, cls: 'external-link' });
+      else row.createSpan({ text: thread.subject });
+      if (thread.at) row.createSpan({ cls: 'vc-muted', text: new Date(thread.at).toISOString().slice(0, 10) });
+    }
+  }
 
   /** The chat's links unfolded under the map, and brought into view (the panel's links chip). */
   openLinks(): void {

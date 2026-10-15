@@ -3492,3 +3492,38 @@ body:has(.vc-pick-up) .popover.hover-popover {
   font-size: var(--font-ui-smaller);
   white-space: nowrap;
 }
+
+/* The email threads the chat read, under its links in the Connections pane. */
+.vc-map-mail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0 2px 18px;
+  font-size: var(--font-ui-small);
+}
+
+.vc-map-mail-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vc-map-mail-row > a,
+.vc-map-mail-row > span:not(.vc-map-mail-icon):not(.vc-muted) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-map-mail-icon {
+  display: flex;
+  color: var(--text-muted);
+}
+
+.vc-map-mail-icon .svg-icon {
+  width: 14px;
+  height: 14px;
+}

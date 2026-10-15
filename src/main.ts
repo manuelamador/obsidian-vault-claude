@@ -44,6 +44,8 @@ const PLAN_CACHE_MS = 5 * 60 * 1000;
 const SAVE_SOON_MS = 300;
 /** Longest a chat being opened waits for a session's process to end (see sessionEnded); it takes about 2.5 s. */
 const ENDING_WAIT_MS = 10_000;
+/** The most email threads kept for a chat (see recordMail). */
+const MAIL_PER_CHAT = 40;
 /** How long a listing of the chats serves what reads it often (see recentListing). */
 const LISTING_FRESH_MS = 5000;
 /** How long after Obsidian is ready the chats are first listed (see listChats), out of the way of its start. */
@@ -121,6 +123,14 @@ export interface ChatProjectState {
   includeChats?: string[];
 }
 
+/** An email thread a chat read (see recordMail): Gmail's id for it, its subject, its link, and when its last message was sent. */
+export interface MailThread {
+  id: string;
+  subject: string;
+  url?: string;
+  at: number;
+}
+
 /** A plan edited in a note (see ChatView.renderPlanCard): the note, and the plan as Claude wrote it. */
 interface PlanNote {
   path: string;
@@ -148,6 +158,8 @@ interface PluginData {
   pickUp?: PickUpState;
   /** The panels' tabs for chats that finished in their background (see DoneTabs), shown again at the next start. */
   doneTabs?: DoneTab[];
+  /** The email threads each chat read with the Gmail connector (see recordMail), newest first. */
+  chatMail?: Record<string, MailThread[]>;
   chatProjects?: Record<string, ChatProjectState>;
   chatLinks?: Record<string, string[]>;
   chatSummaries?: Record<string, { text: string; at: number }>;
@@ -167,6 +179,8 @@ export default class VaultClaudePlugin extends Plugin {
   ticks: Record<string, Record<string, number[]>> = {};
   /** Pick up where you left off: the chats set aside (see pickUp.ts). */
   pickUp: PickUpState = { hidden: {} };
+  /** The email threads each chat read (see recordMail). */
+  chatMail: Record<string, MailThread[]> = {};
   /** The panels' margin tabs as last kept (see doneTabsChanged). */
   private doneTabs: DoneTab[] = [];
   /** Whether a panel has taken the tabs kept from the last run (see takeKeptDoneTabs). */
@@ -220,6 +234,32 @@ export default class VaultClaudePlugin extends Plugin {
       log('adding a todo failed', error);
       new Notice(`The todo could not be added: ${errorText(error)}`);
     }
+  }
+
+  /**
+   * Records that chat `id` read the threads of `messages` (an email card's), for the line above the
+   * input and the Connections pane to show: newest first, at most MAIL_PER_CHAT. Read from what the
+   * chat showed; nothing is asked of Gmail.
+   */
+  recordMail(id: string, messages: { threadId?: string; subject: string; url?: string; time: number }[]): void {
+    const known = this.chatMail[id] ?? [];
+    const found = messages.flatMap((message) => (message.threadId ? [{ id: message.threadId, subject: message.subject || '(no subject)', ...(message.url ? { url: message.url } : {}), at: Number.isNaN(message.time) ? 0 : message.time }] : []));
+    if (found.length === 0) return;
+    const merged = [...found, ...known].filter((thread, i, all) => all.findIndex((other) => other.id === thread.id) === i);
+    merged.sort((a, b) => b.at - a.at);
+    const kept = merged.slice(0, MAIL_PER_CHAT);
+    if (JSON.stringify(kept) === JSON.stringify(known)) return;
+    this.chatMail[id] = kept;
+    this.saveSoon();
+    // Shown on the line above the input and in the Connections pane.
+    for (const view of this.chatViews()) view.noteLinksChanged();
+    this.connectionsSoon();
+  }
+
+  /** The email threads chats `ids` read, each once, newest first. */
+  mailOfChats(ids: string[]): MailThread[] {
+    const all = ids.flatMap((id) => this.chatMail[id] ?? []);
+    return all.filter((thread, i) => all.findIndex((other) => other.id === thread.id) === i).sort((a, b) => b.at - a.at);
   }
 
   /** The margin tabs kept from the last run, once: for the first panel opened; the others start with none. */
@@ -616,6 +656,7 @@ export default class VaultClaudePlugin extends Plugin {
       for (const id of Object.keys(this.unseen)) if (!ids.has(id)) changed = delete this.unseen[id] || changed;
       for (const id of Object.keys(this.chatProjects)) if (!ids.has(id)) changed = delete this.chatProjects[id] || changed;
       for (const id of Object.keys(this.chatSummaries)) if (!ids.has(id)) changed = delete this.chatSummaries[id] || changed;
+      for (const id of Object.keys(this.chatMail)) if (!ids.has(id)) changed = delete this.chatMail[id] || changed;
       changed = this.pruneChatLinks((id) => ids.has(id)) || changed;
       for (const record of [this.pickUp.hidden, this.pickUp.later ?? {}, this.pickUp.skipped ?? {}]) for (const id of Object.keys(record)) if (!ids.has(id)) changed = delete record[id] || changed;
       // Skips that have run out.
@@ -1299,6 +1340,7 @@ export default class VaultClaudePlugin extends Plugin {
     // Its project and summary, and its links to and from other chats.
     delete this.chatProjects[id];
     delete this.chatSummaries[id];
+    delete this.chatMail[id];
     this.pruneChatLinks((other) => other !== id);
     // Its notes no longer count toward any project's chats.
     this.membershipChanged();
@@ -1900,6 +1942,7 @@ export default class VaultClaudePlugin extends Plugin {
       title: this.chatTitleOf(id),
       ...map,
       hubs: this.hubNotes(),
+      mail: this.chatMail[id] ?? [],
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
       ownProject: home ? { name: home.basename, path: home.path } : null,
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
@@ -3186,6 +3229,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.chatProjects = raw.chatProjects && typeof raw.chatProjects === 'object' ? raw.chatProjects : {};
     this.chatLinks = raw.chatLinks && typeof raw.chatLinks === 'object' ? raw.chatLinks : {};
     this.chatSummaries = raw.chatSummaries && typeof raw.chatSummaries === 'object' ? raw.chatSummaries : {};
+    this.chatMail = raw.chatMail && typeof raw.chatMail === 'object' ? raw.chatMail : {};
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
     this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};
     this.models = Array.isArray(raw.models) ? raw.models : [];
@@ -3240,6 +3284,7 @@ export default class VaultClaudePlugin extends Plugin {
       chatLinks: this.chatLinks,
       chatSummaries: this.chatSummaries,
       doneTabs: this.doneTabs,
+      chatMail: this.chatMail,
       frontmatterGuidance: this.frontmatterGuidance,
     };
   }
