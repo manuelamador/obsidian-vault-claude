@@ -16,6 +16,10 @@ export interface EmailCardActions {
   /** A new chat, with the message quoted in its input. */
   chat: (message: EmailMessage) => void;
   save: (message: EmailMessage) => void;
+  /** A todo made from the message (see TodoModal). */
+  todo: (message: EmailMessage) => void;
+  /** A thread's messages saved together as one note. */
+  saveThread: (messages: EmailMessage[]) => void;
 }
 
 /** When `message` was sent, as the chat writes dates; empty when unknown. */
@@ -28,6 +32,12 @@ export function emailMarkdown(message: EmailMessage): string {
   const head = [`**${message.subject || '(no subject)'}**`, `From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`];
   if (message.url) head.push(`[Open in Gmail](${message.url})`);
   return [...head, '', ...(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
+}
+
+/** A thread's messages as one note: its subject, then each message quoted (see emailMarkdown), oldest first. */
+export function threadMarkdown(messages: EmailMessage[]): string {
+  const subject = messages[0]?.subject || '(no subject)';
+  return [`# ${subject}`, ...messages.map((message) => emailMarkdown(message))].join('\n\n');
 }
 
 /** The card for `message` at the end of `list`; `subject`: whether it shows the subject (a thread's header shows it once). */
@@ -69,6 +79,7 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
   }
   button('quote', 'Quote in your next message', () => actions.quote(message));
   button('message-square-plus', 'New chat about this message', () => actions.chat(message));
+  button('list-plus', 'Make a todo', () => actions.todo(message));
   button('file-plus', 'Save as a note', () => actions.save(message));
   return card;
 }
@@ -107,6 +118,9 @@ export function renderEmailThread(parent: HTMLElement, messages: EmailMessage[],
   const head = frame.createDiv({ cls: 'vc-email-thread-head' });
   head.createSpan({ cls: 'vc-email-thread-subject', text: messages[0].subject || '(no subject)' });
   if (messages.length > 1) head.createSpan({ cls: 'vc-email-count', text: String(messages.length) });
+  const save = head.createEl('button', { cls: 'clickable-icon vc-email-thread-save', attr: { 'aria-label': 'Save the thread as a note' } });
+  setIcon(save, 'file-plus');
+  save.addEventListener('click', () => actions.saveThread(messages));
   messages.forEach((message) => drawCard(frame, message, actions, message.subject !== messages[0].subject));
   const earlier =
     openedThread(parent, id) ??

@@ -124,7 +124,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 ### Working with notes
 
 - **Bring notes into the conversation.** Attach the open note, include selected text, or mention notes, files and folders with `@`. Add files and images through the paperclip, paste or drag and drop; hover over a chip to see what accompanies your message, and click an image's chip to see it full size.
-- **See the mail Claude reads.** When Claude searches or reads Gmail through Claude Code's Gmail connector, the messages show as cards in the reply: sender, subject, date and the start of the text, unread ones marked. Point at a card to open it in Gmail, quote it in your next message, or save it as a note. The plugin itself asks Gmail for nothing; it reads what the connector returned.
+- **See the mail Claude reads.** When Claude searches or reads Gmail through Claude Code's Gmail connector, the messages show as cards in the reply: sender, subject, date and the start of the text, unread ones marked. Point at a card to open it in Gmail, quote it in your next message, make a todo from it (added to the todo note set in the settings, `Todo.md` under **Open** by default, with an optional due date), or save it as a note; an opened thread saves as one note. The plugin itself asks Gmail for nothing; it reads what the connector returned.
 - **Edit a selection.** Right-click text in a note to ask Claude about it or request an edit, then review the word diff before accepting.
 
   <img src="docs/edit-selection.png" width="560" alt="The Edit selection with Claude dialog after “check the grammar”: the proposed change as a word diff, with Run again, Accept and Cancel">
@@ -333,6 +333,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 | Offer bypass permissions | Adds Bypass to the mode menus |
 | Deny rules | Actions refused in every mode, one rule per line |
 | Mail: drafts only | With Claude Code's Gmail connector, Claude reads mail and writes drafts but cannot send, reply or forward (default on) |
+| Todo note | Where Make a todo on an email card adds its line, and the section (default `Todo.md`, Open) |
 | Tool calls | Summary, one line each, or hidden |
 | Panel side margins | 8–96 px |
 | Send with ⌘+Enter (Ctrl+Enter on Windows) | Otherwise Enter sends |

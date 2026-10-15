@@ -48,7 +48,8 @@ import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { DoneTabs, type DoneTab } from './doneTabs';
-import { emailMarkdown, renderEmailCards, renderEmailThread } from './emailCards';
+import { emailMarkdown, renderEmailCards, renderEmailThread, threadMarkdown } from './emailCards';
+import { TodoModal } from './todoModal';
 import { emailMessages, readsThread, resultText, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
@@ -5771,6 +5772,12 @@ export class ChatView extends ItemView {
         this.addToInput(emailMarkdown(message), 'Email quoted in a new chat');
       },
       save: (message) => void this.replyToNewNote(emailMarkdown(message), message.subject),
+      todo: (message) => {
+        const where = `“${this.plugin.settings.todoNote}”, under ${this.plugin.settings.todoSection}`;
+        const link = message.url ? ` [mail](${message.url})` : '';
+        new TodoModal(this.app, `Reply to ${message.sender.replace(/\s*<[^>]*>/, '')}: ${message.subject || 'their message'}`, where, (text, due) => void this.plugin.addTodo(`${text}${link}`, due)).open();
+      },
+      saveThread: (messages) => void this.replyToNewNote(threadMarkdown(messages), messages[0]?.subject || 'Email thread'),
     });
     this.scrollToBottom();
   }

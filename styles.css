@@ -3457,3 +3457,24 @@ body:has(.vc-pick-up) .popover.hover-popover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* "Save the thread as a note", at the end of an opened thread's heading. */
+.vc-email-thread-save {
+  margin-left: auto;
+  padding: 2px 4px;
+}
+
+/* The Make a todo dialog. */
+.vc-todo-input {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.vc-todo-due {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}

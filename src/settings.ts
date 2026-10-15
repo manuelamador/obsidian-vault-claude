@@ -83,6 +83,9 @@ export interface VaultClaudeSettings {
   denyRules: string;
   /** Claude may read Gmail and write drafts through Claude Code's connector, but not send (see sessionDenyRules). */
   mailDraftsOnly: boolean;
+  /** The note todos made from the chat go to (an email card's "Make a todo"), and its section. */
+  todoNote: string;
+  todoSection: string;
   phoneAccessName: string;
   phoneAccessAtStartup: boolean;
   phoneEveryChat: boolean;
@@ -137,6 +140,8 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   allowBypass: false,
   denyRules: DEFAULT_DENY_RULES,
   mailDraftsOnly: true,
+  todoNote: 'Todo.md',
+  todoSection: 'Open',
   phoneAccessName: '',
   phoneAccessAtStartup: false,
   phoneEveryChat: false,
@@ -326,6 +331,22 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         });
         area.inputEl.rows = 6;
       });
+
+    new Setting(containerEl)
+      .setName('Todo note')
+      .setDesc('Where "Make a todo" on an email card adds its line, at the end of this section of the note (made if missing), in the Tasks plugin\'s format.')
+      .addText((text) =>
+        text.setValue(settings.todoNote).onChange(async (value) => {
+          settings.todoNote = value.trim() || 'Todo.md';
+          await this.plugin.saveSettings();
+        }),
+      )
+      .addText((text) =>
+        text.setPlaceholder('Section').setValue(settings.todoSection).onChange(async (value) => {
+          settings.todoSection = value.trim() || 'Open';
+          await this.plugin.saveSettings();
+        }),
+      );
 
     new Setting(containerEl)
       .setName('Mail: drafts only')

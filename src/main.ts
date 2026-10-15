@@ -8,6 +8,7 @@ import { deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMes
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
+import { todoLine, withTodo } from './todos';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -185,6 +186,21 @@ export default class VaultClaudePlugin extends Plugin {
   private notesCache: Map<string, Set<string>> | null = null;
   private weightsCache: Map<string, Map<string, number>> | null = null;
   private hubsCache: Set<string> | null = null;
+  /** Adds todo `text` (with its due date, YYYY-MM-DD) to the todo note set in the settings, at the end of its section; the note is made if missing. */
+  async addTodo(text: string, due?: string): Promise<void> {
+    const path = normalizePath(this.settings.todoNote.endsWith('.md') ? this.settings.todoNote : `${this.settings.todoNote}.md`);
+    const line = todoLine(text, due);
+    try {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile) await this.app.vault.process(file, (note) => withTodo(note, line, this.settings.todoSection));
+      else await this.app.vault.create(path, withTodo('', line, this.settings.todoSection));
+      new Notice(`Todo added to ${path}.`);
+    } catch (error) {
+      log('adding a todo failed', error);
+      new Notice(`The todo could not be added: ${errorText(error)}`);
+    }
+  }
+
   /** The margin tabs kept from the last run, once: for the first panel opened; the others start with none. */
   takeKeptDoneTabs(): DoneTab[] {
     if (this.doneTabsTaken) return [];
