@@ -36,6 +36,8 @@ export interface PickUpHost {
   hide(id: string): void;
   /** Chat `id` left out for SKIP_DAYS, then suggested again if it still looks left open. */
   skip(id: string): void;
+  /** A new chat asking Claude to go through today's unread mail (see VaultClaudePlugin.checkMail); none when not offered. */
+  checkMail?(): void;
   /** How many chats are never to be suggested. */
   ignoredCount(): number;
   /** Whether chat `id` is not to be listed now: left out, or kept as a reminder. */
@@ -116,6 +118,13 @@ export class PickUpModal extends Modal {
     this.status = bar.createDiv({ cls: 'vc-memo-status vc-pick-up-status' });
     this.again = bar.createEl('button', { text: 'Suggest again', attr: { 'aria-label': 'Ask Claude again: a fresh look, with other older chats' } });
     this.again.addEventListener('click', () => this.ask(true));
+    if (this.host.checkMail) {
+      const mail = bar.createEl('button', { text: 'Check unread mail', attr: { 'aria-label': "A new chat asking Claude to go through your unread mail with Claude Code's Gmail connector" } });
+      mail.addEventListener('click', () => {
+        this.close();
+        this.host.checkMail?.();
+      });
+    }
     this.reminders = main.createDiv({ cls: 'vc-pick-up-list' });
     const kept = this.host.reminders(Date.now());
     if (kept.length > 0) {
