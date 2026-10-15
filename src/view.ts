@@ -48,9 +48,9 @@ import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { DoneTabs, type DoneTab } from './doneTabs';
-import { emailMarkdown, renderEmailCards, renderEmailThread, threadMarkdown } from './emailCards';
+import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, threadMarkdown } from './emailCards';
 import { TodoModal } from './todoModal';
-import { emailMessages, readsThread, resultText, type EmailMessage } from './emailMessages';
+import { emailDraft, emailMessages, readsThread, resultText, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -5753,6 +5753,11 @@ export class ChatView extends ItemView {
     if (!entry) return;
     if (!isError && entry.status === 'running') {
       this.renderEdit(entry.name, entry.input, structured, saved);
+      const draft = text ? emailDraft(entry.name, entry.input, text) : null;
+      if (draft) {
+        renderEmailDraft(this.container(), draft);
+        this.scrollToBottom();
+      }
       const messages = text ? emailMessages(entry.name, text) : null;
       if (messages) this.renderEmails(messages, readsThread(entry.name));
     }

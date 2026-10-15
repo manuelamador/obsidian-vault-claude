@@ -3478,3 +3478,17 @@ body:has(.vc-pick-up) .popover.hover-popover {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
+
+/* A draft Claude wrote: marked as such, with the accent edge of a message still to act on. */
+.vc-email-draft {
+  border-left-color: var(--interactive-accent);
+}
+
+.vc-email-badge {
+  padding: 0 6px;
+  border-radius: var(--radius-s);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}

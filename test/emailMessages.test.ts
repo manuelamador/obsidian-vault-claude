@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeEntities, emailMessages, readsMail, resultText, readsThread } from '../src/emailMessages';
+import { decodeEntities, emailDraft, emailMessages, readsMail, resultText, readsThread } from '../src/emailMessages';
 
 const msg = (over: Record<string, unknown> = {}) => ({ sender: 'a@b.c', subject: 'Hello', date: '2026-09-24T17:28:34Z', snippet: 'Hi there', toRecipients: ['me@x.y'], labelIds: ['UNREAD'], viewUrl: 'https://mail.google.com/x', ...over });
 
@@ -56,4 +56,12 @@ test('messages carry their thread id, and get_thread reads a thread', () => {
   assert.equal(readsThread('mcp__claude_ai_Gmail__get_thread'), true);
   assert.equal(readsThread('mcp__claude_ai_Gmail__search_threads'), false);
   assert.equal(readsThread('mcp__other__get_thread'), false);
+});
+
+test('a draft written or changed shows what the call set, and where Gmail opens it', () => {
+  const draft = emailDraft('mcp__claude_ai_Gmail__create_draft', { to: ['a@b.c'], cc: ['d@e.f'], subject: 'Visit', body: 'Dear A,\r\n\r\nYes.' }, JSON.stringify({ id: 'r-1', viewUrl: 'https://mail.google.com/x' }));
+  assert.deepEqual(draft, { updated: false, to: ['a@b.c'], cc: ['d@e.f'], subject: 'Visit', body: 'Dear A,\n\nYes.', url: 'https://mail.google.com/x' });
+  assert.equal(emailDraft('mcp__claude_ai_Gmail__update_draft', { body: 'x' }, JSON.stringify({ id: 'r-1' }))?.updated, true);
+  assert.equal(emailDraft('mcp__claude_ai_Gmail__create_draft', {}, 'Error'), null);
+  assert.equal(emailDraft('mcp__claude_ai_Gmail__get_thread', {}, '{"id":"x"}'), null);
 });

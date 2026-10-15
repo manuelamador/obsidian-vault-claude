@@ -4,7 +4,7 @@
 // away; an opened thread shows its messages framed together, in place of its card in the search.
 import { setIcon } from 'obsidian';
 import { formatDate } from './history';
-import type { EmailMessage } from './emailMessages';
+import type { EmailDraft, EmailMessage } from './emailMessages';
 
 /** Cards shown before "Show N more". */
 const FIRST_CARDS = 5;
@@ -127,4 +127,36 @@ export function renderEmailThread(parent: HTMLElement, messages: EmailMessage[],
     (id ? parent.querySelector<HTMLElement>(`.vc-email-cards > .vc-email-card[data-thread="${CSS.escape(id)}"]`) : null);
   if (earlier) earlier.replaceWith(frame);
   else parent.createDiv({ cls: 'vc-email-cards' }).appendChild(frame);
+}
+
+/** A card for draft `draft` in `parent`: to whom, its subject and the start of its text (all of it on a click), to open in Gmail. */
+export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft): void {
+  const card = parent.createDiv({ cls: 'vc-email-cards' }).createDiv({ cls: 'vc-email-card vc-email-draft' });
+  const head = card.createDiv({ cls: 'vc-email-head' });
+  head.createSpan({ cls: 'vc-email-badge', text: draft.updated ? 'Draft updated' : 'Draft' });
+  const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
+  head.createSpan({ cls: 'vc-email-sender', text: to ? `To ${to}` : '' });
+  if (draft.subject) card.createDiv({ cls: 'vc-email-subject', text: draft.subject });
+  if (draft.body) {
+    const body = draft.body;
+    const short = body.length > CARD_TEXT_CHARS ? `${body.slice(0, CARD_TEXT_CHARS)}…` : body;
+    const textEl = card.createDiv({ cls: 'vc-email-text', text: short });
+    if (short !== body || body.includes('\n')) {
+      card.addClass('is-expandable');
+      card.setAttr('title', 'Show the whole draft');
+      card.addEventListener('click', (evt) => {
+        if ((evt.target as HTMLElement).closest('.vc-email-actions, a, button')) return;
+        if (window.getSelection()?.toString()) return;
+        const open = !card.hasClass('is-expanded');
+        card.toggleClass('is-expanded', open);
+        card.setAttr('title', open ? 'Show less' : 'Show the whole draft');
+        textEl.setText(open ? body : short);
+      });
+    }
+  }
+  if (draft.url) {
+    const buttons = card.createDiv({ cls: 'vc-email-actions' });
+    const open = buttons.createEl('a', { cls: 'clickable-icon', href: draft.url, attr: { 'aria-label': 'Open the draft in Gmail' } });
+    setIcon(open, 'external-link');
+  }
 }

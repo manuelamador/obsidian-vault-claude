@@ -117,3 +117,39 @@ export function resultText(content: unknown): string {
   if (!Array.isArray(content)) return '';
   return content.map((block: { type?: unknown; text?: unknown }) => (block?.type === 'text' && typeof block.text === 'string' ? block.text : '')).join('');
 }
+
+/** A draft Claude wrote or changed with the Gmail connector, as its card shows it: what the call set, and where Gmail opens it. */
+export interface EmailDraft {
+  updated: boolean;
+  to: string[];
+  cc: string[];
+  subject?: string;
+  body?: string;
+  url?: string;
+}
+
+/** The Gmail tools that write drafts. */
+const GMAIL_DRAFT = /^mcp__.*gmail.*__(create_draft|update_draft)$/i;
+
+/** The draft tool `name` wrote, from its `input` and its result `text`; null for another tool or a failed call. */
+export function emailDraft(name: string, input: Record<string, unknown>, text: string): EmailDraft | null {
+  const kind = GMAIL_DRAFT.exec(name)?.[1];
+  if (!kind) return null;
+  let result: { viewUrl?: unknown; id?: unknown } = {};
+  try {
+    result = JSON.parse(text) as typeof result;
+  } catch {
+    return null;
+  }
+  if (!result || typeof result !== 'object' || result.id === undefined) return null;
+  const list = (value: unknown) => (Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : typeof value === 'string' && value ? [value] : []);
+  const url = str(result.viewUrl);
+  return {
+    updated: kind.toLowerCase() === 'update_draft',
+    to: list(input.to),
+    cc: list(input.cc),
+    ...(typeof input.subject === 'string' ? { subject: input.subject } : {}),
+    ...(typeof input.body === 'string' ? { body: input.body.replace(/\r\n?/g, '\n').trim() } : {}),
+    ...(url ? { url } : {}),
+  };
+}
