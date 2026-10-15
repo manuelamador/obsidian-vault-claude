@@ -333,6 +333,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 | Model for small jobs | Model for Edit selection with Claude, Save summary as note, memo title and description suggestions, Pick up where you left off, a project's Context, summaries of chats included in another, Suggest frontmatter updates, and the scratch chat (default Sonnet) |
 | Offer bypass permissions | Adds Bypass to the mode menus |
 | Deny rules | Actions refused in every mode, one rule per line |
+| Gmail features | Cards for mail and drafts, Make a todo, Draft an email from this note, Check unread mail and mail read by chats, for Claude Code's Gmail connector; turn off without Gmail (default on) |
 | Mail: drafts only | With Claude Code's Gmail connector, Claude reads mail and writes drafts but cannot send, reply or forward (default on) |
 | Todo note | Where Make a todo on an email card adds its line, and the section (default `Todo.md`, Open) |
 | Tool calls | Summary, one line each, or hidden |

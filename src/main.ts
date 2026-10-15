@@ -383,7 +383,7 @@ export default class VaultClaudePlugin extends Plugin {
       name: 'Draft an email from this note…',
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || file.extension !== 'md') return false;
+        if (!file || file.extension !== 'md' || !this.settings.gmailFeatures) return false;
         if (!checking) void this.draftEmailFromNote(file);
         return true;
       },
@@ -1942,7 +1942,7 @@ export default class VaultClaudePlugin extends Plugin {
       title: this.chatTitleOf(id),
       ...map,
       hubs: this.hubNotes(),
-      mail: this.chatMail[id] ?? [],
+      mail: this.settings.gmailFeatures ? (this.chatMail[id] ?? []) : [],
       project: home ? { name: home.basename, folder: this.projectFolder(home), path: home.path } : null,
       ownProject: home ? { name: home.basename, path: home.path } : null,
       openProjectNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
@@ -2631,7 +2631,7 @@ export default class VaultClaudePlugin extends Plugin {
     // Listed first, so that the reminders kept can be shown with their chats' titles.
     if (!this.lastListing) await this.listChats().catch(() => []);
     new PickUpModal(this.app, {
-      checkMail: () => void this.checkMail(),
+      ...(this.settings.gmailFeatures ? { checkMail: () => void this.checkMail() } : {}),
       load: async (signal, fresh) => {
         // Listed now: what was worked on since the kept list was made is told by it.
         await this.listChats().catch(() => []);

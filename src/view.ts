@@ -4530,7 +4530,7 @@ export class ChatView extends ItemView {
     // The note's name is on the chip just below.
     const text = count > 0 ? `${count} ${other}chat${count === 1 ? '' : 's'} about this note${openPart}` : '';
     // The email threads those chats read, this one's included.
-    this.noteMail = this.plugin.mailOfChats(all.map((entry) => entry.id));
+    this.noteMail = this.plugin.settings.gmailFeatures ? this.plugin.mailOfChats(all.map((entry) => entry.id)) : [];
     this.noteMailEl.toggle(this.noteMail.length > 0);
     this.noteMailEl.setText(`${this.noteMail.length} email thread${this.noteMail.length === 1 ? '' : 's'} read about this note`);
     this.noteMailEl.setAttr('aria-label', 'Choose one to open in Gmail');
@@ -5779,12 +5779,13 @@ export class ChatView extends ItemView {
     if (!entry) return;
     if (!isError && entry.status === 'running') {
       this.renderEdit(entry.name, entry.input, structured, saved);
-      const draft = text ? emailDraft(entry.name, entry.input, text) : null;
+      const mail = text && this.plugin.settings.gmailFeatures;
+      const draft = mail ? emailDraft(entry.name, entry.input, text) : null;
       if (draft) {
         renderEmailDraft(this.container(), draft);
         this.scrollToBottom();
       }
-      const messages = text ? emailMessages(entry.name, text) : null;
+      const messages = mail ? emailMessages(entry.name, text) : null;
       if (messages) this.renderEmails(messages, readsThread(entry.name));
     }
     entry.status = isError ? 'error' : 'done';

@@ -83,6 +83,8 @@ export interface VaultClaudeSettings {
   denyRules: string;
   /** Claude may read Gmail and write drafts through Claude Code's connector, but not send (see sessionDenyRules). */
   mailDraftsOnly: boolean;
+  /** The features for Claude Code's Gmail connector (email and draft cards, Make a todo, Draft an email, Check unread mail, mail read by chats); off without Gmail. */
+  gmailFeatures: boolean;
   /** The note todos made from the chat go to (an email card's "Make a todo"), and its section. */
   todoNote: string;
   todoSection: string;
@@ -140,6 +142,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   allowBypass: false,
   denyRules: DEFAULT_DENY_RULES,
   mailDraftsOnly: true,
+  gmailFeatures: true,
   todoNote: 'Todo.md',
   todoSection: 'Open',
   phoneAccessName: '',
@@ -333,30 +336,43 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('Todo note')
-      .setDesc('Where "Make a todo" on an email card adds its line, at the end of this section of the note (made if missing), in the Tasks plugin\'s format.')
-      .addText((text) =>
-        text.setValue(settings.todoNote).onChange(async (value) => {
-          settings.todoNote = value.trim() || 'Todo.md';
+      .setName('Gmail features')
+      .setDesc("For Claude Code's Gmail connector: cards for the mail Claude reads and the drafts it writes, Make a todo from a message, Draft an email from this note, Check unread mail, and the threads a chat read. Turn off if you do not have Gmail connected to Claude Code.")
+      .addToggle((toggle) =>
+        toggle.setValue(settings.gmailFeatures).onChange(async (value) => {
+          settings.gmailFeatures = value;
           await this.plugin.saveSettings();
-        }),
-      )
-      .addText((text) =>
-        text.setPlaceholder('Section').setValue(settings.todoSection).onChange(async (value) => {
-          settings.todoSection = value.trim() || 'Open';
-          await this.plugin.saveSettings();
+          this.display();
         }),
       );
 
-    new Setting(containerEl)
-      .setName('Mail: drafts only')
-      .setDesc("With Claude Code's Gmail connector, Claude can search and read your mail and write drafts, but not send, reply or forward: you send the drafts from Gmail. Takes effect in new chats.")
-      .addToggle((toggle) =>
-        toggle.setValue(settings.mailDraftsOnly).onChange(async (value) => {
-          settings.mailDraftsOnly = value;
-          await this.plugin.saveSettings();
-        }),
-      );
+    if (settings.gmailFeatures) {
+      new Setting(containerEl)
+        .setName('Todo note')
+        .setDesc('Where "Make a todo" on an email card adds its line, at the end of this section of the note (made if missing), in the Tasks plugin\'s format.')
+        .addText((text) =>
+          text.setValue(settings.todoNote).onChange(async (value) => {
+            settings.todoNote = value.trim() || 'Todo.md';
+            await this.plugin.saveSettings();
+          }),
+        )
+        .addText((text) =>
+          text.setPlaceholder('Section').setValue(settings.todoSection).onChange(async (value) => {
+            settings.todoSection = value.trim() || 'Open';
+            await this.plugin.saveSettings();
+          }),
+        );
+
+      new Setting(containerEl)
+        .setName('Mail: drafts only')
+        .setDesc("With Claude Code's Gmail connector, Claude can search and read your mail and write drafts, but not send, reply or forward: you send the drafts from Gmail. Takes effect in new chats.")
+        .addToggle((toggle) =>
+          toggle.setValue(settings.mailDraftsOnly).onChange(async (value) => {
+            settings.mailDraftsOnly = value;
+            await this.plugin.saveSettings();
+          }),
+        );
+    }
 
     new Setting(containerEl)
       .setName('Tool calls')
