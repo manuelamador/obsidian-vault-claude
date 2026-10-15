@@ -22,6 +22,8 @@ export interface EmailCardActions {
   saveThread: (messages: EmailMessage[]) => void;
   /** A request in the input for Claude to open the message's thread, for a card that has only its snippet (a search's). */
   openThread: (message: EmailMessage) => void;
+  /** Claude asked to draft a reply to the message, as you say it should (see ReplyModal). */
+  reply: (message: EmailMessage) => void;
 }
 
 /** When `message` was sent, as the chat writes dates; empty when unknown. */
@@ -81,6 +83,7 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
   }
   // A search's card carries only the snippet: Claude opens the thread, whose messages then expand.
   if (!message.body && message.threadId) button('book-open', 'Ask Claude to open this thread', () => actions.openThread(message));
+  button('reply', 'Reply with Claude', () => actions.reply(message));
   button('quote', 'Quote in your next message', () => actions.quote(message));
   button('message-square-plus', 'New chat about this message', () => actions.chat(message));
   button('list-plus', 'Make a todo', () => actions.todo(message));

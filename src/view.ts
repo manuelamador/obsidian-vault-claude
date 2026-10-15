@@ -49,6 +49,7 @@ import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { DoneTabs, type DoneTab } from './doneTabs';
 import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, threadMarkdown } from './emailCards';
+import { ReplyModal } from './replyModal';
 import { TodoModal } from './todoModal';
 import { emailDraft, emailMessages, readsThread, resultText, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
@@ -5813,9 +5814,27 @@ export class ChatView extends ItemView {
         new TodoModal(this.app, `Reply to ${message.sender.replace(/\s*<[^>]*>/, '')}: ${message.subject || 'their message'}`, where, (text, due) => void this.plugin.addTodo(`${text}${link}`, due)).open();
       },
       saveThread: (messages) => void this.replyToNewNote(threadMarkdown(messages), messages[0]?.subject || 'Email thread'),
+      reply: (message) => {
+        const who = message.sender.replace(/\s*<[^>]*>/, '');
+        new ReplyModal(this.app, `“${message.subject || 'the message'}” from ${who}`, (instructions) => {
+          const thread = message.threadId ? ` (thread id ${message.threadId})` : '';
+          this.sendOrDraft(`Reply to the email “${message.subject || '(no subject)'}” from ${message.sender}${thread}: write the reply as a Gmail draft in that thread, a draft only, not sent. What the reply should say: ${instructions}`, 'Reply request added below your draft: send it when ready');
+        }).open();
+      },
       openThread: (message) => this.addToInput(`Open the email thread “${message.subject || message.sender}” (thread id ${message.threadId ?? ''}) and show me its messages.`, 'Send it to have Claude open the thread'),
     });
     this.scrollToBottom();
+  }
+
+  /** Sends `text` as a message when the input is empty; with a draft there, adds it below for you to send (`hint` says so). */
+  private sendOrDraft(text: string, hint: string): void {
+    if (this.inputEl.value.trim() || this.busy) {
+      this.addToInput(text, hint);
+      return;
+    }
+    this.inputEl.value = text;
+    this.inputEdited();
+    void this.send();
   }
 
   /**
