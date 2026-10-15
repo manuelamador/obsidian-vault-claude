@@ -186,6 +186,19 @@ export default class VaultClaudePlugin extends Plugin {
   private notesCache: Map<string, Set<string>> | null = null;
   private weightsCache: Map<string, Map<string, number>> | null = null;
   private hubsCache: Set<string> | null = null;
+  /**
+   * A new chat about note `file`, mentioned in the input with a request for a Gmail draft from it,
+   * to finish (to whom, what about) and send: Claude writes the draft with Claude Code's Gmail
+   * connector, and it is sent from Gmail.
+   */
+  async draftEmailFromNote(file: TFile): Promise<void> {
+    const view = await this.activateView();
+    if (!view) return;
+    view.startNewChat();
+    view.mentionItems([file]);
+    view.addToInput('Write a Gmail draft from this note, as a draft only (do not send it). To: \nAbout: ', 'Fill in to whom and what about, then send');
+  }
+
   /** Adds todo `text` (with its due date, YYYY-MM-DD) to the todo note set in the settings, at the end of its section; the note is made if missing. */
   async addTodo(text: string, due?: string): Promise<void> {
     const path = normalizePath(this.settings.todoNote.endsWith('.md') ? this.settings.todoNote : `${this.settings.todoNote}.md`);
@@ -317,6 +330,16 @@ export default class VaultClaudePlugin extends Plugin {
       callback: async () => (await this.activateView())?.openHistory(),
     });
     this.addCommand({ id: 'pick-up', name: 'Pick up where you left off', callback: () => void this.openPickUp() });
+    this.addCommand({
+      id: 'draft-email-from-note',
+      name: 'Draft an email from this note…',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== 'md') return false;
+        if (!checking) void this.draftEmailFromNote(file);
+        return true;
+      },
+    });
     this.addCommand({
       id: 'suggest-frontmatter',
       name: 'Suggest frontmatter updates for this note',
