@@ -51,7 +51,7 @@ import { DoneTabs, type DoneTab } from './doneTabs';
 import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, threadMarkdown } from './emailCards';
 import { ReplyModal } from './replyModal';
 import { TodoModal } from './todoModal';
-import { emailDraft, emailMessages, readsThread, resultText, type EmailMessage } from './emailMessages';
+import { emailDraft, emailMessages, readsThread, resultText, type EmailDraft, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -5783,7 +5783,8 @@ export class ChatView extends ItemView {
       const mail = text && this.plugin.settings.gmailFeatures;
       const draft = mail ? emailDraft(entry.name, entry.input, text) : null;
       if (draft) {
-        renderEmailDraft(this.container(), draft);
+        // A Send button only where Claude may send mail (Mail: drafts only off), and after you confirm.
+        renderEmailDraft(this.container(), draft, this.plugin.settings.mailDraftsOnly ? undefined : (each) => this.confirmSendDraft(each));
         this.scrollToBottom();
       }
       const messages = mail ? emailMessages(entry.name, text) : null;
@@ -5824,6 +5825,21 @@ export class ChatView extends ItemView {
       openThread: (message) => this.addToInput(`Open the email thread “${message.subject || message.sender}” (thread id ${message.threadId ?? ''}) and show me its messages.`, 'Send it to have Claude open the thread'),
     });
     this.scrollToBottom();
+  }
+
+  /**
+   * Asks before sending draft `draft`: to whom, its subject and the start of its text. Confirmed,
+   * Claude is asked to send it as it is; the connector has no tool that sends a draft, so Claude
+   * sends its text (as a reply in its thread when it is one) and then deletes the draft.
+   */
+  private confirmSendDraft(draft: EmailDraft): void {
+    const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
+    const start = draft.body ? ` “${draft.body.length > 300 ? `${draft.body.slice(0, 300)}…` : draft.body}”` : '';
+    const what = `${to ? `To ${to}` : 'To the recipients set in the draft'}${draft.subject ? `, “${draft.subject}”` : ''}.${start} Sent mail cannot be taken back.`;
+    new ConfirmModal(this.app, 'Send this draft?', what, 'Send', () => {
+      const reply = draft.replyTo ? ` It is a reply: send it with the reply tool to message ${draft.replyTo}, to the same recipients as the draft.` : ' Send it to the recipients, subject and text the draft has.';
+      this.sendOrDraft(`Send the Gmail draft ${draft.id} now, exactly as it is: read it with get_draft first and do not change its text.${reply} Then delete the draft, and say whether it was sent.`, 'Send request added below your draft: send it when ready');
+    }).open();
   }
 
   /** Sends `text` as a message when the input is empty; with a draft there, adds it below for you to send (`hint` says so). */

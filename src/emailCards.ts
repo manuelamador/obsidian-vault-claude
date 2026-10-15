@@ -137,7 +137,8 @@ export function renderEmailThread(parent: HTMLElement, messages: EmailMessage[],
 }
 
 /** A card for draft `draft` in `parent`: to whom, its subject and the start of its text (all of it on a click), to open in Gmail. */
-export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft): void {
+/** `send`: when sending is allowed (see VaultClaudePlugin settings), the card's Send button, which asks first. */
+export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft, send?: (draft: EmailDraft) => void): void {
   const card = parent.createDiv({ cls: 'vc-email-cards' }).createDiv({ cls: 'vc-email-card vc-email-draft' });
   const head = card.createDiv({ cls: 'vc-email-head' });
   head.createSpan({ cls: 'vc-email-badge', text: draft.updated ? 'Draft updated' : 'Draft' });
@@ -161,9 +162,15 @@ export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft): void {
       });
     }
   }
+  if (!draft.url && !send) return;
+  const buttons = card.createDiv({ cls: 'vc-email-actions' });
   if (draft.url) {
-    const buttons = card.createDiv({ cls: 'vc-email-actions' });
     const open = buttons.createEl('a', { cls: 'clickable-icon', href: draft.url, attr: { 'aria-label': 'Open the draft in Gmail' } });
     setIcon(open, 'external-link');
+  }
+  if (send) {
+    const button = buttons.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Send this draft…' } });
+    setIcon(button, 'send');
+    button.addEventListener('click', () => send(draft));
   }
 }

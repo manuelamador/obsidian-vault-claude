@@ -120,6 +120,10 @@ export function resultText(content: unknown): string {
 
 /** A draft Claude wrote or changed with the Gmail connector, as its card shows it: what the call set, and where Gmail opens it. */
 export interface EmailDraft {
+  /** Gmail's id for the draft. */
+  id: string;
+  /** The message it replies to, when it is a reply (as written; a draft updated since does not say). */
+  replyTo?: string;
   updated: boolean;
   to: string[];
   cc: string[];
@@ -135,7 +139,7 @@ const GMAIL_DRAFT = /^mcp__.*gmail.*__(create_draft|update_draft)$/i;
 export function emailDraft(name: string, input: Record<string, unknown>, text: string): EmailDraft | null {
   const kind = GMAIL_DRAFT.exec(name)?.[1];
   if (!kind) return null;
-  let result: { viewUrl?: unknown; id?: unknown } = {};
+  let result: { viewUrl?: unknown; id?: unknown; threadId?: unknown } = {};
   try {
     result = JSON.parse(text) as typeof result;
   } catch {
@@ -144,7 +148,10 @@ export function emailDraft(name: string, input: Record<string, unknown>, text: s
   if (!result || typeof result !== 'object' || result.id === undefined) return null;
   const list = (value: unknown) => (Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : typeof value === 'string' && value ? [value] : []);
   const url = str(result.viewUrl);
+  const replyTo = str(input.replyToMessageId);
   return {
+    id: String(result.id),
+    ...(replyTo ? { replyTo } : {}),
     updated: kind.toLowerCase() === 'update_draft',
     to: list(input.to),
     cc: list(input.cc),
