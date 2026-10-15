@@ -5836,10 +5836,16 @@ export class ChatView extends ItemView {
     const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
     const start = draft.body ? ` “${draft.body.length > 300 ? `${draft.body.slice(0, 300)}…` : draft.body}”` : '';
     const what = `${to ? `To ${to}` : 'To the recipients set in the draft'}${draft.subject ? `, “${draft.subject}”` : ''}.${start} Sent mail cannot be taken back.`;
-    new ConfirmModal(this.app, 'Send this draft?', what, 'Send', () => {
+    const request = (archive: boolean) => {
       const reply = draft.replyTo ? ` It is a reply: send it with the reply tool to message ${draft.replyTo}, to the same recipients as the draft.` : ' Send it to the recipients, subject and text the draft has.';
-      this.sendOrDraft(`Send the Gmail draft ${draft.id} now, exactly as it is: read it with get_draft first and do not change its text.${reply} Then delete the draft, and say whether it was sent.`, 'Send request added below your draft: send it when ready');
-    }).open();
+      const thread = draft.threadId ? ` thread ${draft.threadId}` : ' its thread';
+      const then = archive ? ` Then delete the draft and archive${thread} (take it out of the inbox, keeping it in All Mail).` : ' Then delete the draft.';
+      this.sendOrDraft(`Send the Gmail draft ${draft.id} now, exactly as it is: read it with get_draft first and do not change its text.${reply}${then} Say whether it was sent.`, 'Send request added below your draft: send it when ready');
+    };
+    new ChoiceModal(this.app, 'Send this draft?', what, [
+      ['Send and archive', () => request(true)],
+      ['Send', () => request(false)],
+    ]).open();
   }
 
   /** Sends `text` as a message when the input is empty; with a draft there, adds it below for you to send (`hint` says so). */

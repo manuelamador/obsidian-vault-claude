@@ -124,6 +124,8 @@ export interface EmailDraft {
   id: string;
   /** The message it replies to, when it is a reply (as written; a draft updated since does not say). */
   replyTo?: string;
+  /** Gmail's id for the thread it is in, to archive once it is sent. */
+  threadId?: string;
   updated: boolean;
   to: string[];
   cc: string[];
@@ -149,9 +151,11 @@ export function emailDraft(name: string, input: Record<string, unknown>, text: s
   const list = (value: unknown) => (Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : typeof value === 'string' && value ? [value] : []);
   const url = str(result.viewUrl);
   const replyTo = str(input.replyToMessageId);
+  const threadId = str(result.threadId);
   return {
     id: String(result.id),
     ...(replyTo ? { replyTo } : {}),
+    ...(threadId ? { threadId } : {}),
     updated: kind.toLowerCase() === 'update_draft',
     to: list(input.to),
     cc: list(input.cc),
