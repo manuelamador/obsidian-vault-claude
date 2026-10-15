@@ -332,6 +332,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 | Model for small jobs | Model for Edit selection with Claude, Save summary as note, memo title and description suggestions, Pick up where you left off, a project's Context, summaries of chats included in another, Suggest frontmatter updates, and the scratch chat (default Sonnet) |
 | Offer bypass permissions | Adds Bypass to the mode menus |
 | Deny rules | Actions refused in every mode, one rule per line |
+| Mail: drafts only | With Claude Code's Gmail connector, Claude reads mail and writes drafts but cannot send, reply or forward (default on) |
 | Tool calls | Summary, one line each, or hidden |
 | Panel side margins | 8–96 px |
 | Send with ⌘+Enter (Ctrl+Enter on Windows) | Otherwise Enter sends |

@@ -35,6 +35,14 @@ const DEFAULT_DENY_RULES = [
   'Bash(rm -rf:*)',
 ].join('\n');
 
+/** The Gmail connector's tools that send mail, refused while "Mail: drafts only" is on. */
+const MAIL_SEND_TOOLS = ['send_message', 'reply', 'forward', 'send_draft'].map((tool) => `mcp__claude_ai_Gmail__${tool}`);
+
+/** The rules every chat runs with: the deny rules set, and, with "Mail: drafts only", the Gmail tools that send. */
+export function sessionDenyRules(settings: Pick<VaultClaudeSettings, 'denyRules' | 'mailDraftsOnly'>): string[] {
+  return [...denyRuleList(settings.denyRules), ...(settings.mailDraftsOnly ? MAIL_SEND_TOOLS : [])];
+}
+
 export function denyRuleList(value: string): string[] {
   return value
     .split('\n')
@@ -73,6 +81,8 @@ export interface VaultClaudeSettings {
   notifyAfterSeconds: number;
   allowBypass: boolean;
   denyRules: string;
+  /** Claude may read Gmail and write drafts through Claude Code's connector, but not send (see sessionDenyRules). */
+  mailDraftsOnly: boolean;
   phoneAccessName: string;
   phoneAccessAtStartup: boolean;
   phoneEveryChat: boolean;
@@ -126,6 +136,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   notifyAfterSeconds: 30,
   allowBypass: false,
   denyRules: DEFAULT_DENY_RULES,
+  mailDraftsOnly: true,
   phoneAccessName: '',
   phoneAccessAtStartup: false,
   phoneEveryChat: false,
@@ -315,6 +326,16 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         });
         area.inputEl.rows = 6;
       });
+
+    new Setting(containerEl)
+      .setName('Mail: drafts only')
+      .setDesc("With Claude Code's Gmail connector, Claude can search and read your mail and write drafts, but not send, reply or forward: you send the drafts from Gmail. Takes effect in new chats.")
+      .addToggle((toggle) =>
+        toggle.setValue(settings.mailDraftsOnly).onChange(async (value) => {
+          settings.mailDraftsOnly = value;
+          await this.plugin.saveSettings();
+        }),
+      );
 
     new Setting(containerEl)
       .setName('Tool calls')

@@ -70,7 +70,7 @@ import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
-import { SCRATCH_IDLE_CHOICES, chatModel, denyRuleList, idleLabel, modeShort, permissionModes, type ToolDisplay } from './settings';
+import { SCRATCH_IDLE_CHOICES, chatModel, idleLabel, sessionDenyRules, modeShort, permissionModes, type ToolDisplay } from './settings';
 import { summarizeTool, toolLabel, vaultRelative } from './toolSummary';
 import { ChangesCard, agentDiffs, isOwnChange, openFileAtLine, savedChangedFiles, toolDiffs, type EditDiff } from './editDiff';
 import { linkFileNames } from './fileLinks';
@@ -4212,7 +4212,7 @@ export class ChatView extends ItemView {
         resume: this.resumeId ?? undefined,
         forkSession: this.forkOnResume,
         allowBypass: settings.allowBypass,
-        denyRules: denyRuleList(settings.denyRules),
+        denyRules: sessionDenyRules(settings),
         // Its multiple-choice questions are answered in the chat (see renderApprovalCard); a side
         // chat leaves them off, and asks in plain text.
         askQuestions: true,
@@ -6873,7 +6873,7 @@ export class ChatView extends ItemView {
         effort: this.effortOverride,
         appendSystemPrompt: APPEND_SYSTEM_PROMPT + sideChatPrompt(this.sideForks.has(id)),
         ...resume,
-        denyRules: denyRuleList(settings.denyRules),
+        denyRules: sessionDenyRules(settings),
       },
       handlers,
     );
