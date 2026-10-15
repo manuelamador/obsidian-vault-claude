@@ -20,6 +20,8 @@ export interface EmailCardActions {
   todo: (message: EmailMessage) => void;
   /** A thread's messages saved together as one note. */
   saveThread: (messages: EmailMessage[]) => void;
+  /** A request in the input for Claude to open the message's thread, for a card that has only its snippet (a search's). */
+  openThread: (message: EmailMessage) => void;
 }
 
 /** When `message` was sent, as the chat writes dates; empty when unknown. */
@@ -77,6 +79,8 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
     const open = buttons.createEl('a', { cls: 'clickable-icon', href: message.url, attr: { 'aria-label': 'Open in Gmail' } });
     setIcon(open, 'external-link');
   }
+  // A search's card carries only the snippet: Claude opens the thread, whose messages then expand.
+  if (!message.body && message.threadId) button('book-open', 'Ask Claude to open this thread', () => actions.openThread(message));
   button('quote', 'Quote in your next message', () => actions.quote(message));
   button('message-square-plus', 'New chat about this message', () => actions.chat(message));
   button('list-plus', 'Make a todo', () => actions.todo(message));

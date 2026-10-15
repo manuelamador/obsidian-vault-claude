@@ -5813,6 +5813,7 @@ export class ChatView extends ItemView {
         new TodoModal(this.app, `Reply to ${message.sender.replace(/\s*<[^>]*>/, '')}: ${message.subject || 'their message'}`, where, (text, due) => void this.plugin.addTodo(`${text}${link}`, due)).open();
       },
       saveThread: (messages) => void this.replyToNewNote(threadMarkdown(messages), messages[0]?.subject || 'Email thread'),
+      openThread: (message) => this.addToInput(`Open the email thread “${message.subject || message.sender}” (thread id ${message.threadId ?? ''}) and show me its messages.`, 'Send it to have Claude open the thread'),
     });
     this.scrollToBottom();
   }
