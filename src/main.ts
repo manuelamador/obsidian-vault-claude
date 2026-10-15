@@ -200,14 +200,6 @@ export default class VaultClaudePlugin extends Plugin {
   private notesCache: Map<string, Set<string>> | null = null;
   private weightsCache: Map<string, Map<string, number>> | null = null;
   private hubsCache: Set<string> | null = null;
-  /** A new chat with a request, to send, for a look at the unread mail of the last day: what needs a reply, drafts for those, and todos. */
-  async checkMail(): Promise<void> {
-    const view = await this.activateView();
-    if (!view) return;
-    view.startNewChat();
-    view.addToInput('Go through my unread Gmail from the last day. Group the messages, say which need a reply from me and by when, write drafts for those (drafts only, do not send), and suggest todos for what needs doing.', 'Send it, or change it first');
-  }
-
   /**
    * A new chat about note `file`, mentioned in the input with a request for a Gmail draft from it,
    * to finish (to whom, what about) and send: Claude writes the draft with Claude Code's Gmail
@@ -2631,7 +2623,6 @@ export default class VaultClaudePlugin extends Plugin {
     // Listed first, so that the reminders kept can be shown with their chats' titles.
     if (!this.lastListing) await this.listChats().catch(() => []);
     new PickUpModal(this.app, {
-      ...(this.settings.gmailFeatures ? { checkMail: () => void this.checkMail() } : {}),
       load: async (signal, fresh) => {
         // Listed now: what was worked on since the kept list was made is told by it.
         await this.listChats().catch(() => []);

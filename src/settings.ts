@@ -83,7 +83,7 @@ export interface VaultClaudeSettings {
   denyRules: string;
   /** Claude may read Gmail and write drafts through Claude Code's connector, but not send (see sessionDenyRules). */
   mailDraftsOnly: boolean;
-  /** The features for Claude Code's Gmail connector (email and draft cards, Make a todo, Draft an email, Check unread mail, mail read by chats); off without Gmail. */
+  /** The features for Claude Code's Gmail connector (email and draft cards, Make a todo, Draft an email, mail read by chats); off without Gmail. */
   gmailFeatures: boolean;
   /** The note todos made from the chat go to (an email card's "Make a todo"), and its section. */
   todoNote: string;
@@ -337,7 +337,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Gmail features')
-      .setDesc("For Claude Code's Gmail connector: cards for the mail Claude reads and the drafts it writes, Make a todo from a message, Draft an email from this note, Check unread mail, and the threads a chat read. Turn off if you do not have Gmail connected to Claude Code.")
+      .setDesc("For Claude Code's Gmail connector: cards for the mail Claude reads and the drafts it writes, Make a todo from a message, Draft an email from this note, and the threads a chat read. Turn off if you do not have Gmail connected to Claude Code.")
       .addToggle((toggle) =>
         toggle.setValue(settings.gmailFeatures).onChange(async (value) => {
           settings.gmailFeatures = value;
