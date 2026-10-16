@@ -35,11 +35,14 @@ export function turnStarts(transcript: SessionMessage[]): number[] {
 
 /**
  * A transcript cut for drawing: `tail`, its last `tailTurns` turns, drawn at once, and `earlier`,
- * the turns before them, newest first.
+ * the turns before them, newest first. `tailMessages`: the tail stops short of `tailTurns` once it
+ * holds this many messages (turns full of tool calls), though it always holds the last turn.
  */
-export function historyParts(transcript: SessionMessage[], tailTurns: number): { tail: SessionMessage[]; earlier: SessionMessage[][] } {
+export function historyParts(transcript: SessionMessage[], tailTurns: number, tailMessages = Infinity): { tail: SessionMessage[]; earlier: SessionMessage[][] } {
   const starts = turnStarts(transcript);
-  const cut = starts.length > tailTurns ? starts[starts.length - tailTurns] : 0;
+  let taken = Math.min(1, starts.length);
+  while (taken < tailTurns && taken < starts.length && transcript.length - starts[starts.length - taken - 1] <= tailMessages) taken++;
+  const cut = starts.length > taken ? starts[starts.length - taken] : 0;
   if (cut === 0) return { tail: transcript, earlier: [] };
   // The first turn runs from the top: anything before your first prompt goes with it.
   const bounds = [0, ...starts.slice(1).filter((i) => i < cut), cut];

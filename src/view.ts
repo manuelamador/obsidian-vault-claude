@@ -124,6 +124,8 @@ const NAV_DEPTH = 50;
 export const VIEW_TYPE = 'vault-claude-chat';
 /** A chat opened from the history with more turns than this opens on its last ones; the rest are drawn when needed. */
 const TAIL_TURNS = 10;
+/** Fewer of those last turns when they hold more messages than this (see historyParts). */
+const TAIL_MESSAGES = 250;
 /** How long the notes button waits for drawing to settle before counting the chat's notes (see countNotesSoon). */
 const NOTES_COUNT_DELAY_MS = 250;
 /** Turns drawn at a time when scrolling up reaches the top of what is drawn. */
@@ -2849,7 +2851,7 @@ export class ChatView extends ItemView {
    */
   private renderHistory(chat: LoadedChat, running: boolean, readMs: number): void {
     const drawStart = performance.now();
-    const { tail, earlier } = historyParts(chat.transcript, TAIL_TURNS);
+    const { tail, earlier } = historyParts(chat.transcript, TAIL_TURNS, TAIL_MESSAGES);
     // Only the diffs are kept for the earlier turns, not the whole chat read.
     const { edits } = chat;
     // Made first, so that its line goes in above the last turns, drawn below it.

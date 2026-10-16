@@ -33,3 +33,14 @@ test('a long chat: the last turns at once, then the earlier turns one by one, ne
   assert.equal(earlier[2].length, 5);
   assert.equal(earlier.flat().length + tail.length, transcript.length);
 });
+
+test('turns full of tool calls: the tail stops short of its turns once it holds enough messages, but keeps the last turn', () => {
+  const turn = (i: number, calls: number) => [prompt(`p${i}`), ...Array.from({ length: calls }, (_, k) => [call(`t${i}.${k}`), result(`t${i}.${k}`)]).flat(), answer(`a${i}`)];
+  const transcript = [...turn(0, 1), ...turn(1, 1), ...turn(2, 20), ...turn(3, 1), ...turn(4, 1)];
+  // p3 and p4 hold 8 messages; p2 would take the tail to 50.
+  assert.deepEqual(historyParts(transcript, 10, 20).tail.map((m) => m.uuid).filter((id) => id?.startsWith('p')), ['p3', 'p4']);
+  // A last turn over the limit is still drawn whole.
+  assert.deepEqual(historyParts(transcript.slice(0, turn(0, 1).length + turn(1, 1).length + turn(2, 20).length), 10, 5).tail[0].uuid, 'p2');
+  const all = historyParts(transcript, 10, 20);
+  assert.equal(all.earlier.flat().length + all.tail.length, transcript.length);
+});
