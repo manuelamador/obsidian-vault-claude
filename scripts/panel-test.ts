@@ -140,6 +140,8 @@ async function main(): Promise<void> {
     takeKeptDoneTabs: (): unknown[] => [],
     doneTabsChanged: () => undefined,
     recordMail: () => undefined,
+    isCodexChat: () => false,
+    touchCodexChat: () => undefined,
     mailOfChats: (): unknown[] => [],
     setHomeProject: async () => undefined,
     projectParts: async () => ({ context: '', instructions: '' }),
