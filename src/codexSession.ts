@@ -279,3 +279,48 @@ export function codexInput(content: UserContent): unknown[] {
     return [];
   });
 }
+
+/**
+ * A saved Codex thread's turns and name, read through a short-lived app-server (`thread/read`): how
+ * a Codex chat is drawn when opened from the history. The plugin reads no Codex file itself.
+ */
+export async function readCodexThread(codexPath: string, threadId: string, cwd: string): Promise<{ turns: { items?: unknown[] }[]; name: string | null }> {
+  const child = spawn(codexPath, ['app-server'], { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  child.stdout.setEncoding('utf8');
+  const pending = new Map<number, (message: { result?: unknown; error?: { message?: string } }) => void>();
+  let buffer = '';
+  let next = 0;
+  child.stdout.on('data', (chunk: string) => {
+    buffer += chunk;
+    let at: number;
+    while ((at = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, at).trim();
+      buffer = buffer.slice(at + 1);
+      if (!line) continue;
+      try {
+        const message = JSON.parse(line) as { id?: number; method?: string; result?: unknown; error?: { message?: string } };
+        if (typeof message.id === 'number' && !message.method) pending.get(message.id)?.(message);
+      } catch {
+        // Not JSON: nothing waits on it.
+      }
+    }
+  });
+  const request = (method: string, params: unknown) =>
+    new Promise<unknown>((resolve, reject) => {
+      const id = ++next;
+      pending.set(id, (message) => (message.error ? reject(new Error(message.error.message ?? 'Codex refused the request')) : resolve(message.result)));
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    });
+  const exited = new Promise<never>((_, reject) => {
+    child.on('error', reject);
+    child.on('exit', (code) => reject(new Error(`Codex exited with code ${code}`)));
+  });
+  try {
+    await Promise.race([request('initialize', { clientInfo: { name: 'vault-claude', title: 'Vault Claude', version: '1' }, capabilities: null }), exited]);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`);
+    const read = (await Promise.race([request('thread/read', { threadId, includeTurns: true }), exited])) as { thread?: { turns?: { items?: unknown[] }[]; name?: string | null } };
+    return { turns: read.thread?.turns ?? [], name: read.thread?.name ?? null };
+  } finally {
+    child.kill();
+  }
+}

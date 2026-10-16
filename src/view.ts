@@ -72,7 +72,8 @@ import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
-import { CodexSession, findCodex } from './codexSession';
+import { CodexSession, findCodex, readCodexThread } from './codexSession';
+import { codexTranscript, type CodexItem } from './codexEvents';
 
 /** A chat's session: Claude Code's, or Codex's (see CodexSession), which has the same shape. */
 type ChatSession = ClaudeSession | CodexSession;
@@ -2733,6 +2734,11 @@ export class ChatView extends ItemView {
       return false;
     }
     this.newChat();
+    // A Codex chat goes on in Codex (see ensureCodexSession).
+    if (this.plugin.isCodexChat(item.id)) {
+      this.engine = 'codex';
+      this.applyEngine();
+    }
     this.messagesEl.empty();
     this.resumeId = item.id;
     this.chatId = item.fromPanel ? item.id : null;
@@ -2798,12 +2804,24 @@ export class ChatView extends ItemView {
     let chat: LoadedChat | null = null;
     if (id && root) {
       try {
-        chat = await loadChat(id, root);
+        chat = this.plugin.isCodexChat(id) ? await this.readCodexChat(id, root) : await loadChat(id, root);
       } catch (error) {
         log('loading transcript failed', error);
       }
     }
     return this.chatGeneration === generation ? { chat, readMs: Math.round(performance.now() - started) } : null;
+  }
+
+  /** Codex chat `id`, read through Codex (see readCodexThread) and turned into the messages the panel draws. */
+  private async readCodexChat(id: string, root: string): Promise<LoadedChat | null> {
+    const codexPath = findCodex(this.plugin.settings.codexPath);
+    if (!codexPath) {
+      new Notice('Codex was not found: set its path under Settings → Vault Claude → Codex executable.');
+      return null;
+    }
+    const { turns } = await readCodexThread(codexPath, id, root);
+    const { transcript, edits } = codexTranscript(id, turns as { items?: CodexItem[] }[], root);
+    return { transcript: transcript as unknown as LoadedChat['transcript'], edits };
   }
 
   /**
@@ -3012,7 +3030,8 @@ export class ChatView extends ItemView {
    * that is a tool call (a copy ending on a call with no result is not a finished conversation).
    */
   private setBranchPoint(turn: HTMLElement, blocks: { type?: string }[], uuid: string): void {
-    if (blocks.some((block) => block.type === 'tool_use')) delete turn.dataset.branchUuid;
+    // Branching copies Claude Code's session file: a Codex chat has none to copy.
+    if (this.engine === 'codex' || blocks.some((block) => block.type === 'tool_use')) delete turn.dataset.branchUuid;
     else turn.dataset.branchUuid = uuid;
   }
 
@@ -3872,8 +3891,9 @@ export class ChatView extends ItemView {
   /** `uuid`: the message's own, in the chat's file; with it, the bubble offers to copy the chat from it on. */
   private renderUserBubble(text: string, chips: Chip[], parent: HTMLElement = this.draw.parent, uuid?: string): HTMLElement {
     const bubble = parent.createDiv({ cls: 'vc-user' });
-    if (uuid) {
-      bubble.dataset.uuid = uuid;
+    if (uuid) bubble.dataset.uuid = uuid;
+    // Copy, move and remove from here on cut Claude Code's session file: not for a Codex chat.
+    if (uuid && this.engine !== 'codex') {
       const copy = bubble.createEl('button', { cls: 'clickable-icon vc-user-action', attr: { 'aria-label': 'Copy, move or remove from here on' } });
       setIcon(copy, 'arrow-down-from-line');
       copy.addEventListener('click', (evt) => this.onMessageMenu(evt, uuid, text));
@@ -5517,6 +5537,7 @@ export class ChatView extends ItemView {
         }
         break;
       case 'result': {
+        if (this.engine === 'codex' && this.chatId) this.plugin.touchCodexChat(this.chatId);
         this.setFastState(message.fast_mode_state, message.fast_mode_disabled_reason);
         for (const id of message.user_message_uuids ?? []) this.markDelivered(id);
         const turn = this.draw.turn;

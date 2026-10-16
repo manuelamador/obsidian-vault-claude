@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { codexItemCompleted, codexItemStarted, codexTurnResult, diffHunks } from '../src/codexEvents';
+import { codexItemCompleted, codexItemStarted, codexTranscript, codexTurnResult, diffHunks } from '../src/codexEvents';
 import { codexInput } from '../src/codexSession';
 
 test('a Codex command is drawn as a Bash call and its output as the result', () => {
@@ -37,4 +37,17 @@ test('a Codex file change is drawn as an edit per file, with its hunks for the c
   assert.deepEqual((done[0].tool_use_result as { structuredPatch: unknown }).structuredPatch, [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' line', '-old', '+new'] }]);
   assert.deepEqual((done[1].tool_use_result as { structuredPatch: { lines: string[] }[] }).structuredPatch[0].lines, ['+hello', '+world']);
   assert.deepEqual(diffHunks('', 'update'), []);
+});
+
+test('a saved Codex thread is drawn as its messages, with its file changes kept for the cards', () => {
+  const turns = [{ items: [
+    { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'fix it' }] },
+    { type: 'agentMessage', id: 'm1', text: 'Done.' },
+    { type: 'fileChange', id: 'f', status: 'completed', changes: [{ path: 'a.md', kind: { type: 'update' }, diff: '@@ -1 +1 @@\n-a\n+b\n' }] },
+  ] }];
+  const { transcript, edits } = codexTranscript('t', turns as never, '/v');
+  assert.deepEqual(transcript.map((message) => message.type), ['user', 'assistant', 'assistant', 'user']);
+  assert.equal((transcript[0].message as { content: string }).content, 'fix it');
+  assert.equal(((transcript[2].message as { content: { input: { file_path: string } }[] }).content)[0].input.file_path, '/v/a.md');
+  assert.ok(edits.has('f:0'));
 });

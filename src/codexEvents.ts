@@ -178,3 +178,30 @@ export function codexTurnResult(sessionId: string, turn: { status: string; error
     uuid: `${sessionId}:result:${Date.now()}`,
   };
 }
+
+/**
+ * A saved Codex thread's turns (as `thread/read` gives them) as the panel draws a saved chat: its
+ * messages in order, a message of yours as a user message, each item as it is drawn live (see
+ * codexItemStarted and codexItemCompleted); with the structured results of its file changes, by
+ * call, for the changed-files cards.
+ */
+export function codexTranscript(sessionId: string, turns: { items?: CodexItem[] }[], cwd = ''): { transcript: DrawnMessage[]; edits: Map<string, unknown> } {
+  const transcript: DrawnMessage[] = [];
+  const edits = new Map<string, unknown>();
+  for (const turn of turns) {
+    for (const item of turn.items ?? []) {
+      if (item.type === 'userMessage') {
+        const content = (item as { content?: { type?: string; text?: string }[] }).content ?? [];
+        const text = content.flatMap((part) => (part.type === 'text' && part.text ? [part.text] : [])).join('\n\n');
+        if (text.trim()) transcript.push({ type: 'user', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, message: { role: 'user', content: text } });
+        continue;
+      }
+      for (const message of [...codexItemStarted(sessionId, item, cwd), ...codexItemCompleted(sessionId, item)]) {
+        transcript.push(message);
+        const result = (message.message as { content?: { type?: string; tool_use_id?: string }[] } | undefined)?.content?.[0];
+        if (message.tool_use_result !== undefined && result?.tool_use_id) edits.set(result.tool_use_id, message.tool_use_result);
+      }
+    }
+  }
+  return { transcript, edits };
+}

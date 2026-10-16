@@ -14,6 +14,8 @@ export interface ChatRecord {
   copyOf?: string;
   /** A chat run by Codex rather than Claude Code (see CodexSession). */
   engine?: 'codex';
+  /** For a Codex chat, when it was last active (ms): Codex keeps its sessions in its own store, which the listing does not read. */
+  at?: number;
 }
 
 export interface HistoryItem {
@@ -33,6 +35,8 @@ export interface HistoryItem {
   copied?: boolean;
   /** A chat started outside the panel: the listed copies of it, most recently active first. */
   copies?: HistoryItem[];
+  /** A chat run by Codex (see CodexSession). */
+  engine?: 'codex';
 }
 
 // The project and linked-chat blocks: in prompts written before that context went through the

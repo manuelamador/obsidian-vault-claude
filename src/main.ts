@@ -714,7 +714,9 @@ export default class VaultClaudePlugin extends Plugin {
     this.listing ??= (async () => {
       const started = performance.now();
       try {
-        const listed = await listHistory(dir, this.chats, this.settings.historyIncludesAllSessions, new Set(this.sideSessions));
+        // Codex chats are listed from their records: their sessions are in Codex's own store.
+        const codex: HistoryItem[] = this.chats.filter((chat) => chat.engine === 'codex').map((chat) => ({ id: chat.id, title: chat.title, updatedAt: chat.at ?? 0, fromPanel: true, engine: 'codex' }));
+        const listed = [...(await listHistory(dir, this.chats, this.settings.historyIncludesAllSessions, new Set(this.sideSessions))), ...codex].sort((a, b) => b.updatedAt - a.updatedAt);
         // A chat deleted while this listing ran, or whose file is still there, is not listed again.
         const found = new Set(listed.map((item) => item.id));
         for (const id of this.unlisted) if (!found.has(id)) this.unlisted.delete(id);
@@ -1265,6 +1267,20 @@ export default class VaultClaudePlugin extends Plugin {
     return this.chats.some((chat) => chat.id === id);
   }
 
+  /** Whether chat `id` is run by Codex (see CodexSession). */
+  isCodexChat(id: string): boolean {
+    return this.chats.some((chat) => chat.id === id && chat.engine === 'codex');
+  }
+
+  /** Codex chat `id` was active now: the history sorts it by this (see ChatRecord.at). */
+  touchCodexChat(id: string): void {
+    const chat = this.chats.find((record) => record.id === id && record.engine === 'codex');
+    if (!chat) return;
+    chat.at = Date.now();
+    this.listedAt = 0;
+    this.saveSoon();
+  }
+
   /**
    * Records a chat started in the panel; `copyOf`: it is the copy of a chat started outside the panel
    * made by sending a message there, which is then offered with it at once (see listHistory).
@@ -1274,7 +1290,7 @@ export default class VaultClaudePlugin extends Plugin {
     // A chat new to the listing: what reads a recent one (see recentListing) lists again.
     this.listedAt = 0;
     if (this.isPanelChat(id)) return;
-    this.chats.unshift({ id, title, ...(copyOf ? { copyOf } : {}), ...(engine ? { engine } : {}) });
+    this.chats.unshift({ id, title, ...(copyOf ? { copyOf } : {}), ...(engine ? { engine, at: Date.now() } : {}) });
     const original = copyOf ? this.lastListing?.find((item) => item.id === copyOf) : undefined;
     if (original) (original.copies ??= []).unshift({ id, title, updatedAt: Date.now(), fromPanel: true, copied: true });
     for (const dropped of this.chats.slice(MAX_CHAT_RECORDS)) this.forgetChatData(dropped.id);
@@ -2993,7 +3009,8 @@ export default class VaultClaudePlugin extends Plugin {
       return false;
     }
     try {
-      await this.deleteWhenEnded(id);
+      // A Codex chat goes from the panel's records; its session stays in Codex's own store.
+      if (!this.isCodexChat(id)) await this.deleteWhenEnded(id);
     } catch (error) {
       log('deleting a chat failed', error);
       new Notice(`Could not delete the chat: ${errorText(error)}`);
@@ -3026,7 +3043,8 @@ export default class VaultClaudePlugin extends Plugin {
     }
     for (const view of this.chatViews()) view.onChatRenamed(id, title);
     const dir = this.vaultRoot();
-    if (!dir) return;
+    // A Codex chat's name is kept in the panel's record only.
+    if (!dir || this.isCodexChat(id)) return;
     try {
       await renameSessionTitle(id, dir, title);
     } catch (error) {
