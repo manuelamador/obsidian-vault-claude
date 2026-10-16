@@ -3230,7 +3230,7 @@ export default class VaultClaudePlugin extends Plugin {
     // Up to 0.13.0 a panel-wide switch, on by default; notes are now attached per chat, and none to start with.
     delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
     // Up to 0.21.1 each record also held when it was made and last used, which nothing read.
-    this.chats = Array.isArray(raw.chats) ? raw.chats.map(({ id, title, copyOf }) => ({ id, title, ...(typeof copyOf === 'string' ? { copyOf } : {}) })) : [];
+    this.chats = Array.isArray(raw.chats) ? raw.chats.map(({ id, title, copyOf, engine, at }) => ({ id, title, ...(typeof copyOf === 'string' ? { copyOf } : {}), ...(engine === 'codex' ? { engine } : {}), ...(typeof at === 'number' ? { at } : {}) })) : [];
     this.pinned = Array.isArray(raw.pinned) ? raw.pinned : [];
     this.scratch = raw.scratch && typeof raw.scratch.id === 'string' ? raw.scratch : null;
     this.sideSessions = Array.isArray(raw.sideSessions) ? raw.sideSessions.filter((id): id is string => typeof id === 'string') : [];

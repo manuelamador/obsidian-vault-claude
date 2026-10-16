@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { codexInit, codexItemCompleted, codexItemStarted, codexTurnResult, type CodexItem, type CodexUsage } from './codexEvents';
+import type { SDKControlGetContextUsageResponse } from '@anthropic-ai/claude-agent-sdk';
 import { log } from './log';
 import type { SessionHandlers, UserContent } from './session';
 
@@ -54,6 +55,8 @@ export class CodexSession {
   private turnId: string | null = null;
   private turnMessages: string[] = [];
   private usage: CodexUsage | null = null;
+  /** The thread's context as Codex last reported it: what the last request held, and the model's window. */
+  private context: { used: number; window: number } | null = null;
   private model: string | null = null;
 
   constructor(
@@ -112,8 +115,10 @@ export class CodexSession {
   }
   withdrawContext(): void {}
   async stopTask(): Promise<void> {}
-  contextUsage(): null {
-    return null;
+  /** The context meter's reading, in the shape Claude Code's gives it (see contextFigures); null before Codex reports one. */
+  contextUsage(): SDKControlGetContextUsageResponse | null {
+    if (!this.context) return null;
+    return { totalTokens: this.context.used, maxTokens: this.context.window, rawMaxTokens: this.context.window, isAutoCompactEnabled: false, model: this.model ?? undefined } as unknown as SDKControlGetContextUsageResponse;
   }
   planUsage(): null {
     return null;
@@ -230,8 +235,10 @@ export class CodexSession {
         for (const message of codexItemCompleted(id, params.item as CodexItem)) this.handlers.onMessage(message as never);
         break;
       case 'thread/tokenUsage/updated': {
-        const last = (params.tokenUsage as { last?: CodexUsage } | undefined)?.last;
+        const tokenUsage = params.tokenUsage as { last?: CodexUsage & { totalTokens?: number }; modelContextWindow?: number | null } | undefined;
+        const last = tokenUsage?.last;
         if (last) this.usage = last;
+        if (last && tokenUsage?.modelContextWindow) this.context = { used: last.totalTokens ?? last.inputTokens + last.outputTokens, window: tokenUsage.modelContextWindow };
         break;
       }
       case 'turn/completed': {
