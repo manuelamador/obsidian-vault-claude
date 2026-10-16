@@ -17,6 +17,9 @@ export interface CodexSessionConfig {
   resume?: string;
   /** Instructions added to Codex's own (as the panel's system prompt addition is for Claude). */
   developerInstructions?: string;
+  /** The model and reasoning effort to run; none uses Codex's own settings. */
+  model?: string;
+  effort?: string;
 }
 
 /** Where the ChatGPT app installs the Codex CLI, besides PATH and Homebrew. */
@@ -76,7 +79,9 @@ export class CodexSession {
           return;
         }
         if (uuid) this.turnMessages = [uuid];
-        const started = (await this.request('turn/start', { threadId: this.sessionId, input })) as { turn?: { id?: string } };
+        // The model and effort chosen in the panel, when any; thinking summaries asked for, to be shown.
+        const choice = { ...(this.config.model ? { model: this.config.model } : {}), ...(this.config.effort ? { effort: this.config.effort } : {}), summary: 'auto' };
+        const started = (await this.request('turn/start', { threadId: this.sessionId, input, ...choice })) as { turn?: { id?: string } };
         this.turnId ??= started.turn?.id ?? null;
       })
       .catch((error: unknown) => this.fail(error));
@@ -119,8 +124,15 @@ export class CodexSession {
   supportedCommands(): null {
     return null;
   }
-  async setModel(): Promise<void> {}
-  async setEffort(): Promise<void> {}
+  /** The model for the next turns; none returns to Codex's own setting. */
+  async setModel(model?: string): Promise<void> {
+    this.config.model = model || undefined;
+  }
+
+  /** The reasoning effort for the next turns; none returns to the model's default. */
+  async setEffort(effort?: string | null): Promise<void> {
+    this.config.effort = effort || undefined;
+  }
   async setFastMode(): Promise<void> {}
   async setPermissionMode(): Promise<void> {}
   async enableRemoteControl(): Promise<unknown> {
@@ -280,11 +292,17 @@ export function codexInput(content: UserContent): unknown[] {
   });
 }
 
-/**
- * A saved Codex thread's turns and name, read through a short-lived app-server (`thread/read`): how
- * a Codex chat is drawn when opened from the history. The plugin reads no Codex file itself.
- */
-export async function readCodexThread(codexPath: string, threadId: string, cwd: string): Promise<{ turns: { items?: unknown[] }[]; name: string | null }> {
+/** A Codex model, as the model menu offers it: its id, name, the reasoning efforts it supports and its default one. */
+export interface CodexModel {
+  id: string;
+  name: string;
+  efforts: { value: string; description: string }[];
+  defaultEffort: string;
+  isDefault: boolean;
+}
+
+/** Runs `use` against a short-lived Codex app-server, after its handshake, then stops it. */
+async function withAppServer<T>(codexPath: string, cwd: string, use: (request: (method: string, params: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
   const child = spawn(codexPath, ['app-server'], { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdout.setEncoding('utf8');
   const pending = new Map<number, (message: { result?: unknown; error?: { message?: string } }) => void>();
@@ -305,22 +323,51 @@ export async function readCodexThread(codexPath: string, threadId: string, cwd: 
       }
     }
   });
-  const request = (method: string, params: unknown) =>
-    new Promise<unknown>((resolve, reject) => {
-      const id = ++next;
-      pending.set(id, (message) => (message.error ? reject(new Error(message.error.message ?? 'Codex refused the request')) : resolve(message.result)));
-      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-    });
   const exited = new Promise<never>((_, reject) => {
     child.on('error', reject);
     child.on('exit', (code) => reject(new Error(`Codex exited with code ${code}`)));
   });
+  const request = (method: string, params: unknown) =>
+    Promise.race([
+      new Promise<unknown>((resolve, reject) => {
+        const id = ++next;
+        pending.set(id, (message) => (message.error ? reject(new Error(message.error.message ?? 'Codex refused the request')) : resolve(message.result)));
+        child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      }),
+      exited,
+    ]);
   try {
-    await Promise.race([request('initialize', { clientInfo: { name: 'vault-claude', title: 'Vault Claude', version: '1' }, capabilities: null }), exited]);
+    await request('initialize', { clientInfo: { name: 'vault-claude', title: 'Vault Claude', version: '1' }, capabilities: null });
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`);
-    const read = (await Promise.race([request('thread/read', { threadId, includeTurns: true }), exited])) as { thread?: { turns?: { items?: unknown[] }[]; name?: string | null } };
-    return { turns: read.thread?.turns ?? [], name: read.thread?.name ?? null };
+    return await use(request);
   } finally {
     child.kill();
   }
+}
+
+/** The models Codex offers (`model/list`), as the model menu lists them. */
+export async function listCodexModels(codexPath: string, cwd: string): Promise<CodexModel[]> {
+  return withAppServer(codexPath, cwd, async (request) => {
+    const listed = (await request('model/list', {})) as { data?: { id: string; model?: string; displayName?: string; hidden?: boolean; supportedReasoningEfforts?: { reasoningEffort: string; description?: string }[]; defaultReasoningEffort?: string; isDefault?: boolean }[] };
+    return (listed.data ?? [])
+      .filter((model) => !model.hidden)
+      .map((model) => ({
+        id: model.model ?? model.id,
+        name: model.displayName ?? model.model ?? model.id,
+        efforts: (model.supportedReasoningEfforts ?? []).map((effort) => ({ value: effort.reasoningEffort, description: effort.description ?? '' })),
+        defaultEffort: model.defaultReasoningEffort ?? '',
+        isDefault: model.isDefault === true,
+      }));
+  });
+}
+
+/**
+ * A saved Codex thread's turns and name, read through a short-lived app-server (`thread/read`): how
+ * a Codex chat is drawn when opened from the history. The plugin reads no Codex file itself.
+ */
+export async function readCodexThread(codexPath: string, threadId: string, cwd: string): Promise<{ turns: { items?: unknown[] }[]; name: string | null }> {
+  return withAppServer(codexPath, cwd, async (request) => {
+    const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: { items?: unknown[] }[]; name?: string | null } };
+    return { turns: read.thread?.turns ?? [], name: read.thread?.name ?? null };
+  });
 }

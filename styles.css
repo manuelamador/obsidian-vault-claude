@@ -3534,3 +3534,18 @@ body:has(.vc-pick-up) .popover.hover-popover {
   margin-top: 8px;
   resize: vertical;
 }
+
+/* "Codex" on a Codex chat: beside its title in the panel, and on its row in the history. */
+.vc-engine-badge {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-s);
+  background: var(--text-normal);
+  color: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+}

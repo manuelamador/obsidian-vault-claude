@@ -434,6 +434,11 @@ export class ChatView extends ItemView {
   private session: ChatSession | null = null;
   /** Which engine runs the chat on screen: Claude Code, or Codex (see startCodexChat). */
   private engine: 'claude' | 'codex' = 'claude';
+  /** A Codex chat's model and reasoning effort, chosen in its menus; none uses Codex's own settings. */
+  private codexModel: string | undefined;
+  private codexEffort: string | undefined;
+  /** "Codex" beside the title of a Codex chat. */
+  private engineBadge!: HTMLElement;
   private sessionToken: object | null = null;
   private resumeId: string | null = null;
   private chatId: string | null = null;
@@ -764,6 +769,8 @@ export class ChatView extends ItemView {
     this.registerDomEvent(this.forwardButton, 'click', () => void this.navigate('forward'));
     this.chatTitleEl = header.createDiv({ cls: 'vc-chat-title' });
     this.registerDomEvent(this.chatTitleEl, 'click', () => this.renameCurrentChat());
+    this.engineBadge = header.createSpan({ cls: 'vc-engine-badge', text: 'Codex', attr: { 'aria-label': 'This chat runs on Codex' } });
+    this.engineBadge.hide();
     const titleActions = header.createDiv({ cls: 'vc-chat-title-actions' });
     this.saveButton = titleActions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Save as note' } });
     setIcon(this.saveButton, 'file-down');
@@ -1285,6 +1292,8 @@ export class ChatView extends ItemView {
     // A new chat is Claude's unless New Codex chat makes it Codex's (see startCodexChat).
     const wasCodex = this.engine === 'codex';
     this.engine = 'claude';
+    this.codexModel = undefined;
+    this.codexEffort = undefined;
     // A chat that is still working keeps running in the background instead of being stopped.
     this.detachToBackground();
     this.unseen = null;
@@ -4276,7 +4285,7 @@ export class ChatView extends ItemView {
     }
     const token = {};
     this.sessionToken = token;
-    this.session = new CodexSession({ cwd, codexPath, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT }, this.foregroundHandlers(token));
+    this.session = new CodexSession({ cwd, codexPath, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort }, this.foregroundHandlers(token));
     return this.session;
   }
 
@@ -4288,20 +4297,43 @@ export class ChatView extends ItemView {
     this.focusInput();
   }
 
-  /** The controls for the chat's engine: for a Codex chat, its name in the model menu, and no effort, mode, fast or phone buttons. */
+  /**
+   * The controls for the chat's engine. A Codex chat: the Codex badge, Codex's models and the chosen
+   * model's reasoning efforts in the menus, and no permission mode, fast or phone buttons (Codex
+   * uses its own approval settings).
+   */
   private applyEngine(): void {
     const codex = this.engine === 'codex';
-    for (const el of [this.effortMenu.el, this.modeMenu.el, this.fastButton, this.phoneButton]) if (codex) el.hide();
+    this.engineBadge.toggle(codex);
+    for (const el of [this.modeMenu.el, this.fastButton, this.phoneButton]) if (codex) el.hide();
     if (!codex) {
-      this.effortMenu.el.show();
       this.modeMenu.el.show();
       this.phoneButton.show();
       this.updateFastButton();
+      this.populateEffortSelect();
       return;
     }
+    this.plugin.loadCodexModels();
+    const models = this.plugin.codexModels;
+    const fallback = models.find((model) => model.isDefault);
     this.modelMenu.clear();
-    this.modelMenu.add('codex', this.currentModel && this.currentModel !== 'codex' ? `Codex (${this.currentModel})` : 'Codex (its own settings)', 'Codex');
-    this.modelMenu.value = 'codex';
+    this.modelMenu.add('', fallback ? `Codex default (${fallback.name})` : 'Codex default (its own settings)', fallback ? fallback.name : 'Codex');
+    for (const model of models) this.modelMenu.add(model.id, model.name, model.name);
+    if (this.codexModel && !models.some((model) => model.id === this.codexModel)) this.modelMenu.add(this.codexModel, this.codexModel, this.codexModel);
+    this.modelMenu.value = this.codexModel ?? '';
+    const chosen = models.find((model) => model.id === this.codexModel) ?? fallback;
+    const efforts = chosen?.efforts ?? [];
+    this.effortMenu.clear();
+    this.effortMenu.el.toggle(efforts.length > 0);
+    this.effortMenu.disabled = false;
+    this.effortMenu.add('', chosen?.defaultEffort ? `Default effort (${chosen.defaultEffort})` : 'Default effort', chosen?.defaultEffort || 'Effort');
+    for (const effort of efforts) this.effortMenu.add(effort.value, `${effort.value[0].toUpperCase()}${effort.value.slice(1)} effort${effort.description ? ` · ${effort.description}` : ''}`, effort.value);
+    this.effortMenu.value = this.codexEffort && efforts.some((effort) => effort.value === this.codexEffort) ? this.codexEffort : '';
+  }
+
+  /** Codex's models were read: a Codex chat's menus list them. */
+  codexModelsChanged(): void {
+    if (this.engine === 'codex') this.applyEngine();
   }
 
   /** Handlers for the chat on screen; `token` goes stale once the chat is replaced or closed. */
@@ -5125,6 +5157,7 @@ export class ChatView extends ItemView {
   }
 
   private populateEffortSelect(): void {
+    if (this.engine === 'codex') return this.applyEngine();
     const select = this.effortMenu;
     const labels: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
     const levels = this.effortLevels();
@@ -5146,6 +5179,11 @@ export class ChatView extends ItemView {
   }
 
   private async changeEffort(value: string): Promise<void> {
+    if (this.engine === 'codex') {
+      this.codexEffort = value || undefined;
+      await this.session?.setEffort((this.codexEffort ?? null) as never);
+      return this.applyEngine();
+    }
     const previous = this.effortOverride;
     this.effortOverride = value ? (value as EffortLevel) : undefined;
     const session = this.session;
@@ -5170,6 +5208,15 @@ export class ChatView extends ItemView {
   }
 
   private async changeModel(value: string): Promise<void> {
+    if (this.engine === 'codex') {
+      this.codexModel = value || undefined;
+      // An effort the new model does not offer goes back to its default.
+      const model = this.plugin.codexModels.find((each) => each.id === this.codexModel);
+      if (this.codexEffort && model && !model.efforts.some((effort) => effort.value === this.codexEffort)) this.codexEffort = undefined;
+      await this.session?.setModel(this.codexModel);
+      await this.session?.setEffort((this.codexEffort ?? null) as never);
+      return this.applyEngine();
+    }
     // Default is sent as such: with no model, Claude Code runs the one its settings name, which may differ.
     const previous = this.modelOverride;
     this.modelOverride = value || undefined;

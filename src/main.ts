@@ -9,6 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
+import { findCodex, listCodexModels, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -1265,6 +1266,25 @@ export default class VaultClaudePlugin extends Plugin {
   /** Whether a chat was started in the panel (rather than elsewhere in the vault, which opens as a copy). */
   isPanelChat(id: string): boolean {
     return this.chats.some((chat) => chat.id === id);
+  }
+
+  /** The models Codex offers (see listCodexModels), once read; empty until then. */
+  codexModels: CodexModel[] = [];
+  private codexModelsLoading: Promise<void> | null = null;
+
+  /** Reads Codex's models once (a short-lived app-server), then redraws the panels' menus. */
+  loadCodexModels(): void {
+    if (this.codexModels.length > 0 || this.codexModelsLoading) return;
+    const codexPath = findCodex(this.settings.codexPath);
+    const cwd = this.vaultRoot();
+    if (!codexPath || !cwd) return;
+    this.codexModelsLoading = listCodexModels(codexPath, cwd)
+      .then((models) => {
+        this.codexModels = models;
+        for (const view of this.chatViews()) view.codexModelsChanged();
+      })
+      .catch((error: unknown) => log('listing codex models failed', error))
+      .finally(() => (this.codexModelsLoading = null));
   }
 
   /** Whether chat `id` is run by Codex (see CodexSession). */

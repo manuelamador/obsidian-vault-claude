@@ -313,7 +313,8 @@ export class HistoryModal extends SuggestModal<Match> {
       meta.createSpan({ cls: `vc-history-status${quiet ? ' is-quiet' : ''}`, text: `${quiet ? '○' : '●'} ${item.status} · ` });
     }
     if (item.scratch) meta.appendText(item.updatedAt ? `${formatDate(item.updatedAt)} · starts over when idle` : 'not used yet · starts over when idle');
-    else meta.appendText(`${formatDate(item.updatedAt)}${origin(item)}${item.engine === 'codex' ? ' · Codex' : ''}`);
+    else meta.appendText(`${formatDate(item.updatedAt)}${origin(item)}`);
+    if (item.engine === 'codex') meta.createSpan({ cls: 'vc-engine-badge', text: 'Codex' });
     const project = item.scratch ? null : (this.actions.projectName?.(item) ?? null);
     if (project) {
       meta.appendText(' · ');
