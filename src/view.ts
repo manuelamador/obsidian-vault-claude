@@ -72,6 +72,10 @@ import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
+import { CodexSession, findCodex } from './codexSession';
+
+/** A chat's session: Claude Code's, or Codex's (see CodexSession), which has the same shape. */
+type ChatSession = ClaudeSession | CodexSession;
 import { SCRATCH_IDLE_CHOICES, chatModel, idleLabel, sessionDenyRules, modeShort, permissionModes, type ToolDisplay } from './settings';
 import { summarizeTool, toolLabel, vaultRelative } from './toolSummary';
 import { ChangesCard, agentDiffs, isOwnChange, openFileAtLine, savedChangedFiles, toolDiffs, type EditDiff } from './editDiff';
@@ -312,7 +316,7 @@ function waitingFor(request: PermissionRequest): string {
 
 /** A chat that was still working when another one was opened; it keeps running off screen. */
 interface BackgroundChat {
-  session: ClaudeSession;
+  session: ChatSession;
   chatId: string | null;
   title: string | null;
   busy: boolean;
@@ -426,7 +430,9 @@ const TAB_LABELS: Record<TabState, string> = {
 };
 
 export class ChatView extends ItemView {
-  private session: ClaudeSession | null = null;
+  private session: ChatSession | null = null;
+  /** Which engine runs the chat on screen: Claude Code, or Codex (see startCodexChat). */
+  private engine: 'claude' | 'codex' = 'claude';
   private sessionToken: object | null = null;
   private resumeId: string | null = null;
   private chatId: string | null = null;
@@ -808,6 +814,7 @@ export class ChatView extends ItemView {
       evt.preventDefault();
       const menu = new Menu();
       menu.addItem((item) => item.setTitle('New chat in a new tab').setIcon('square-pen').onClick(() => void this.plugin.openChatTab(this.leaf).then((view) => view?.focusInput())));
+      menu.addItem((item) => item.setTitle('New Codex chat').setIcon('terminal-square').onClick(() => this.startCodexChat()));
       menu.addItem((item) => item.setTitle('Pick up where you left off').setIcon('history').onClick(() => void this.plugin.openPickUp()));
       if (this.plugin.settings.scratchChat) {
         menu.addItem((item) => item.setTitle('Open scratch chat').setIcon('eraser').onClick(() => void this.openScratch()));
@@ -1274,6 +1281,9 @@ export class ChatView extends ItemView {
 
   newChat(): void {
     this.leaveDraft();
+    // A new chat is Claude's unless New Codex chat makes it Codex's (see startCodexChat).
+    const wasCodex = this.engine === 'codex';
+    this.engine = 'claude';
     // A chat that is still working keeps running in the background instead of being stopped.
     this.detachToBackground();
     this.unseen = null;
@@ -1313,6 +1323,8 @@ export class ChatView extends ItemView {
     this.modeBeforePlan = this.mode === 'plan' ? 'default' : this.mode;
     this.draftPath = null;
     this.updateDraftLine();
+    // Back from a Codex chat: Claude's controls shown again.
+    if (wasCodex) this.applyEngine();
     this.populateModelSelect();
     this.resetContextMeter();
     this.finishTurnUi();
@@ -1400,6 +1412,7 @@ export class ChatView extends ItemView {
   // ---- Phone access ------------------------------------------------------
 
   updatePhoneButton(): void {
+    if (this.engine === 'codex') return void this.phoneButton.hide();
     const { state, activeSessions, error } = this.plugin.remote.status;
     const chatOn = this.remoteUrl !== null;
     const button = this.phoneButton;
@@ -2162,7 +2175,7 @@ export class ChatView extends ItemView {
    * that reads its result, and that turn's end closes the chat; if none starts, it is closed here.
    */
   /** The background chat whose process is `session`, if one is. */
-  private entryOf(session: ClaudeSession): BackgroundChat | undefined {
+  private entryOf(session: ChatSession): BackgroundChat | undefined {
     return [...this.background].find((entry) => entry.session === session);
   }
 
@@ -2177,7 +2190,7 @@ export class ChatView extends ItemView {
   }
 
   /** Closes `session`; until its process has exited, its file is not deleted (see VaultClaudePlugin.processEnding). */
-  private closeSession(session: ClaudeSession | null): void {
+  private closeSession(session: ChatSession | null): void {
     if (!session) return;
     if (session.sessionId) this.plugin.processEnding(session.sessionId, session.ended);
     session.close();
@@ -2210,7 +2223,7 @@ export class ChatView extends ItemView {
    * answers reached it, and its record would say they were cut off. Nothing more of it is shown, and
    * anything else it asks is refused with `message`.
    */
-  private closeAfterAnswer(session: ClaudeSession, message: string): void {
+  private closeAfterAnswer(session: ChatSession, message: string): void {
     // Its process is ending from now on: deleting its chat meanwhile waits for it to exit.
     if (session.sessionId) this.plugin.processEnding(session.sessionId, session.ended);
     let open = true;
@@ -4121,7 +4134,7 @@ export class ChatView extends ItemView {
    * chat it was typed in, gone to the background meanwhile (which closes if that was all it waited
    * for); its text back in that chat's input, here or in its draft. Where it went back to.
    */
-  private unsend(sent: { uuid: string; bubble: HTMLElement; session: ClaudeSession; draftKey: string; text: string; attachments: Attachment[]; pathOnly: ReadonlySet<string> }): 'input' | 'draft' | null {
+  private unsend(sent: { uuid: string; bubble: HTMLElement; session: ChatSession; draftKey: string; text: string; attachments: Attachment[]; pathOnly: ReadonlySet<string> }): 'input' | 'draft' | null {
     sent.bubble.remove();
     this.pending.delete(sent.uuid as MessageId);
     for (const entry of this.background) {
@@ -4195,7 +4208,8 @@ export class ChatView extends ItemView {
     return { content: blocks, notes };
   }
 
-  private ensureSession(): ClaudeSession | null {
+  private ensureSession(): ChatSession | null {
+    if (this.engine === 'codex') return this.ensureCodexSession();
     // After a failed sign-in, a fresh process, which reads the sign-in again (see accountErrorText).
     if (this.session && this.restartSession && !this.busy) {
       this.closeSession(this.session);
@@ -4229,6 +4243,45 @@ export class ChatView extends ItemView {
       this.foregroundHandlers(token),
     );
     return this.session;
+  }
+
+  /** The Codex session of a Codex chat (see CodexSession), started when needed; null, with a notice, without Codex or a vault folder. */
+  private ensureCodexSession(): ChatSession | null {
+    if (this.session) return this.session;
+    const codexPath = findCodex(this.plugin.settings.codexPath);
+    const cwd = this.plugin.vaultRoot();
+    if (!codexPath || !cwd) {
+      new Notice(codexPath ? 'Codex chats need the vault to be a folder on this computer.' : 'Codex was not found: set its path under Settings → Vault Claude → Codex executable.');
+      return null;
+    }
+    const token = {};
+    this.sessionToken = token;
+    this.session = new CodexSession({ cwd, codexPath, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT }, this.foregroundHandlers(token));
+    return this.session;
+  }
+
+  /** A new chat run by Codex: the controls Claude Code's settings drive are hidden, Codex using its own. */
+  startCodexChat(): void {
+    this.startNewChat();
+    this.engine = 'codex';
+    this.applyEngine();
+    this.focusInput();
+  }
+
+  /** The controls for the chat's engine: for a Codex chat, its name in the model menu, and no effort, mode, fast or phone buttons. */
+  private applyEngine(): void {
+    const codex = this.engine === 'codex';
+    for (const el of [this.effortMenu.el, this.modeMenu.el, this.fastButton, this.phoneButton]) if (codex) el.hide();
+    if (!codex) {
+      this.effortMenu.el.show();
+      this.modeMenu.el.show();
+      this.phoneButton.show();
+      this.updateFastButton();
+      return;
+    }
+    this.modelMenu.clear();
+    this.modelMenu.add('codex', this.currentModel && this.currentModel !== 'codex' ? `Codex (${this.currentModel})` : 'Codex (its own settings)', 'Codex');
+    this.modelMenu.value = 'codex';
   }
 
   /** Handlers for the chat on screen; `token` goes stale once the chat is replaced or closed. */
@@ -4961,6 +5014,7 @@ export class ChatView extends ItemView {
   // ---- Model and usage indicators ----------------------------------------
 
   private populateModelSelect(): void {
+    if (this.engine === 'codex') return this.applyEngine();
     const select = this.modelMenu;
     const models = this.plugin.models;
     select.clear();
@@ -5141,6 +5195,7 @@ export class ChatView extends ItemView {
   /** The fast-mode button: shown for a model that supports fast mode (or while it is on); lit while it runs. */
   private updateFastButton(): void {
     if (!this.fastButton) return;
+    if (this.engine === 'codex') return void this.fastButton.hide();
     const chosen = this.chosenModelInfo();
     this.fastButton.toggle(chosen?.supportsFastMode === true || this.fastMode);
     const blocked = this.fastMode && this.fastState && this.fastState.state !== 'on' ? fastModeBlock(this.fastState) : null;
@@ -5190,7 +5245,7 @@ export class ChatView extends ItemView {
     this.updateFastButton();
   }
 
-  private async loadModels(session: ClaudeSession): Promise<void> {
+  private async loadModels(session: ChatSession): Promise<void> {
     try {
       const models = await session.supportedModels();
       if (models && models.length > 0) this.plugin.setModels(models);
@@ -5345,7 +5400,7 @@ export class ChatView extends ItemView {
             this.chatId = message.session_id;
             if (this.scratch) this.plugin.setScratch(message.session_id);
             else {
-              this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf);
+              this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf, this.engine === 'codex' ? 'codex' : undefined);
               this.plugin.adoptProjectState(message.session_id, start.state);
             }
             this.projectLocal = {};
@@ -5365,7 +5420,7 @@ export class ChatView extends ItemView {
             this.modelsRequested = true;
             void this.loadModels(this.session);
           }
-          if (this.plugin.settings.phoneEveryChat && !this.scratch && !this.remoteUrl && !this.remoteRequested && this.session) {
+          if (this.plugin.settings.phoneEveryChat && this.engine !== 'codex' && !this.scratch && !this.remoteUrl && !this.remoteRequested && this.session) {
             this.remoteRequested = true;
             void this.setChatRemote(true);
           }

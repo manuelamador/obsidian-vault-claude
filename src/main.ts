@@ -360,6 +360,11 @@ export default class VaultClaudePlugin extends Plugin {
     this.registerObsidianProtocolHandler(PROTOCOL_ACTION, (params) => void this.openChatLink(params));
     this.addCommand({ id: 'open-chat', name: 'Open chat', callback: () => void this.activateView() });
     this.addCommand({
+      id: 'new-codex-chat',
+      name: 'New Codex chat',
+      callback: async () => (await this.activateView())?.startCodexChat(),
+    });
+    this.addCommand({
       id: 'new-chat',
       name: 'New chat',
       callback: async () => (await this.activateView())?.startNewChat(),
@@ -641,6 +646,8 @@ export default class VaultClaudePlugin extends Plugin {
   async pruneNoteLinks(): Promise<void> {
     const dir = this.vaultRoot();
     const ids = dir ? await sessionIds(dir) : null;
+    // Codex chats keep their sessions in Codex's own store: theirs are kept too.
+    if (ids) for (const chat of this.chats) if (chat.engine === 'codex') ids.add(chat.id);
     let changed = false;
     // Ticks, pins and unseen replies of chats whose sessions are gone: nothing left to show them on.
     if (ids) {
@@ -1262,11 +1269,12 @@ export default class VaultClaudePlugin extends Plugin {
    * Records a chat started in the panel; `copyOf`: it is the copy of a chat started outside the panel
    * made by sending a message there, which is then offered with it at once (see listHistory).
    */
-  recordChat(id: string, title: string, copyOf?: string): void {
+  /** `engine`: a chat run by Codex (see CodexSession). */
+  recordChat(id: string, title: string, copyOf?: string, engine?: 'codex'): void {
     // A chat new to the listing: what reads a recent one (see recentListing) lists again.
     this.listedAt = 0;
     if (this.isPanelChat(id)) return;
-    this.chats.unshift(copyOf ? { id, title, copyOf } : { id, title });
+    this.chats.unshift({ id, title, ...(copyOf ? { copyOf } : {}), ...(engine ? { engine } : {}) });
     const original = copyOf ? this.lastListing?.find((item) => item.id === copyOf) : undefined;
     if (original) (original.copies ??= []).unshift({ id, title, updatedAt: Date.now(), fromPanel: true, copied: true });
     for (const dropped of this.chats.slice(MAX_CHAT_RECORDS)) this.forgetChatData(dropped.id);

@@ -4,6 +4,7 @@ import type { EffortLevel, PermissionMode } from '@anthropic-ai/claude-agent-sdk
 import type VaultClaudePlugin from './main';
 import { detectClaudePath } from './session';
 import { prettyModel } from './usageDisplay';
+import { findCodex } from './codexSession';
 
 export type ToolDisplay = 'summary' | 'lines' | 'hidden';
 
@@ -52,6 +53,8 @@ export function denyRuleList(value: string): string[] {
 
 export interface VaultClaudeSettings {
   claudePath: string;
+  /** The Codex CLI for Codex chats (see CodexSession); empty finds it on PATH or where the ChatGPT app installs it. */
+  codexPath: string;
   model: string;
   /** Vault paths left out of the notes a chat lists, one pattern per line. */
   hiddenNotePaths: string;
@@ -122,6 +125,7 @@ export function extraPathEntries(value: string): string[] {
 
 export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   claudePath: '',
+  codexPath: '',
   model: '',
   hiddenNotePaths: '*attachments/*',
   scratchChat: true,
@@ -177,6 +181,20 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           .setValue(settings.claudePath)
           .onChange(async (value) => {
             settings.claudePath = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    const codex = findCodex('');
+    new Setting(containerEl)
+      .setName('Codex executable')
+      .setDesc(codex ? `For Codex chats (New Codex chat). Leave empty to use ${codex}. Codex runs with its own settings (~/.codex/config.toml).` : 'For Codex chats (New Codex chat). No Codex found; enter its full path, or install Codex.')
+      .addText((text) =>
+        text
+          .setPlaceholder(codex ?? '/path/to/codex')
+          .setValue(settings.codexPath)
+          .onChange(async (value) => {
+            settings.codexPath = value.trim();
             await this.plugin.saveSettings();
           }),
       );

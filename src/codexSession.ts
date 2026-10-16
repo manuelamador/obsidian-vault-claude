@@ -212,7 +212,7 @@ export class CodexSession {
         this.turnId = (params.turn as { id?: string } | undefined)?.id ?? this.turnId;
         break;
       case 'item/started':
-        for (const message of codexItemStarted(id, params.item as CodexItem)) this.handlers.onMessage(message as never);
+        for (const message of codexItemStarted(id, params.item as CodexItem, this.config.cwd)) this.handlers.onMessage(message as never);
         break;
       case 'item/completed':
         for (const message of codexItemCompleted(id, params.item as CodexItem)) this.handlers.onMessage(message as never);

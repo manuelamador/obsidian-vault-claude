@@ -12,6 +12,8 @@ export interface ChatRecord {
   title: string;
   /** For a copy of a chat started outside the panel, made by sending a message in it: that chat's id. */
   copyOf?: string;
+  /** A chat run by Codex rather than Claude Code (see CodexSession). */
+  engine?: 'codex';
 }
 
 export interface HistoryItem {
