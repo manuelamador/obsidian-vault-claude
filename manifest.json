@@ -1,9 +1,9 @@
 {
   "id": "vault-claude",
   "name": "Vault Claude",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "minAppVersion": "1.5.0",
-  "description": "Sidebar chat that runs the locally installed Claude Code in the vault through the Claude Agent SDK.",
+  "description": "Sidebar chat that runs the locally installed Claude Code, or Codex, in the vault.",
   "author": "Manuel Amador",
   "isDesktopOnly": true
 }
