@@ -9,7 +9,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
-import { findCodex, listCodexModels, type CodexModel } from './codexSession';
+import { findCodex, listCodexModels, readCodexLimits, type CodexLimits, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -138,6 +138,15 @@ interface PlanNote {
   plan: string;
 }
 
+/** A chat's context as last read: what its context meter shows (see contextFigures). */
+export interface ContextReading {
+  totalTokens: number;
+  maxTokens: number;
+  autoCompactThreshold?: number;
+  isAutoCompactEnabled?: boolean;
+  model?: string;
+}
+
 interface PluginData {
   settings?: Partial<VaultClaudeSettings>;
   chats?: ChatRecord[];
@@ -164,6 +173,8 @@ interface PluginData {
   chatProjects?: Record<string, ChatProjectState>;
   chatLinks?: Record<string, string[]>;
   chatSummaries?: Record<string, { text: string; at: number }>;
+  /** Each chat's last context reading (see setChatContext), shown when the chat is opened again. */
+  chatContext?: Record<string, ContextReading>;
   frontmatterGuidance?: Record<string, string>;
 }
 
@@ -192,6 +203,7 @@ export default class VaultClaudePlugin extends Plugin {
   chatLinks: Record<string, string[]> = {};
   /** Summaries asked for of chats, used when they are included in another (see summariseLinkedChat). */
   chatSummaries: Record<string, { text: string; at: number }> = {};
+  chatContext: Record<string, ContextReading> = {};
   /** The guidance last given to Suggest frontmatter updates, by folder ('' for the top of the vault). */
   frontmatterGuidance: Record<string, string> = {};
   /** The project notes, once found (see projectNotes). */
@@ -657,6 +669,7 @@ export default class VaultClaudePlugin extends Plugin {
       for (const id of Object.keys(this.chatProjects)) if (!ids.has(id)) changed = delete this.chatProjects[id] || changed;
       for (const id of Object.keys(this.chatSummaries)) if (!ids.has(id)) changed = delete this.chatSummaries[id] || changed;
       for (const id of Object.keys(this.chatMail)) if (!ids.has(id)) changed = delete this.chatMail[id] || changed;
+      for (const id of Object.keys(this.chatContext)) if (!ids.has(id)) changed = delete this.chatContext[id] || changed;
       changed = this.pruneChatLinks((id) => ids.has(id)) || changed;
       for (const record of [this.pickUp.hidden, this.pickUp.later ?? {}, this.pickUp.skipped ?? {}]) for (const id of Object.keys(record)) if (!ids.has(id)) changed = delete record[id] || changed;
       // Skips that have run out.
@@ -1287,6 +1300,26 @@ export default class VaultClaudePlugin extends Plugin {
       .finally(() => (this.codexModelsLoading = null));
   }
 
+  /** Codex's usage limits as last read (see readCodexLimits), and when; a reading at most every PLAN_CACHE_MS unless forced. */
+  codexLimits: CodexLimits | null = null;
+  codexLimitsFetchedAt = 0;
+  private codexLimitsLoading: Promise<void> | null = null;
+
+  loadCodexLimits(force = false): void {
+    if (this.codexLimitsLoading || (!force && Date.now() - this.codexLimitsFetchedAt < PLAN_CACHE_MS)) return;
+    const codexPath = findCodex(this.settings.codexPath);
+    const cwd = this.vaultRoot();
+    if (!codexPath || !cwd) return;
+    this.codexLimitsLoading = readCodexLimits(codexPath, cwd)
+      .then((limits) => {
+        this.codexLimits = limits;
+        this.codexLimitsFetchedAt = Date.now();
+        for (const view of this.chatViews()) view.codexLimitsChanged();
+      })
+      .catch((error: unknown) => log('reading codex limits failed', error))
+      .finally(() => (this.codexLimitsLoading = null));
+  }
+
   /** Whether chat `id` is run by Codex (see CodexSession). */
   isCodexChat(id: string): boolean {
     return this.chats.some((chat) => chat.id === id && chat.engine === 'codex');
@@ -1377,6 +1410,7 @@ export default class VaultClaudePlugin extends Plugin {
     delete this.chatProjects[id];
     delete this.chatSummaries[id];
     delete this.chatMail[id];
+    delete this.chatContext[id];
     this.pruneChatLinks((other) => other !== id);
     // Its notes no longer count toward any project's chats.
     this.membershipChanged();
@@ -3182,6 +3216,14 @@ export default class VaultClaudePlugin extends Plugin {
     setPlansDirectory(this.configured.plansDirectory, cwd);
   }
 
+  /** Chat `id`'s context as just read, kept for its meter when the chat is opened again. */
+  setChatContext(id: string, reading: ContextReading): void {
+    const kept = this.chatContext[id];
+    if (kept && kept.totalTokens === reading.totalTokens && kept.maxTokens === reading.maxTokens && kept.model === reading.model) return;
+    this.chatContext[id] = reading;
+    this.saveSoon();
+  }
+
   setPlanUsage(plan: SDKControlGetUsageResponse): void {
     this.planUsage = plan;
     this.planFetchedAt = Date.now();
@@ -3267,6 +3309,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.chatLinks = raw.chatLinks && typeof raw.chatLinks === 'object' ? raw.chatLinks : {};
     this.chatSummaries = raw.chatSummaries && typeof raw.chatSummaries === 'object' ? raw.chatSummaries : {};
     this.chatMail = raw.chatMail && typeof raw.chatMail === 'object' ? raw.chatMail : {};
+    this.chatContext = raw.chatContext && typeof raw.chatContext === 'object' ? raw.chatContext : {};
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
     this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};
     this.models = Array.isArray(raw.models) ? raw.models : [];
@@ -3322,6 +3365,7 @@ export default class VaultClaudePlugin extends Plugin {
       chatSummaries: this.chatSummaries,
       doneTabs: this.doneTabs,
       chatMail: this.chatMail,
+      chatContext: this.chatContext,
       frontmatterGuidance: this.frontmatterGuidance,
     };
   }

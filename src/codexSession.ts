@@ -118,7 +118,7 @@ export class CodexSession {
   /** The context meter's reading, in the shape Claude Code's gives it (see contextFigures); null before Codex reports one. */
   contextUsage(): SDKControlGetContextUsageResponse | null {
     if (!this.context) return null;
-    return { totalTokens: this.context.used, maxTokens: this.context.window, rawMaxTokens: this.context.window, isAutoCompactEnabled: false, model: this.model ?? undefined } as unknown as SDKControlGetContextUsageResponse;
+    return { totalTokens: this.context.used, maxTokens: this.context.window, rawMaxTokens: this.context.window, model: this.model ?? undefined } as unknown as SDKControlGetContextUsageResponse;
   }
   planUsage(): null {
     return null;
@@ -365,6 +365,26 @@ export async function listCodexModels(codexPath: string, cwd: string): Promise<C
         defaultEffort: model.defaultReasoningEffort ?? '',
         isDefault: model.isDefault === true,
       }));
+  });
+}
+
+/** Codex's usage limits, as `account/rateLimits/read` gives them: the plan, and each window's share used. */
+export interface CodexLimits {
+  planType: string | null;
+  windows: { usedPercent: number; windowDurationMins: number | null; resetsAt: number | null }[];
+}
+
+/** The usage limits of the account Codex is signed in with, read through a short-lived app-server. */
+export async function readCodexLimits(codexPath: string, cwd: string): Promise<CodexLimits | null> {
+  return withAppServer(codexPath, cwd, async (request) => {
+    type Window = { usedPercent?: number; windowDurationMins?: number | null; resetsAt?: number | null } | null | undefined;
+    const read = (await request('account/rateLimits/read', {})) as { rateLimits?: { planType?: string | null; primary?: Window; secondary?: Window } | null };
+    const limits = read.rateLimits;
+    if (!limits) return null;
+    const windows = [limits.primary, limits.secondary].flatMap((window) =>
+      window && typeof window.usedPercent === 'number' ? [{ usedPercent: window.usedPercent, windowDurationMins: window.windowDurationMins ?? null, resetsAt: window.resetsAt ?? null }] : [],
+    );
+    return { planType: limits.planType ?? null, windows };
   });
 }
 

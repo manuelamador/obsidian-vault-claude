@@ -116,6 +116,8 @@ import {
   timeLeft,
   turnStats,
   usageWindows,
+  codexWindows,
+  type UsageWindow,
 } from './usageDisplay';
 
 /** The most chats the back arrow goes through. */
@@ -2366,6 +2368,9 @@ export class ChatView extends ItemView {
     this.populateModelSelect();
     const working = entry.busy || entry.approvals.length > 0;
     this.renderHistory(chat, working, read.readMs);
+    this.showKnownContext(entry.chatId);
+    // Its process still runs: a fresh reading.
+    void this.refreshMeters();
     // The turn in progress, as drawn from the saved messages: the reply goes on in it.
     const unfinished = working ? this.unfinishedTurn : null;
     const drawnTools = new Map(this.tools);
@@ -2783,6 +2788,7 @@ export class ChatView extends ItemView {
           : `${item.title} · last active ${formatDate(item.updatedAt)}${item.copied ? ' · a copy of a chat from outside the panel' : ''}`,
     });
     this.renderHistory(chat, false, read.readMs);
+    this.showKnownContext(item.id);
     const afterDraw = performance.now();
     this.recordMentions();
     const end = this.messagesEl.createDiv({
@@ -4326,6 +4332,12 @@ export class ChatView extends ItemView {
   private applyEngine(): void {
     const codex = this.engine === 'codex';
     this.engineBadge.toggle(codex);
+    // Beside the meter, the usage of whichever runs the chat: Codex's limits, or Claude's plan.
+    if (codex) {
+      this.renderCodexLimits();
+      this.plugin.loadCodexLimits();
+    } else if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);
+    else this.planText.empty();
     for (const el of [this.modeMenu.el, this.fastButton, this.phoneButton]) if (codex) el.hide();
     if (!codex) {
       this.modeMenu.el.show();
@@ -5350,7 +5362,7 @@ export class ChatView extends ItemView {
   }
 
   private resetContextMeter(): void {
-    // Blank until a reply brings a reading, in a new chat and in one opened from history alike.
+    // Blank until a reading: a reply's, or one kept from before for a chat opened again (see showKnownContext).
     this.contextText.setText('');
     this.lastContext = null;
     this.contextFill.style.width = '0';
@@ -5359,6 +5371,12 @@ export class ChatView extends ItemView {
     this.compactMark.hide();
     this.meterEl.removeClass('is-near-compaction');
     this.meterEl.show();
+  }
+
+  /** The context meter of chat `id` as last read (see setChatContext), until a reply brings a new reading. */
+  private showKnownContext(id: string | null): void {
+    const known = id ? this.plugin.chatContext[id] : undefined;
+    if (known) this.renderContextUsage({ ...known, rawMaxTokens: known.maxTokens } as unknown as SDKControlGetContextUsageResponse);
   }
 
   private async refreshMeters(): Promise<void> {
@@ -5392,6 +5410,8 @@ export class ChatView extends ItemView {
     const figures = contextFigures(usage);
     if (!figures) return;
     this.lastContext = usage;
+    const id = this.chatId ?? this.resumeId;
+    if (id) this.plugin.setChatContext(id, { totalTokens: usage.totalTokens, maxTokens: figures.max, ...(usage.autoCompactThreshold ? { autoCompactThreshold: usage.autoCompactThreshold } : {}), ...(typeof usage.isAutoCompactEnabled === 'boolean' ? { isAutoCompactEnabled: usage.isAutoCompactEnabled } : {}), ...(usage.model ? { model: usage.model } : {}) });
     const { used, max, threshold } = figures;
     const pct = Math.min(100, (used / max) * 100);
     const shownPct = used > 0 && pct < 1 ? '<1' : String(Math.round(pct));
@@ -5407,7 +5427,24 @@ export class ChatView extends ItemView {
   }
 
   private renderPlanUsage(usage: SDKControlGetUsageResponse): void {
-    const windows = usageWindows(usage);
+    // A Codex chat shows Codex's limits instead (see renderCodexLimits).
+    if (this.engine === 'codex') return;
+    this.renderUsageWindows(usageWindows(usage));
+  }
+
+  /** Codex's usage limits beside the meter, in a Codex chat. */
+  private renderCodexLimits(): void {
+    if (this.engine !== 'codex') return;
+    const limits = this.plugin.codexLimits;
+    this.renderUsageWindows(limits ? codexWindows(limits) : []);
+  }
+
+  /** Codex's limits were read again (see VaultClaudePlugin.loadCodexLimits). */
+  codexLimitsChanged(): void {
+    this.renderCodexLimits();
+  }
+
+  private renderUsageWindows(windows: UsageWindow[]): void {
     this.planText.empty();
     windows.forEach((window, i) => {
       if (i > 0) this.planText.createSpan({ text: ' - ' });
@@ -5426,6 +5463,7 @@ export class ChatView extends ItemView {
       model: this.currentModel,
       plan: this.plugin.planUsage,
       planFetchedAt: this.plugin.planFetchedAt,
+      ...(this.engine === 'codex' ? { codex: { limits: this.plugin.codexLimits, fetchedAt: this.plugin.codexLimitsFetchedAt } } : {}),
     });
   }
 
@@ -5606,6 +5644,8 @@ export class ChatView extends ItemView {
         break;
       case 'result': {
         if (this.engine === 'codex' && this.chatId) this.plugin.touchCodexChat(this.chatId);
+        // Codex's limits read again after each of its replies, as Claude's plan usage is.
+        if (this.engine === 'codex') this.plugin.loadCodexLimits(true);
         this.setFastState(message.fast_mode_state, message.fast_mode_disabled_reason);
         for (const id of message.user_message_uuids ?? []) this.markDelivered(id);
         const turn = this.draw.turn;

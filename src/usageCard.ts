@@ -1,5 +1,5 @@
 import type { SDKControlGetContextUsageResponse, SDKControlGetUsageResponse } from '@anthropic-ai/claude-agent-sdk';
-import { contextFigures, planExtras, prettyModel, resetTime, timeLeft, usageWindows, type UsageLevel } from './usageDisplay';
+import { codexWindows, contextFigures, planExtras, prettyModel, resetTime, timeLeft, usageWindows, type UsageLevel, type UsageWindow } from './usageDisplay';
 
 /** What the hover card shows: the chat's last context reading and model, and the last plan-usage reading. */
 export interface UsageCardData {
@@ -7,6 +7,8 @@ export interface UsageCardData {
   model: string | null;
   plan: SDKControlGetUsageResponse | null;
   planFetchedAt: number;
+  /** In a Codex chat, Codex's usage limits, shown in place of Claude's plan usage; undefined in a Claude chat. */
+  codex?: { limits: { planType: string | null; windows: { usedPercent: number; windowDurationMins: number | null; resetsAt: number | null }[] } | null; fetchedAt: number };
 }
 
 /** The hover card: context, each plan limit with its bar and reset, this week's split, extra usage. */
@@ -23,18 +25,29 @@ export function renderUsageCard(card: HTMLElement, data: UsageCardData): void {
   if (figures) {
     const { used, max, threshold } = figures;
     const pct = Math.min(100, (used / max) * 100);
-    const compaction = threshold !== null ? `auto-compacts at ${Math.round(threshold).toLocaleString()}` : 'auto-compact is off';
+    // Unknown (a Codex chat's reading says nothing of it): left out.
+    const compaction = threshold !== null ? ` · auto-compacts at ${Math.round(threshold).toLocaleString()}` : data.context?.isAutoCompactEnabled === false ? ' · auto-compact is off' : '';
     usageRow(contextSection, {
       label: data.model ? prettyModel(data.model) : 'This chat',
       pct,
       value: `${used > 0 && pct < 1 ? '<1' : Math.round(pct)}%`,
-      detail: `${used.toLocaleString()} of ${max.toLocaleString()} tokens · ${compaction}`,
+      detail: `${used.toLocaleString()} of ${max.toLocaleString()} tokens${compaction}`,
       level: threshold !== null && used >= threshold * 0.9 ? 'warning' : 'normal',
     });
   } else {
     contextSection.createDiv({ cls: 'vc-usage-note', text: 'Shown after the first reply.' });
   }
 
+  if (data.codex) {
+    const { limits, fetchedAt } = data.codex;
+    const type = limits?.planType;
+    const codexSection = section(type ? `Codex usage · ${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Codex usage');
+    const windows = limits ? codexWindows(limits) : [];
+    if (windows.length === 0) codexSection.createDiv({ cls: 'vc-usage-note', text: limits ? 'No limits reported for this sign-in.' : 'Not read yet.' });
+    windowRows(codexSection, windows);
+    if (limits) codexSection.createDiv({ cls: 'vc-usage-note', text: `As of ${new Date(fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}; read again after each reply.` });
+    return;
+  }
   const plan = data.plan;
   const kind = plan?.subscription_type;
   const planSection = section(kind ? `Plan usage · ${kind.charAt(0).toUpperCase()}${kind.slice(1)}` : 'Plan usage');
@@ -42,20 +55,25 @@ export function renderUsageCard(card: HTMLElement, data: UsageCardData): void {
   if (windows.length === 0) {
     planSection.createDiv({ cls: 'vc-usage-note', text: plan ? 'Plan limits do not apply to this sign-in.' : 'Not read yet.' });
   }
+  windowRows(planSection, windows);
+  if (plan) {
+    for (const line of planExtras(plan)) planSection.createDiv({ cls: 'vc-usage-note', text: line });
+    const asOf = new Date(data.planFetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    planSection.createDiv({ cls: 'vc-usage-note', text: `As of ${asOf}; read again after each reply.` });
+  }
+}
+
+/** A row for each usage window: its share used, with when it resets. */
+function windowRows(parent: HTMLElement, windows: UsageWindow[]): void {
   for (const window of windows) {
     const left = window.resetsAt ? timeLeft(window.resetsAt - Date.now()) : '';
-    usageRow(planSection, {
+    usageRow(parent, {
       label: window.label,
       pct: window.percent,
       value: `${window.percent}%`,
       detail: window.resetsAt ? `resets ${resetTime(window.resetsAt)}${left ? ` · ${left} left` : ''}` : '',
       level: window.level,
     });
-  }
-  if (plan) {
-    for (const line of planExtras(plan)) planSection.createDiv({ cls: 'vc-usage-note', text: line });
-    const asOf = new Date(data.planFetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    planSection.createDiv({ cls: 'vc-usage-note', text: `As of ${asOf}; read again after each reply.` });
   }
 }
 

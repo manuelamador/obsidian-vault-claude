@@ -189,3 +189,14 @@ export function turnStats(result: SDKResultMessage): { text: string; title: stri
     ].join('\n'),
   };
 }
+
+/** Codex's usage windows (see CodexLimits) as the meter and the card show them: `Session (5 hours)`, `This week`, or the window's length. */
+export function codexWindows(limits: { windows: { usedPercent: number; windowDurationMins: number | null; resetsAt: number | null }[] }): UsageWindow[] {
+  return limits.windows.map((window) => {
+    const mins = window.windowDurationMins;
+    const label =
+      mins === 300 ? 'Session (5 hours)' : mins === 10080 ? 'This week' : mins && mins % 1440 === 0 ? `${mins / 1440} days` : mins ? `${Math.round(mins / 60)} hours` : 'Limit';
+    const percent = Math.round(window.usedPercent);
+    return { label, percent, resetsAt: window.resetsAt ? window.resetsAt * 1000 : null, level: percent >= 95 ? 'critical' : percent >= 80 ? 'warning' : 'normal' };
+  });
+}
