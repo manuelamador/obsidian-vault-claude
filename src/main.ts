@@ -144,6 +144,15 @@ interface PlanNote {
   plan: string;
 }
 
+/** A chat run to report back, finished: its final answer, for the chat it reports to (see ChatView.renderReports). */
+export interface ChatReport {
+  child: string;
+  title: string;
+  text: string;
+  at: number;
+  failed?: boolean;
+}
+
 /** A chat's context as last read: what its context meter shows (see contextFigures). */
 export interface ContextReading {
   totalTokens: number;
@@ -184,6 +193,10 @@ interface PluginData {
   frontmatterGuidance?: Record<string, string>;
   /** Messages you sent, in any chat, newest first (see recordPrompt), for ↑ in the input. */
   promptHistory?: string[];
+  /** Chats run to report back (see ChatView.runInNewChat): each one's chat to report to. */
+  reportTo?: Record<string, string>;
+  /** Reports come back from such chats, by the chat they report to, until dismissed. */
+  chatReports?: Record<string, ChatReport[]>;
 }
 
 export default class VaultClaudePlugin extends Plugin {
@@ -537,6 +550,11 @@ export default class VaultClaudePlugin extends Plugin {
       id: 'stop',
       name: 'Stop Claude',
       callback: () => (this.app.workspace.getActiveViewOfType(ChatView) ?? this.firstChatView())?.stopTurn(),
+    });
+    this.addCommand({
+      id: 'run-in-new-chat',
+      name: 'Run this message in a new chat, report back',
+      callback: async () => (this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView()))?.runInNewChat(),
     });
     this.addCommand({
       id: 'show-background-tasks',
@@ -1430,6 +1448,44 @@ export default class VaultClaudePlugin extends Plugin {
     this.saveSoon();
   }
 
+  /** Chats run to report back (see ChatView.runInNewChat), each with the chat it reports to. */
+  reportTo: Record<string, string> = {};
+  /** The reports come back, by the chat they report to (see ChatReport). */
+  chatReports: Record<string, ChatReport[]> = {};
+
+  /** Chat `child` was started to report back to chat `parent`: linked to it, and its first answer goes there. */
+  expectReport(child: string, parent: string): void {
+    this.reportTo[child] = parent;
+    this.linkChats(parent, [child]);
+    this.saveSoon();
+  }
+
+  /** Whether chat `id` was run to report back and has not yet. */
+  awaitsReport(id: string): boolean {
+    return id in this.reportTo;
+  }
+
+  /** Chat `child` finished its first reply (`text`): kept as a report for the chat it reports to, whose panels show it. */
+  reportDone(child: string, text: string, failed: boolean): void {
+    const parent = this.reportTo[child];
+    if (!parent) return;
+    delete this.reportTo[child];
+    const report: ChatReport = { child, title: this.chatTitleOf(child), text: text.trim() || '(no answer)', at: Date.now(), ...(failed ? { failed: true } : {}) };
+    this.chatReports[parent] = [...(this.chatReports[parent] ?? []).filter((each) => each.child !== child), report];
+    this.saveSoon();
+    for (const view of this.chatViews()) view.reportsChanged(parent);
+    new Notice(`“${report.title}” ${failed ? 'stopped with an error' : 'is done'}: its report is in “${this.chatTitleOf(parent)}”.`);
+  }
+
+  /** The report of chat `child` in chat `parent` dismissed. */
+  dismissReport(parent: string, child: string): void {
+    const left = (this.chatReports[parent] ?? []).filter((each) => each.child !== child);
+    if (left.length > 0) this.chatReports[parent] = left;
+    else delete this.chatReports[parent];
+    this.saveSoon();
+    for (const view of this.chatViews()) view.reportsChanged(parent);
+  }
+
   /** Clean-ups to run later, by timer (see later). */
   private readonly cleanups = new Map<number, () => void>();
 
@@ -1554,6 +1610,8 @@ export default class VaultClaudePlugin extends Plugin {
     delete this.chatSummaries[id];
     delete this.chatMail[id];
     delete this.chatContext[id];
+    delete this.chatReports[id];
+    delete this.reportTo[id];
     this.pruneChatLinks((other) => other !== id);
     // Its notes no longer count toward any project's chats.
     this.membershipChanged();
@@ -3527,6 +3585,8 @@ export default class VaultClaudePlugin extends Plugin {
     this.chatMail = raw.chatMail && typeof raw.chatMail === 'object' ? raw.chatMail : {};
     this.promptHistory = this.settings.rememberPrompts && Array.isArray(raw.promptHistory) ? raw.promptHistory.filter((each): each is string => typeof each === 'string' && each.length <= PROMPT_HISTORY_CHARS).slice(0, PROMPT_HISTORY) : [];
     this.chatContext = raw.chatContext && typeof raw.chatContext === 'object' ? raw.chatContext : {};
+    this.reportTo = raw.reportTo && typeof raw.reportTo === 'object' ? raw.reportTo : {};
+    this.chatReports = raw.chatReports && typeof raw.chatReports === 'object' ? raw.chatReports : {};
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
     this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};
     this.models = Array.isArray(raw.models) ? raw.models : [];
@@ -3585,6 +3645,8 @@ export default class VaultClaudePlugin extends Plugin {
       chatContext: this.chatContext,
       frontmatterGuidance: this.frontmatterGuidance,
       promptHistory: this.promptHistory,
+      reportTo: this.reportTo,
+      chatReports: this.chatReports,
     };
   }
 }

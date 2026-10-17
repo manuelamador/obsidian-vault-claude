@@ -343,6 +343,8 @@ interface BackgroundChat {
   codex?: { model: string | undefined; effort: string | undefined };
   /** It is the scratch chat (see setScratch). */
   scratch?: boolean;
+  /** The chat it reports back to, until its id is known (see runInNewChat). */
+  reportTo?: string;
   notice: Notice | null;
   /** Set while the chat is on the phone; such a chat is kept running when idle. */
   remoteUrl: string | null;
@@ -1171,6 +1173,12 @@ export class ChatView extends ItemView {
     this.registerDomEvent(draftButton, 'click', () => void this.editDraft());
     const sendButton = actions.createEl('button', { text: 'Send', cls: 'mod-cta' });
     this.registerDomEvent(sendButton, 'click', () => void this.send());
+    this.registerDomEvent(sendButton, 'contextmenu', (evt) => {
+      evt.preventDefault();
+      const menu = new Menu();
+      menu.addItem((item) => item.setTitle('Run in a new chat, report back here').setIcon('split').onClick(() => void this.runInNewChat()));
+      menu.showAtMouseEvent(evt);
+    });
 
     // The main area's tab in front when the panel opens.
     this.followFront(this.app.workspace.getMostRecentLeaf());
@@ -1349,6 +1357,8 @@ export class ChatView extends ItemView {
     this.unseen = null;
     this.lastSent = null;
     this.historyAt = null;
+    this.reportTo = null;
+    this.lastReplyText = '';
     this.findBar.close();
     this.sessionToken = null;
     this.closeSession(this.session);
@@ -2111,6 +2121,7 @@ export class ChatView extends ItemView {
       fastMode: this.fastMode,
       ...(this.engine === 'codex' ? { codex: { model: this.codexModel, effort: this.codexEffort } } : {}),
       ...(this.scratch ? { scratch: true } : {}),
+      ...(this.reportTo ? { reportTo: this.reportTo } : {}),
       notice: null,
       tasks: this.tasks,
       taskInfo: this.taskInfo,
@@ -2175,6 +2186,8 @@ export class ChatView extends ItemView {
           // The scratch chat, gone to the background before it started: still the scratch chat.
           if (entry.scratch) this.plugin.setScratch(message.session_id, engine);
           else this.plugin.recordChat(message.session_id, entry.title ?? 'Untitled chat', undefined, engine);
+          if (entry.reportTo) this.plugin.expectReport(message.session_id, entry.reportTo);
+          entry.reportTo = undefined;
           if (entry.start) this.adoptStart(message.session_id, entry.start);
           entry.start = null;
         } else if (message.type === 'stream_event') {
@@ -2198,6 +2211,8 @@ export class ChatView extends ItemView {
         } else if (message.type === 'user' && typeof message.message.content !== 'string') {
           this.linkBackgroundEdits(entry, message.message.content, message.tool_use_result);
         } else if (message.type === 'result') {
+          // A chat run to report back: its answer goes to the chat it reports to (see runInNewChat).
+          if (entry.chatId && this.plugin.awaitsReport(entry.chatId)) this.plugin.reportDone(entry.chatId, entry.lastText, message.is_error);
           entry.busy = false;
           entry.turnPrompts = [];
           for (const id of message.user_message_uuids ?? []) entry.pendingIds.delete(id);
@@ -2459,6 +2474,7 @@ export class ChatView extends ItemView {
     this.populateModelSelect();
     const working = entry.busy || entry.approvals.length > 0;
     this.renderHistory(chat, working, read.readMs, read.rest);
+    this.renderReports();
     this.showKnownContext(entry.chatId);
     // The turn in progress, as drawn from the saved messages: the reply goes on in it.
     const unfinished = working ? this.unfinishedTurn : null;
@@ -2889,6 +2905,7 @@ export class ChatView extends ItemView {
           : `${item.title} · last active ${formatDate(item.updatedAt)}${item.copied ? ' · a copy of a chat from outside the panel' : ''}`,
     });
     this.renderHistory(chat, false, read.readMs, read.rest);
+    this.renderReports();
     this.showKnownContext(item.id);
     const afterDraw = performance.now();
     this.recordMentions();
@@ -3861,6 +3878,94 @@ export class ChatView extends ItemView {
   }
 
   // ---- Input -------------------------------------------------------------
+
+  /** The chat this one reports back to, until its id is known (see runInNewChat). */
+  private reportTo: string | null = null;
+  /** The text of the latest reply drawn live: a chat run to report back reports it. */
+  private lastReplyText = '';
+
+  /**
+   * Runs the message in the input in a new chat, in this panel's background, which reports its
+   * answer back here once it has one (see VaultClaudePlugin.reportDone); you stay in this chat. The
+   * new chat runs as this one does (Claude Code or Codex, its model), with its attached note.
+   */
+  async runInNewChat(): Promise<void> {
+    const text = this.inputEl.value.trim();
+    const parent = this.chatId ?? this.resumeId;
+    if (!text) {
+      new Notice('Write the message to run in a new chat first.');
+      return;
+    }
+    if (!parent || this.scratch) {
+      new Notice(this.scratch ? 'The scratch chat cannot be reported back to.' : 'Send this chat a message first: a report comes back to a chat that has started.');
+      return;
+    }
+    const title = this.chatName ?? 'Chat';
+    const engine = this.engine;
+    const codex = { model: this.codexModel, effort: this.codexEffort };
+    const { modelOverride, effortOverride } = this;
+    const note = this.attachedNote;
+    this.inputEl.value = '';
+    this.saveDraft();
+    // A new chat here, sent the message, then this chat again: the new one goes on in the background.
+    this.startNewChat();
+    if (engine === 'codex') {
+      this.engine = 'codex';
+      this.codexModel = codex.model;
+      this.codexEffort = codex.effort;
+      this.applyEngine();
+    } else if (this.engine === 'codex') {
+      this.engine = 'claude';
+      this.applyEngine();
+    }
+    this.modelOverride = modelOverride;
+    this.effortOverride = effortOverride;
+    this.attachedNote = note;
+    this.reportTo = parent;
+    this.inputEl.value = text;
+    if (!(await this.send())) {
+      // Not sent: the message goes back to the chat it was written in.
+      this.reportTo = null;
+      await this.openChatId(parent, title);
+      this.inputEl.value = text;
+      this.inputEdited();
+      return;
+    }
+    await this.openChatId(parent, title);
+    new Notice('Running in a new chat: its answer will come back here.');
+  }
+
+  /** Reports for chat `id` changed (see VaultClaudePlugin.reportDone): shown again if it is on screen here. */
+  reportsChanged(id: string): void {
+    if ((this.chatId ?? this.resumeId) === id) this.renderReports();
+  }
+
+  /** The reports come back to the chat on screen, as cards at the end of its messages: to add to your message, open, or dismiss. */
+  private renderReports(): void {
+    this.messagesEl.querySelector('.vc-reports')?.remove();
+    const id = this.chatId ?? this.resumeId;
+    const reports = id ? (this.plugin.chatReports[id] ?? []) : [];
+    if (!id || reports.length === 0) return;
+    const box = this.messagesEl.createDiv({ cls: 'vc-reports', attr: { 'data-no-find': '' } });
+    for (const report of reports) {
+      const card = box.createDiv({ cls: `vc-report${report.failed ? ' is-failed' : ''}` });
+      const head = card.createDiv({ cls: 'vc-report-head' });
+      setIcon(head.createSpan({ cls: 'vc-report-icon' }), report.failed ? 'alert-circle' : 'corner-down-left');
+      head.createSpan({ text: `${report.failed ? 'Stopped with an error' : 'Report'} from “${report.title}”` });
+      head.createSpan({ cls: 'vc-report-when', text: formatDate(report.at) });
+      const body = card.createDiv({ cls: 'vc-report-text vc-markdown' });
+      void MarkdownRenderer.render(this.app, neutralizeRemoteMedia(report.text), body, '', this.chatComponent).then(() => sweepRemoteMedia(body));
+      const buttons = card.createDiv({ cls: 'vc-report-buttons' });
+      const button = (label: string, run: () => void) => buttons.createEl('button', { text: label }).addEventListener('click', run);
+      button('Add to my message', () => {
+        const quoted = report.text.split('\n').map((line) => (line ? `> ${line}` : '>')).join('\n');
+        this.addToInput(`From ${this.plugin.chatMarkdownLink(report.child)}:\n\n${quoted}`, 'Report added to your message');
+      });
+      button('Open chat', () => void this.openChatId(report.child, report.title));
+      button('Dismiss', () => this.plugin.dismissReport(id, report.child));
+    }
+    this.scrollToBottom(true);
+  }
 
   /** Where ↑ has gone back to in the messages you sent (see stepHistory); null when not stepping through them. */
   private historyAt: number | null = null;
@@ -5882,6 +5987,8 @@ export class ChatView extends ItemView {
             if (this.scratch) this.plugin.setScratch(message.session_id, this.engine === 'codex' ? 'codex' : undefined);
             else {
               this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf, this.engine === 'codex' ? 'codex' : undefined);
+              if (this.reportTo) this.plugin.expectReport(message.session_id, this.reportTo);
+              this.reportTo = null;
               this.plugin.adoptProjectState(message.session_id, start.state);
             }
             this.projectLocal = {};
@@ -5966,6 +6073,8 @@ export class ChatView extends ItemView {
           break;
         }
         let textIndex = 0;
+        const said = message.message.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n').trim();
+        if (said) this.lastReplyText = said;
         for (const block of message.message.content) {
           if (block.type === 'text') {
             if (!block.text.trim()) continue;
@@ -5999,6 +6108,8 @@ export class ChatView extends ItemView {
         break;
       case 'result': {
         if (this.engine === 'codex' && this.chatId) this.plugin.touchCodexChat(this.chatId);
+        // A chat run to report back, its answer seen here: it goes to the chat it reports to all the same.
+        if (this.chatId && this.plugin.awaitsReport(this.chatId)) this.plugin.reportDone(this.chatId, this.lastReplyText, message.is_error);
         // Codex's limits read again after each of its replies, as Claude's plan usage is, by its own app-server.
         if (this.session instanceof CodexSession) {
           void this.session.readLimits().then(

@@ -232,6 +232,11 @@ async function main(): Promise<void> {
     scratchSession: () => null,
     scratchRunner: () => ({ engine: 'claude' as const, model: 'sonnet' }),
     memoBoxWanted: new Map<string, boolean>(),
+    chatReports: {},
+    expectReport: () => undefined,
+    awaitsReport: () => false,
+    reportDone: () => undefined,
+    dismissReport: () => undefined,
     promptHistory: ['from another chat', 'older still'],
     recordPrompt: () => undefined,
     later: (run: () => void, ms: number) => {
@@ -4473,6 +4478,26 @@ async function main(): Promise<void> {
       const failOk = restored.input === 'see @[[New.md]]' && JSON.stringify(restored.attachments) === '["paper.pdf"]' && restored.bubbles === 0 && restored.sent === 0 && strayed === 0;
       console.log(`unsent message: ${JSON.stringify(restored)}; image for another chat attached ${strayed} -> ${failOk}`);
       if (!failOk) process.exitCode = 1;
+    }
+
+    {
+      // A report come back from a chat run in a new chat: a card at the end of the chat it reports to, to add to the message.
+      const reportView = view as unknown as { chatId: string | null; reportsChanged(id: string): void; inputEl: HTMLTextAreaElement };
+      view.newChat();
+      (plugin as unknown as { chatReports: Record<string, unknown[]> }).chatReports = { p1: [{ child: 'c1', title: 'Child chat', text: 'The answer.', at: 0 }] };
+      reportView.chatId = 'p1';
+      reportView.reportsChanged('p1');
+      const card = root.querySelector('.vc-report');
+      const named = card?.querySelector('.vc-report-head')?.textContent?.includes('Report from “Child chat”') === true;
+      (([...(card?.querySelectorAll('button') ?? [])] as HTMLElement[]).find((el) => el.textContent === 'Add to my message'))?.click();
+      const added = reportView.inputEl.value.includes('> The answer.');
+      (plugin as unknown as { chatReports: Record<string, unknown[]> }).chatReports = {};
+      reportView.inputEl.value = '';
+      reportView.chatId = null;
+      view.newChat();
+      const reportOk = named && added;
+      console.log(`report card shown and added to the message: ${named}, ${added} -> ${reportOk}`);
+      if (!reportOk) process.exitCode = 1;
     }
 
     {
