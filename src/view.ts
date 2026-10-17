@@ -6153,7 +6153,7 @@ export class ChatView extends ItemView {
       },
       saveThread: (messages) => void this.replyToNewNote(threadMarkdown(messages), messages[0]?.subject || 'Email thread'),
       // Claude copies what was downloaded from Gmail into the vault: the plugin itself reads nothing in ~/Downloads.
-      bringIn: (message) => {
+      bringIn: (message, since) => {
         const files = (message.attachments ?? []).map((each) => `“${each.name}”`).join(', ');
         const folder = normalizePath([this.plugin.settings.savedChatsFolder.trim(), 'attachments'].filter(Boolean).join('/'));
         const who = message.sender.replace(/\s*<[^>]*>/, '');
@@ -6161,7 +6161,7 @@ export class ChatView extends ItemView {
         const downloads = Platform.isWin ? '%USERPROFILE%\\Downloads' : '~/Downloads';
         const unzip = Platform.isWin ? 'unzipping a zip there (with tar -xf, or PowerShell\'s Expand-Archive if tar cannot)' : 'unzipping a zip there';
         this.sendOrDraft(
-          `Bring the attachments of the email “${message.subject || '(no subject)'}” from ${who} into the vault: ${files}. I downloaded them from Gmail into my Downloads folder (${downloads}), one by one or as one zip of them all (Gmail names it after the subject or the first file); a browser may have added a number such as “ (1)” to a name. Find the newest of them there, and copy them into the vault folder “${folder}”, ${unzip}; keep the names, and never overwrite a file: add a number instead. Leave the Downloads folder as it is. If a note saved from this email is in the vault, add a wikilink to each file in it, beside its attachment's name. Then list where each file went, as wikilinks. If they are not in the Downloads folder, say so, and that the card's links download them.`,
+          `Bring the attachments of the email “${message.subject || '(no subject)'}” from ${who} into the vault: ${files}. I downloaded them from Gmail into my Downloads folder (${downloads}), one by one or as one zip of them all (Gmail names it after the subject or the first file); a browser may have added a number such as “ (1)” to a name, as it does when an older file has it.${since ? ` I started the download at ${new Date(since).toLocaleString()}: use only files saved at or after then, never an older copy of the same name.` : ' Take the newest of them, never an older copy of the same name.'} Find them there, and copy them into the vault folder “${folder}”, ${unzip}; keep the names, and never overwrite a file: add a number instead. Leave the Downloads folder as it is. If a note saved from this email is in the vault, add a wikilink to each file in it, beside its attachment's name. Then list where each file went, as wikilinks. If they are not in the Downloads folder, say so, and that the card's links download them.`,
           'Request added below your draft: send it when ready',
         );
       },
