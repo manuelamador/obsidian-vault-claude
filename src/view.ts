@@ -1952,6 +1952,11 @@ export class ChatView extends ItemView {
   }
 
   /** Whether chat `id` is on screen here or running in this panel's background. */
+  /** Whether chat `id` is the one on screen here (by either id: one opened from the history has no id of its own until its first message). */
+  showsChat(id: string): boolean {
+    return (this.chatId ?? this.resumeId) === id;
+  }
+
   holdsChat(id: string): boolean {
     return this.chatId === id || [...this.background].some((entry) => entry.chatId === id);
   }

@@ -2964,7 +2964,9 @@ export default class VaultClaudePlugin extends Plugin {
     const listed = this.lastListing?.find((item) => item.id === id);
     const opened = await view?.openChat(listed ? { ...listed, title } : { id, title, updatedAt: Date.now(), fromPanel: this.isPanelChat(id) });
     if (!opened) return null;
-    return this.chatViews().find((each) => each.holdsChat(id)) ?? view ?? null;
+    // The panel showing it once opened; none when another chat was opened meanwhile, so that what
+    // was meant for it (a quote, a passage) goes nowhere rather than into that other chat.
+    return this.chatViews().find((each) => each.showsChat(id)) ?? null;
   }
 
   /**
