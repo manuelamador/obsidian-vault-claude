@@ -3585,3 +3585,10 @@ body:has(.vc-pick-up) .popover.hover-popover {
   color: var(--background-primary);
   font-weight: var(--font-semibold);
 }
+
+/* A Codex chat's mark after its label on the Connections map (see MapDrawing.label). */
+.vc-map-engine {
+  font-size: 0.8em;
+  font-weight: var(--font-semibold);
+  fill: var(--text-normal);
+}

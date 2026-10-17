@@ -10,7 +10,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
-import { findCodex, listCodexModels, readCodexLimits, readCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
+import { findCodex, listCodexModels, readCodexLimits, readCodexThread, archiveCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -164,7 +164,7 @@ interface PluginData {
   drafts?: Record<string, ChatDraft>;
   planNotes?: Record<string, PlanNote>;
   unseen?: Record<string, 'done' | 'error'>;
-  scratch?: { id: string; usedAt: number };
+  scratch?: { id: string; usedAt: number; engine?: 'codex' };
   sideSessions?: string[];
   pickUp?: PickUpState;
   /** The panels' tabs for chats that finished in their background (see DoneTabs), shown again at the next start. */
@@ -320,7 +320,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Chats that finished while not on screen, and how, until they are shown. */
   unseen: Record<string, 'done' | 'error'> = {};
   /** The scratch chat: one chat that starts over when it has been idle, kept out of the history list. */
-  scratch: { id: string; usedAt: number } | null = null;
+  scratch: { id: string; usedAt: number; engine?: 'codex' } | null = null;
   /** Side chats' sessions not deleted yet: those open now, and any left when Obsidian last quit. */
   sideSessions: string[] = [];
   /** A save waiting to cover a burst of changes (see saveSoon). */
@@ -992,8 +992,8 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** The session a panel started for the scratch chat; it is not added to the history list. */
-  setScratch(id: string): void {
-    this.scratch = { id, usedAt: Date.now() };
+  setScratch(id: string, engine?: 'codex'): void {
+    this.scratch = { id, usedAt: Date.now(), ...(engine ? { engine } : {}) };
     void this.saveSettings();
   }
 
@@ -1128,7 +1128,7 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** Forgets which chat is the scratch chat; returns its session id, if it had one. What it leaves goes when it is deleted (see deleteScratch). */
-  private forgetScratch(): string | undefined {
+  forgetScratch(): string | undefined {
     const old = this.scratch?.id;
     this.scratch = null;
     void this.saveSettings();
@@ -1136,9 +1136,13 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** Deletes a scratch chat let go of (see deleteWhenEnded), and then what it left: ticks, draft, mark. */
-  private async deleteScratch(id: string): Promise<void> {
+  private async deleteScratch(id: string, codex: boolean): Promise<void> {
     try {
-      await this.deleteWhenEnded(id);
+      // A Codex scratch chat's thread is in Codex's store: archived there, out of its history.
+      if (codex) {
+        const launch = this.codexLaunch();
+        if (typeof launch !== 'string') await archiveCodexThread(launch, id);
+      } else await this.deleteWhenEnded(id);
       this.forgetChatData(id);
       this.saveSoon();
     } catch (error) {
@@ -1173,6 +1177,7 @@ export default class VaultClaudePlugin extends Plugin {
    * (as an ordinary chat, when it shows it).
    */
   async clearScratch(except?: ChatView): Promise<void> {
+    const codex = this.scratch?.engine === 'codex';
     const old = this.forgetScratch();
     if (!old) return;
     const holder = this.chatHolder(old, except);
@@ -1182,7 +1187,7 @@ export default class VaultClaudePlugin extends Plugin {
       return;
     }
     except?.closeBackgroundChat(old);
-    await this.deleteScratch(old);
+    await this.deleteScratch(old, codex);
   }
 
   /**
@@ -1197,12 +1202,13 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Clears the scratch chat: a panel showing it starts a new one in its place, and it stops wherever it still runs. */
   async clearScratchChat(): Promise<void> {
+    const codex = this.scratch?.engine === 'codex';
     const old = this.forgetScratch();
     for (const view of this.chatViews()) {
       if (view.isScratchChat()) view.startScratchOver();
       if (old) view.closeBackgroundChat(old);
     }
-    if (old) await this.deleteScratch(old);
+    if (old) await this.deleteScratch(old, codex);
     new Notice('Scratch chat cleared.');
   }
 
@@ -1363,7 +1369,16 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Whether chat `id` is run by Codex (see CodexSession). */
   isCodexChat(id: string): boolean {
-    return this.chats.some((chat) => chat.id === id && chat.engine === 'codex');
+    return (this.scratch?.id === id && this.scratch.engine === 'codex') || this.chats.some((chat) => chat.id === id && chat.engine === 'codex');
+  }
+
+  /** What runs a new scratch chat, and on which model (see Scratch chat model); undefined for that one's default. */
+  scratchRunner(): { engine: 'claude' | 'codex'; model: string | undefined } {
+    const chosen = /^(claude|codex):(.*)$/.exec(this.settings.scratchModel);
+    if (chosen?.[1] === 'codex') return { engine: 'codex', model: chosen[2] || this.settings.codexModel || undefined };
+    if (chosen?.[1] === 'claude') return { engine: 'claude', model: chosen[2] || chatModel(this.settings.model) };
+    if (this.settings.smallJobEngine === 'codex') return { engine: 'codex', model: this.settings.smallJobCodexModel || this.settings.codexModel || undefined };
+    return { engine: 'claude', model: this.smallJobModel() };
   }
 
   /** Codex chat `id` was active now: the history sorts it by this (see ChatRecord.at). */
@@ -1836,6 +1851,7 @@ export default class VaultClaudePlugin extends Plugin {
     return {
       mentionChat: (id: string) => void panel().then((target) => target?.mentionChat(id)),
       titleOf: (id: string) => this.chatTitleOf(id),
+      isCodex: (id: string) => this.isCodexChat(id),
       openNote: (path: string, newTab: boolean) => void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false),
       previewNote: (path: string, event: MouseEvent | KeyboardEvent, target: Element, parent: unknown) =>
         this.app.workspace.trigger('hover-link', { event, source: VIEW_TYPE, hoverParent: parent, targetEl: target, linktext: path }),
@@ -3340,7 +3356,7 @@ export default class VaultClaudePlugin extends Plugin {
     // Up to 0.21.1 each record also held when it was made and last used, which nothing read.
     this.chats = Array.isArray(raw.chats) ? raw.chats.map(({ id, title, copyOf, engine, at }) => ({ id, title, ...(typeof copyOf === 'string' ? { copyOf } : {}), ...(engine === 'codex' ? { engine } : {}), ...(typeof at === 'number' ? { at } : {}) })) : [];
     this.pinned = Array.isArray(raw.pinned) ? raw.pinned : [];
-    this.scratch = raw.scratch && typeof raw.scratch.id === 'string' ? raw.scratch : null;
+    this.scratch = raw.scratch && typeof raw.scratch.id === 'string' ? { id: raw.scratch.id, usedAt: raw.scratch.usedAt, ...(raw.scratch.engine === 'codex' ? { engine: 'codex' as const } : {}) } : null;
     this.sideSessions = Array.isArray(raw.sideSessions) ? raw.sideSessions.filter((id): id is string => typeof id === 'string') : [];
     this.noteChats = raw.noteChats && typeof raw.noteChats === 'object' ? raw.noteChats : {};
     this.noteRefs = raw.noteRefs && typeof raw.noteRefs === 'object' ? raw.noteRefs : {};

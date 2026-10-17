@@ -611,6 +611,11 @@ function limitsOf(answer: unknown): CodexLimits | null {
   return { planType: limits.planType ?? null, windows };
 }
 
+/** Archives Codex thread `threadId` (`thread/archive`): out of Codex's history, as a scratch chat let go of is. */
+export async function archiveCodexThread(launch: CodexLaunch, threadId: string): Promise<void> {
+  await withAppServer(launch, (request) => request('thread/archive', { threadId }));
+}
+
 /**
  * A saved Codex thread's turns, read through a short-lived app-server (`thread/read`): how a Codex
  * chat is drawn when opened from the history. The plugin reads no Codex file itself.

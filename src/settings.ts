@@ -70,6 +70,8 @@ export interface VaultClaudeSettings {
   scratchChat: boolean;
   /** Hours the scratch chat is left alone before it starts over; one of SCRATCH_IDLE_CHOICES. */
   scratchIdleHours: number;
+  /** What runs the scratch chat, as `claude:<model>` or `codex:<model>` (an empty model for that one's default); empty: as small jobs run. */
+  scratchModel: string;
   /** What a side chat knows: the whole chat it was opened from (a fork of it), or only what is asked. */
   sideChatContext: 'chat' | 'quote';
   /** Model for inline edits, chat summaries and the scratch chat; empty for the chats' model. */
@@ -143,6 +145,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   hiddenNotePaths: '*attachments/*',
   scratchChat: true,
   scratchIdleHours: 24,
+  scratchModel: '',
   sideChatContext: 'chat',
   smallJobModel: 'sonnet',
   effort: '',
@@ -193,7 +196,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Small jobs run on')
-      .setDesc('Claude Code or Codex, each on its model for small jobs below: Edit selection, Save summary as note, memo suggestions, Pick up where you left off, a project\'s Context, summaries of included chats and Suggest frontmatter updates. The scratch chat stays a Claude Code chat.')
+      .setDesc('Claude Code or Codex, each on its model for small jobs below: Edit selection, Save summary as note, memo suggestions, Pick up where you left off, a project\'s Context, summaries of included chats and Suggest frontmatter updates.')
       .addDropdown((dropdown) =>
         dropdown
           .addOptions({ claude: 'Claude Code', codex: 'Codex' })
@@ -280,7 +283,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Model for small jobs')
-      .setDesc('For small jobs run on Claude Code (see Small jobs run on), and the scratch chat. These are short requests where a smaller model answers faster and uses less of the plan.')
+      .setDesc('For small jobs run on Claude Code (see Small jobs run on). These are short requests where a smaller model answers faster and uses less of the plan.')
       .addDropdown((dropdown) =>
         dropdown
           .addOptions(modelChoices(settings.smallJobModel, 'Same as chats'))
@@ -400,6 +403,25 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           await this.plugin.setScratchIdle(Number(value));
         });
       });
+
+    // Claude Code's models and Codex's in one list: the choice says which runs the scratch chat.
+    const scratchChoices: Record<string, string> = { '': 'Same as small jobs' };
+    for (const [value, label] of Object.entries(modelChoices('', 'Claude Code default'))) scratchChoices[`claude:${value}`] = `Claude Code · ${label}`;
+    scratchChoices['codex:'] = `Codex · ${codexDefaultName}`;
+    for (const model of codexModels) scratchChoices[`codex:${model.id}`] = `Codex · ${model.name}`;
+    if (settings.scratchModel && !(settings.scratchModel in scratchChoices)) scratchChoices[settings.scratchModel] = settings.scratchModel.replace(/^(claude|codex):/, (engine) => (engine === 'codex:' ? 'Codex · ' : 'Claude Code · '));
+    new Setting(containerEl)
+      .setName('Scratch chat model')
+      .setDesc('What runs the scratch chat: a Claude Code model or a Codex one. A change takes effect when the scratch chat next starts over.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(scratchChoices)
+          .setValue(settings.scratchModel)
+          .onChange(async (value) => {
+            settings.scratchModel = value;
+            await this.plugin.saveSettings();
+          }),
+      );
 
     new Setting(containerEl)
       .setName('Side chat knows')

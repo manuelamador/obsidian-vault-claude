@@ -229,6 +229,8 @@ async function main(): Promise<void> {
     openChatById: async () => undefined,
     chatHolder: () => null,
     scratchSession: () => null,
+    scratchRunner: () => ({ engine: 'claude' as const, model: 'sonnet' }),
+    forgetScratch: () => undefined,
     scratchLeft: () => 0,
     setScratch: () => undefined,
     touchScratch: () => undefined,

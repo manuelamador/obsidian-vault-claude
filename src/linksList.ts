@@ -9,6 +9,8 @@ import { errorText } from './log';
 export interface LinkRow {
   id: string;
   title: string;
+  /** A Codex chat: marked so beside its title. */
+  codex?: boolean;
   /** When the chat was last active, as shown. */
   when: string;
   /** `to`: this chat links to it; `from`: it links to this chat. */
@@ -105,6 +107,7 @@ export class LinksList {
     const top = box.createDiv({ cls: 'vc-project-section-head' });
     setIcon(top.createSpan({ cls: 'vc-project-group-icon' }), row.direction === 'to' ? 'link' : 'corner-down-right');
     const name = top.createEl('a', { text: row.title, attr: { 'aria-label': 'Open this chat' } });
+    if (row.codex) top.createSpan({ cls: 'vc-engine-badge', text: 'Codex' });
     name.addEventListener('click', () => {
       this.host.open(row.id);
     });

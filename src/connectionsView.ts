@@ -29,6 +29,8 @@ const SPAN_EXTRA = 6;
 /** What the maps need from the panel. */
 interface MapActions {
   titleOf(id: string): string;
+  /** Whether chat `id` is a Codex chat: marked so on the map. */
+  isCodex(id: string): boolean;
   openNote(path: string, newTab: boolean): void;
   previewNote(path: string, event: MouseEvent | KeyboardEvent, target: Element, parent: unknown): void;
   openChat(id: string): void;
@@ -335,9 +337,14 @@ class MapDrawing {
   }
 
   /** A label beside a node, on its outer side; `full`, the text it shortens, shown whole while the node is pointed at. */
-  label(group: SVGGElement, at: Point, side: 'right' | 'left', text: string, gap = 10, full = text): void {
+  /** `codex`: a Codex chat's label, marked so after its text. */
+  label(group: SVGGElement, at: Point, side: 'right' | 'left', text: string, gap = 10, full = text, codex = false): void {
     const label = svg(group, 'text', { x: at.x + (side === 'right' ? gap : -gap), y: at.y + 4, 'text-anchor': side === 'right' ? 'start' : 'end' });
     label.textContent = text;
+    if (codex) {
+      const mark = svg(label, 'tspan', { class: 'vc-map-engine', dx: '6' });
+      mark.textContent = 'Codex';
+    }
     if (full !== text) this.fullLabels.set(group, { label, full });
   }
 
@@ -351,6 +358,9 @@ class MapDrawing {
     if (!entry) return;
     const whole = this.top.appendChild(entry.label.cloneNode() as SVGTextElement);
     whole.textContent = entry.full;
+    // A Codex chat's mark goes with its full label.
+    const mark = entry.label.querySelector('.vc-map-engine');
+    if (mark) whole.appendChild(mark.cloneNode(true));
     whole.setAttr('class', 'vc-map-label-full');
     entry.label.style.opacity = '0';
   }
@@ -767,7 +777,8 @@ export class ConnectionsView extends ItemView {
     const host = this.host;
     if (!host) return;
     setIcon(this.barEl.createSpan({ cls: 'vc-project-group-icon' }), 'message-square');
-    this.barEl.createSpan({ cls: 'vc-map-bar-name', text: host.title, attr: { title: host.title } });
+    const barName = this.barEl.createSpan({ cls: 'vc-map-bar-name', text: host.title, attr: { title: host.title } });
+    if (host.isCodex(host.baseline.id)) barName.createSpan({ cls: 'vc-engine-badge', text: 'Codex' });
     this.drawProjectBar(this.actionEl);
     this.drawChatMap(host);
   }
@@ -836,9 +847,9 @@ export class ConnectionsView extends ItemView {
         drawing.drawn.add('badge');
       }
       const label = chatLabels.get(chat.id);
-      if (label) drawing.label(group, label.at, label.side, label.text, 14, host.titleOf(chat.id));
+      if (label) drawing.label(group, label.at, label.side, label.text, 14, host.titleOf(chat.id), host.isCodex(chat.id));
       const shared = `${chat.shared.length} shared note${chat.shared.length === 1 ? '' : 's'}`;
-      tooltip(group, `${host.titleOf(chat.id)}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : chat.linkedFrom ? ' · links to this chat' : ''}\n${CHAT_CLICK}`);
+      tooltip(group, `${host.titleOf(chat.id)}${host.isCodex(chat.id) ? ' · Codex' : ''}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : chat.linkedFrom ? ' · links to this chat' : ''}\n${CHAT_CLICK}`);
       chatNode(group, chat.id, host);
     }
     const centreNode = drawing.chat(me, centre, 18, 'is-centre');
@@ -1062,12 +1073,12 @@ export class ConnectionsView extends ItemView {
       const open = id === host.baseline.id;
       const group = drawing.chat(id, at, open ? 14 : 11, `is-same-project${open ? ' is-open-chat' : ''}`);
       const touched = project.links.filter(([chat]) => chat === id).length;
-      tooltip(group, `${project.titleOf(id)}${open ? ' · the chat in the panel' : ''} · ${touched} note${touched === 1 ? '' : 's'} here${open ? '' : `\n${CHAT_CLICK}`}`);
+      tooltip(group, `${project.titleOf(id)}${project.isCodex(id) ? ' · Codex' : ''}${open ? ' · the chat in the panel' : ''} · ${touched} note${touched === 1 ? '' : 's'} here${open ? '' : `\n${CHAT_CLICK}`}`);
       // Only the panel's chat is named on the map: the chats sit inside the ring of notes, where their
       // names ran into each other and into the notes'. The others are named in their tooltips.
       if (open) {
         const title = project.titleOf(id);
-        drawing.label(group, at, at.x >= 0 ? 'right' : 'left', shortLabel(title, 28), 17, title);
+        drawing.label(group, at, at.x >= 0 ? 'right' : 'left', shortLabel(title, 28), 17, title, project.isCodex(id));
       }
       chatNode(group, id, project);
     }

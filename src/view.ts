@@ -1780,6 +1780,7 @@ export class ChatView extends ItemView {
           ...this.linksTo().map(({ id, pending }) => ({
             id,
             title: titleOf(id),
+            codex: this.plugin.isCodexChat(id),
             when: when(id),
             direction: 'to' as const,
             pending,
@@ -1788,7 +1789,7 @@ export class ChatView extends ItemView {
             updated: this.sentChanged(`chat:${id}`),
             summarised: this.plugin.chatSummaries[id] !== undefined,
           })),
-          ...this.linksFrom().map((id) => ({ id, title: titleOf(id), when: when(id), direction: 'from' as const, pending: false, include: false, sent: false, updated: false, summarised: false })),
+          ...this.linksFrom().map((id) => ({ id, title: titleOf(id), codex: this.plugin.isCodexChat(id), when: when(id), direction: 'from' as const, pending: false, include: false, sent: false, updated: false, summarised: false })),
         ];
       },
       digest: (id) => this.plugin.linkedChatDigest(id),
@@ -3479,6 +3480,13 @@ export class ChatView extends ItemView {
     const source = this.chatId ?? this.resumeId;
     const root = this.plugin.vaultRoot();
     if (this.engine === 'codex') {
+      // A Codex scratch chat carries on as it is: kept as a chat, and the next scratch chat starts afresh.
+      if (this.scratch && source) {
+        this.plugin.forgetScratch();
+        this.keepScratchAsChat();
+        new Notice('The scratch chat is now a chat of its own; the next scratch chat starts afresh.');
+        return source;
+      }
       new Notice('A Codex chat cannot be branched yet.');
       return null;
     }
@@ -5559,7 +5567,7 @@ export class ChatView extends ItemView {
             const started = this.chatId === null;
             const start: ChatStart = started ? this.startOf() : { state: { ...this.projectStateNow() }, chats: [], notes: [] };
             this.chatId = message.session_id;
-            if (this.scratch) this.plugin.setScratch(message.session_id);
+            if (this.scratch) this.plugin.setScratch(message.session_id, this.engine === 'codex' ? 'codex' : undefined);
             else {
               this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf, this.engine === 'codex' ? 'codex' : undefined);
               this.plugin.adoptProjectState(message.session_id, start.state);
@@ -6592,8 +6600,17 @@ export class ChatView extends ItemView {
     this.newChat();
     this.scratch = true;
     this.restoreDraft();
-    this.modelOverride = this.plugin.settings.smallJobModel || chatModel(this.plugin.settings.model);
-    this.populateModelSelect();
+    // Claude Code or Codex, on the model set for it (see Scratch chat model).
+    const runner = this.plugin.scratchRunner();
+    if (runner.engine === 'codex') {
+      this.engine = 'codex';
+      this.codexModel = runner.model;
+      this.codexEffort = undefined;
+      this.applyEngine();
+    } else {
+      this.modelOverride = runner.model;
+      this.populateModelSelect();
+    }
     this.setChatTitle(SCRATCH_TITLE);
     this.messagesEl.empty();
     this.renderWelcome();
@@ -6635,7 +6652,7 @@ export class ChatView extends ItemView {
     if (!root || !entry) return;
     const named = (title: string) => {
       entry.title = title;
-      this.plugin.recordChat(id, title);
+      this.plugin.recordChat(id, title, undefined, entry.session instanceof CodexSession ? 'codex' : undefined);
       this.plugin.renameChat(id, title);
     };
     named('Untitled chat');
@@ -6650,7 +6667,7 @@ export class ChatView extends ItemView {
     this.scratch = false;
     const id = this.chatId;
     if (id) {
-      this.plugin.recordChat(id, this.chatName ?? 'Untitled chat');
+      this.plugin.recordChat(id, this.chatName ?? 'Untitled chat', undefined, this.engine === 'codex' ? 'codex' : undefined);
       this.titleFromClaude = false;
       void this.refreshTitle();
     }
