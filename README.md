@@ -346,7 +346,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 ## Your data
 
 - **Conversations** are Claude Code's own session files, in `~/.claude/projects/` on your computer, outside the vault. Deleting a chat from the history deletes its file. A Codex chat's conversation is in Codex's own store (`~/.codex/`), which the plugin reads only through Codex's app-server; removing it from the history leaves it there.
-- **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings; your last 100 sent messages, for ↑ in the input; each chat's title (and, for a Codex chat, that it is one), pin, unsent text, draft note, attached note, note links, ticked checkboxes, last context reading and, when one was asked for, its summary; and the guidance last given to Suggest frontmatter updates, by folder. Deleting a chat removes its entries there, including its links to other chats, its project and its summary. Obsidian Sync copies the file if it syncs plugin settings.
+- **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings; your last 100 sent messages (each up to 1,000 characters), for ↑ in the input, which deleting a chat does not remove (**Remember sent messages for ↑** turns this off, and its **Clear** empties it); each chat's title (and, for a Codex chat, that it is one), pin, unsent text, draft note, attached note, note links, ticked checkboxes, last context reading and, when one was asked for, its summary; and the guidance last given to Suggest frontmatter updates, by folder. Deleting a chat removes its entries there, including its links to other chats, its project and its summary. Obsidian Sync copies the file if it syncs plugin settings.
 - **The diagnostic log** records process starts, stops and errors, with session ids and paths (the vault's, Claude Code's and Codex's). It does not record your messages or the replies, but errors can include what Claude Code or Codex reported, such as a refused command's text or stderr output; read it before sharing it. It is at `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
 - Nothing is sent anywhere but through Claude Code or Codex themselves.
 
@@ -379,6 +379,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 | Tool calls | Summary, one line each, or hidden |
 | Panel side margins | 8–96 px |
 | Send with ⌘+Enter (Ctrl+Enter on Windows) | Otherwise Enter sends |
+| Remember sent messages for ↑ | Keep your last 100 sent messages for ↑ in any chat (default on); **Clear** empties them |
 | Attach the open note to new chats | Off: a new chat starts with no note, and the chip offers the open one |
 | History includes all vault sessions | Also list sessions started outside the panel |
 | Folder for saved chats | Where Save chat as note and Save summary as note write (default `Claude chats`) |

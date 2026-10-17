@@ -1,4 +1,4 @@
-import { App, Platform, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, Platform, PluginSettingTab, Setting } from 'obsidian';
 import { delimiter } from 'path';
 import type { EffortLevel, PermissionMode } from '@anthropic-ai/claude-agent-sdk';
 import type VaultClaudePlugin from './main';
@@ -72,6 +72,8 @@ export interface VaultClaudeSettings {
   scratchIdleHours: number;
   /** What runs the scratch chat, as `claude:<model>` or `codex:<model>` (an empty model for that one's default); empty: as small jobs run. */
   scratchModel: string;
+  /** Messages you send kept for ↑ in other chats (see VaultClaudePlugin.recordPrompt). */
+  rememberPrompts: boolean;
   /** What a side chat knows: the whole chat it was opened from (a fork of it), or only what is asked. */
   sideChatContext: 'chat' | 'quote';
   /** Model for inline edits, chat summaries and the scratch chat; empty for the chats' model. */
@@ -146,6 +148,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   scratchChat: true,
   scratchIdleHours: 24,
   scratchModel: '',
+  rememberPrompts: true,
   sideChatContext: 'chat',
   smallJobModel: 'sonnet',
   effort: '',
@@ -552,6 +555,24 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         toggle.setValue(settings.sendWithModifier).onChange(async (value) => {
           settings.sendWithModifier = value;
           await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('Remember sent messages for ↑')
+      .setDesc('↑ in an empty input brings back messages you sent, in this chat and others. Off: only this chat\'s, and the messages kept from others are cleared. They are kept in the plugin\'s data file (the last 100, each up to 1,000 characters), which deleting a chat does not clear.')
+      .addToggle((toggle) =>
+        toggle.setValue(settings.rememberPrompts).onChange(async (value) => {
+          settings.rememberPrompts = value;
+          if (!value) this.plugin.promptHistory = [];
+          await this.plugin.saveSettings();
+        }),
+      )
+      .addButton((button) =>
+        button.setButtonText('Clear').onClick(async () => {
+          this.plugin.promptHistory = [];
+          await this.plugin.saveSettings();
+          new Notice('Sent messages kept for ↑ cleared.');
         }),
       );
 

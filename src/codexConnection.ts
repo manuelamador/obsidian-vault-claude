@@ -70,7 +70,8 @@ export class CodexConnection {
       if (child.pid === undefined) this.end(error);
       else this.stop(error);
     });
-    child.on('exit', (code, signal) => {
+    // Once its output is all read, not merely once it exited: an answer written just before is still taken.
+    child.on('close', (code, signal) => {
       log('codex exited', { code, signal });
       // Stopped on purpose: its reason, if any; else an exit nobody asked for.
       this.end(this.stopping ? this.stopping.reason : code === 0 ? undefined : new Error(`Codex exited with code ${code ?? signal}`));
@@ -180,13 +181,24 @@ export class CodexConnection {
         log('codex sent a line that is not JSON', line.slice(0, 200));
         continue;
       }
-      if (message.method && message.id !== undefined) {
-        // A request with nothing to answer it is declined at once, never left waiting (Codex would wait on it).
-        if (this.handlers.onRequest) this.handlers.onRequest(message.id, message.method, message.params ?? {});
-        else this.refuse(message.id, `${message.method} is not supported by this client`);
+      // A handler that throws (a message of a shape not expected, a drawing error) does not stop the
+      // lines after it from being read: a turn's end in the same chunk is still taken.
+      try {
+        if (message.method && message.id !== undefined) {
+          // A request with nothing to answer it is declined at once, never left waiting (Codex would wait on it).
+          if (this.handlers.onRequest) this.handlers.onRequest(message.id, message.method, message.params ?? {});
+          else this.refuse(message.id, `${message.method} is not supported by this client`);
+          continue;
+        }
+        if (message.method) {
+          this.handlers.onNotification?.(message.method, message.params ?? {});
+          continue;
+        }
+      } catch (error) {
+        log('handling a codex message failed', message.method, error);
+        continue;
       }
-      else if (message.method) this.handlers.onNotification?.(message.method, message.params ?? {});
-      else if (typeof message.id === 'number') {
+      if (typeof message.id === 'number') {
         const waiting = this.pending.get(message.id);
         this.pending.delete(message.id);
         if (message.error) waiting?.reject(new Error(message.error.message ?? 'Codex refused the request'));

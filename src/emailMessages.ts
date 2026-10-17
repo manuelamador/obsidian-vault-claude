@@ -102,6 +102,7 @@ function message(raw: RawMessage, count?: number): EmailMessage {
   const body = decodeEntities(full);
   const url = str(raw.viewUrl);
   const threadId = str(raw.threadId);
+  const zip = attachmentsZipUrl(url, str(raw.id));
   const attachments = (Array.isArray(raw.attachments) ? raw.attachments : []).flatMap((each: { filename?: unknown; mimeType?: unknown; partId?: unknown }) => {
     if (!each || typeof each.filename !== 'string' || !each.filename) return [];
     const link = attachmentUrl(url, str(raw.id), str(each.partId));
@@ -121,7 +122,7 @@ function message(raw: RawMessage, count?: number): EmailMessage {
     ...(count && count > 1 ? { count } : {}),
     ...(threadId ? { threadId } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
-    ...(attachments.length > 1 && attachmentsZipUrl(url, str(raw.id)) ? { attachmentsZip: attachmentsZipUrl(url, str(raw.id)) } : {}),
+    ...(attachments.length > 1 && zip ? { attachmentsZip: zip } : {}),
   };
 }
 

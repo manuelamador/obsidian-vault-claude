@@ -158,8 +158,10 @@ export function renderEmailThread(parent: HTMLElement, messages: EmailMessage[],
   else parent.createDiv({ cls: 'vc-email-cards' }).appendChild(frame);
 }
 
-/** A card for draft `draft` in `parent`: to whom, its subject and the start of its text (all of it on a click), to open in Gmail. */
-/** `send`: when sending is allowed (see VaultClaudePlugin settings), the card's Send button, which asks first. */
+/**
+ * A card for draft `draft` in `parent`: to whom, its subject and the start of its text (all of it on
+ * a click), to open in Gmail. `send`: when sending is allowed (see the settings), its Send button, which asks first.
+ */
 export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft, send?: (draft: EmailDraft) => void): void {
   const card = parent.createDiv({ cls: 'vc-email-cards' }).createDiv({ cls: 'vc-email-card vc-email-draft' });
   const head = card.createDiv({ cls: 'vc-email-head' });

@@ -103,3 +103,8 @@ test('many unclosed image openings are filtered in linear time', () => {
   neutralizeRemoteMedia('![['.repeat(20000));
   assert.ok(performance.now() - started < 500, `took ${Math.round(performance.now() - started)} ms`);
 });
+
+test('a quoted fence line inside an unquoted block does not close it', () => {
+  const text = '```\n> ```\n![inside](https://example.invalid/a.png)\n```';
+  assert.equal(neutralizeRemoteMedia(text), text);
+});

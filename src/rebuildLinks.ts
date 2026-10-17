@@ -2,7 +2,7 @@
 // notes (see VaultClaudePlugin.rebuildConnections): the notes sent with its messages, read from the
 // context block the panel prepends, and the notes its replies link to. The notes it changed come
 // from its tool results (see savedChangedFiles). Kept free of `obsidian` imports so the tests can use it.
-import { closesFence, fenceMarker } from './fences';
+import { fencedLines } from './fences';
 
 const CONTEXT = /<obsidian_context>([\s\S]*?)<\/obsidian_context>/;
 
@@ -19,21 +19,9 @@ export function promptNotes(text: string): string[] {
 
 /** `text` with its code left out: fenced blocks (in a quote too) and inline code spans, whose links are examples, not links. */
 function withoutCode(text: string): string {
-  const kept: string[] = [];
-  let fence: string | null = null;
-  for (const line of text.split('\n')) {
-    const bare = line.replace(/^(?: {0,3}>[ \t]?)+/, '');
-    if (fence) {
-      if (closesFence(bare, fence)) fence = null;
-      continue;
-    }
-    const opening = fenceMarker(bare);
-    if (opening) {
-      fence = opening;
-      continue;
-    }
-    kept.push(line);
-  }
+  const lines = text.split('\n');
+  const fenced = fencedLines(lines);
+  const kept = lines.filter((_line, i) => !fenced[i]);
   // A code span: a run of backticks closed by a run of the same length, within one paragraph.
   return kept.join('\n').replace(/(?<![`\\])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g, ' ');
 }

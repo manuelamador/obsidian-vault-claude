@@ -340,6 +340,8 @@ interface BackgroundChat {
   fastMode: boolean;
   /** A Codex chat's model and effort (see startCodexChat); absent for a Claude chat. */
   codex?: { model: string | undefined; effort: string | undefined };
+  /** It is the scratch chat (see setScratch). */
+  scratch?: boolean;
   notice: Notice | null;
   /** Set while the chat is on the phone; such a chat is kept running when idle. */
   remoteUrl: string | null;
@@ -2073,6 +2075,7 @@ export class ChatView extends ItemView {
       currentEffort: this.currentEffort,
       fastMode: this.fastMode,
       ...(this.engine === 'codex' ? { codex: { model: this.codexModel, effort: this.codexEffort } } : {}),
+      ...(this.scratch ? { scratch: true } : {}),
       notice: null,
       tasks: this.tasks,
       settleTimer: null,
@@ -2129,7 +2132,10 @@ export class ChatView extends ItemView {
         }
         if (message.type === 'system' && message.subtype === 'init' && entry.chatId !== message.session_id) {
           entry.chatId = message.session_id;
-          this.plugin.recordChat(message.session_id, entry.title ?? 'Untitled chat', undefined, entry.session instanceof CodexSession ? 'codex' : undefined);
+          const engine = entry.session instanceof CodexSession ? 'codex' : undefined;
+          // The scratch chat, gone to the background before it started: still the scratch chat.
+          if (entry.scratch) this.plugin.setScratch(message.session_id, engine);
+          else this.plugin.recordChat(message.session_id, entry.title ?? 'Untitled chat', undefined, engine);
           if (entry.start) this.adoptStart(message.session_id, entry.start);
           entry.start = null;
         } else if (message.type === 'stream_event') {
@@ -2394,7 +2400,9 @@ export class ChatView extends ItemView {
     this.messagesEl.empty();
     this.chatId = entry.chatId;
     this.resumeId = entry.chatId;
-    this.setChatTitle(entry.title);
+    // The scratch chat, back from the background, is the scratch chat again.
+    this.scratch = entry.scratch === true || (entry.chatId !== null && entry.chatId === this.plugin.scratch?.id);
+    this.setChatTitle(this.scratch ? SCRATCH_TITLE : entry.title);
     this.mode = entry.mode;
     this.modeBeforePlan = entry.modeBeforePlan;
     this.modelOverride = entry.modelOverride;
@@ -3775,6 +3783,10 @@ export class ChatView extends ItemView {
 
   /** Where ↑ has gone back to in the messages you sent (see stepHistory); null when not stepping through them. */
   private historyAt: number | null = null;
+  /** The messages stepped through, as they were when the stepping began: a message sent meanwhile does not shift them. */
+  private historyList: string[] = [];
+  /** Requests the panel wrote and sent for you (see sendOrDraft), left out of the history ↑ steps through. */
+  private readonly generated = new Set<string>();
   /** The message ↑ or ↓ last put in the input: any other text there (typed, quoted) ends the stepping. */
   private historyShown = '';
 
@@ -3800,12 +3812,15 @@ export class ChatView extends ItemView {
       const onEdge = by === 1 ? !value.slice(0, caret).includes('\n') : !value.slice(caret).includes('\n');
       if (!onEdge) return false;
     }
-    const history = this.promptHistory();
+    if (this.historyAt === null) this.historyList = this.promptHistory();
+    const history = this.historyList;
     const at = (this.historyAt ?? -1) + by;
     if (at >= history.length) return this.historyAt !== null;
     this.historyAt = at < 0 ? null : at;
     input.value = at < 0 ? '' : history[at];
     this.historyShown = input.value;
+    // The input's text swapped from code, which the window's undo history does not record (see setUndoFloor).
+    this.setUndoFloor();
     this.growInput();
     const end = input.value.length;
     input.setSelectionRange(end, end);
@@ -3821,7 +3836,7 @@ export class ChatView extends ItemView {
       evt.preventDefault();
       return;
     }
-    if (evt.key === 'Escape' && this.historyAt !== null) {
+    if (evt.key === 'Escape' && this.historyAt !== null && this.inputEl.value === this.historyShown) {
       evt.preventDefault();
       this.historyAt = null;
       this.inputEl.value = '';
@@ -4211,7 +4226,9 @@ export class ChatView extends ItemView {
     // ↑ brings back what was typed, `/plan` included, so it can be sent again the same way.
     if (text) {
       this.lastSent = plan ? typed : text;
-      this.plugin.recordPrompt(this.lastSent);
+      const written = [...this.generated].find((request) => text.includes(request));
+      if (written) this.generated.delete(written);
+      else this.plugin.recordPrompt(this.lastSent);
     }
     this.historyAt = null;
     // Taken before the input empties, which lets them go (see followMentions).
@@ -6243,6 +6260,8 @@ export class ChatView extends ItemView {
 
   /** Sends `text` as a message when the input is empty; with a draft there, adds it below for you to send (`hint` says so). */
   private sendOrDraft(text: string, hint: string): void {
+    // A request the panel wrote, not you: not kept for ↑ (one that sends mail, say, would send again from there).
+    this.generated.add(text.trim());
     if (this.inputEl.value.trim() || this.busy) {
       this.addToInput(text, hint);
       return;
@@ -6832,7 +6851,12 @@ export class ChatView extends ItemView {
     this.scratch = false;
     const id = this.chatId;
     if (id) {
-      this.plugin.recordChat(id, this.chatName ?? 'Untitled chat', undefined, this.engine === 'codex' ? 'codex' : undefined);
+      // Named from its first message: 'Scratch' would name every one alike, and a Codex chat has no
+      // session title for refreshTitle to take.
+      const first = this.messagesEl.querySelector('.vc-user-text')?.textContent?.trim();
+      const title = first ? chatTitle(first) : 'Untitled chat';
+      this.setChatTitle(title);
+      this.plugin.recordChat(id, title, undefined, this.engine === 'codex' ? 'codex' : undefined);
       this.titleFromClaude = false;
       void this.refreshTitle();
     }

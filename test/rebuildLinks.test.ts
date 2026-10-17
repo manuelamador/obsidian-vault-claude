@@ -41,3 +41,8 @@ test('replyLinks reads links in angle brackets and with a heading, and none insi
   const text = ['Inline `[[Example]]` and:', '```markdown', '[[Fenced]] and [x](Fenced.md)', '```', '> ```', '> [[Quoted]]', '> ```', 'but [[Real]].'].join('\n');
   assert.deepEqual(replyLinks(text), ['Real']);
 });
+
+test('replyLinks tells a quote from a fence: a quoted fence inside a block, and an unclosed one in a quote', () => {
+  assert.deepEqual(replyLinks(['```markdown', '> ```', '> [[Inner]]', '> ```', '```', 'and [[Real]].'].join('\n')), ['Real']);
+  assert.deepEqual(replyLinks(['> ```', '> code', '', 'Then [[AfterQuote]] and [x](After.md)'].join('\n')), ['AfterQuote', 'After.md']);
+});

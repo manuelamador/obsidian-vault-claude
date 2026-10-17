@@ -42,7 +42,7 @@ import { DEFAULT_SETTINGS, SCRATCH_IDLE_CHOICES, VaultClaudeSettingTab, chatMode
 const MAX_CHAT_RECORDS = 500;
 /** How many sent messages ↑ in the input can bring back from any chat, and the longest one kept (see recordPrompt). */
 const PROMPT_HISTORY = 100;
-const PROMPT_HISTORY_CHARS = 4000;
+const PROMPT_HISTORY_CHARS = 1000;
 const MODEL_CACHE_MS = 24 * 60 * 60 * 1000;
 const PLAN_CACHE_MS = 5 * 60 * 1000;
 /** How long saveSoon waits to save, gathering the changes of a burst of events. */
@@ -669,6 +669,8 @@ export default class VaultClaudePlugin extends Plugin {
     const ids = dir ? await sessionIds(dir) : null;
     // Codex chats keep their sessions in Codex's own store: theirs are kept too.
     if (ids) for (const chat of this.chats) if (chat.engine === 'codex') ids.add(chat.id);
+    // A Codex scratch chat is in neither: its record is the scratch's own.
+    if (ids && this.scratch) ids.add(this.scratch.id);
     let changed = false;
     // Ticks, pins and unseen replies of chats whose sessions are gone: nothing left to show them on.
     if (ids) {
@@ -1151,15 +1153,19 @@ export default class VaultClaudePlugin extends Plugin {
   /** Deletes a scratch chat let go of (see deleteWhenEnded), and then what it left: ticks, draft, mark. */
   private async deleteScratch(id: string, codex: boolean): Promise<void> {
     try {
-      // A Codex scratch chat's thread is in Codex's store: archived there, out of its history.
+      // A Codex scratch chat's thread is in Codex's store: archived there, out of its history, once
+      // its own Codex has exited (it may still write the thread as it does).
       if (codex) {
+        await this.processesEnded(id);
         const launch = this.codexLaunch();
         if (typeof launch !== 'string') await archiveCodexThread(launch, id);
       } else await this.deleteWhenEnded(id);
-      this.forgetChatData(id);
-      this.saveSoon();
     } catch (error) {
       log('deleting the scratch session failed', error);
+    } finally {
+      // What it left in the plugin's data goes however its session fared.
+      this.forgetChatData(id);
+      this.saveSoon();
     }
   }
 
@@ -1208,7 +1214,12 @@ export default class VaultClaudePlugin extends Plugin {
    * the chat list, rather than leaving it open with nowhere to reach it again.
    */
   async stopScratch(): Promise<void> {
-    for (const view of this.chatViews()) if (view.isScratchChat()) view.keepScratchAsChat();
+    // Shown, or running in a panel's background: kept as an ordinary chat either way.
+    const id = this.scratch?.id;
+    for (const view of this.chatViews()) {
+      if (view.isScratchChat()) view.keepScratchAsChat();
+      else if (id && view.holdsChat(id)) view.keepAsChat(id);
+    }
     this.scratch = null;
     await this.saveSettings();
   }
@@ -1409,7 +1420,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Records message `text`, sent in a chat, at the head of the history ↑ steps through (at most PROMPT_HISTORY, each at most PROMPT_HISTORY_CHARS). */
   recordPrompt(text: string): void {
     const prompt = text.trim();
-    if (!prompt || prompt.length > PROMPT_HISTORY_CHARS) return;
+    if (!this.settings.rememberPrompts || !prompt || prompt.length > PROMPT_HISTORY_CHARS) return;
     this.promptHistory = [prompt, ...this.promptHistory.filter((each) => each !== prompt)].slice(0, PROMPT_HISTORY);
     this.saveSoon();
   }
@@ -1452,7 +1463,7 @@ export default class VaultClaudePlugin extends Plugin {
     const chat = this.chats.find((record) => record.id === id && record.engine === 'codex');
     if (!chat) return;
     chat.at = Date.now();
-    // To the front: the records kept past MAX_CHAT_RECORDS are the newest, and a Codex chat has no other record.
+    // To the front, so that the records list most recently active first (Codex records are never dropped; see recordChat).
     this.chats = [chat, ...this.chats.filter((record) => record !== chat)];
     this.listedAt = 0;
     this.saveSoon();
@@ -3509,7 +3520,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.chatLinks = raw.chatLinks && typeof raw.chatLinks === 'object' ? raw.chatLinks : {};
     this.chatSummaries = raw.chatSummaries && typeof raw.chatSummaries === 'object' ? raw.chatSummaries : {};
     this.chatMail = raw.chatMail && typeof raw.chatMail === 'object' ? raw.chatMail : {};
-    this.promptHistory = Array.isArray(raw.promptHistory) ? raw.promptHistory.filter((each): each is string => typeof each === 'string').slice(0, PROMPT_HISTORY) : [];
+    this.promptHistory = this.settings.rememberPrompts && Array.isArray(raw.promptHistory) ? raw.promptHistory.filter((each): each is string => typeof each === 'string' && each.length <= PROMPT_HISTORY_CHARS).slice(0, PROMPT_HISTORY) : [];
     this.chatContext = raw.chatContext && typeof raw.chatContext === 'object' ? raw.chatContext : {};
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
     this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};

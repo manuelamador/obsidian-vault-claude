@@ -207,7 +207,8 @@ export function neutralizeRemoteMedia(markdown: string): string {
       const ended = depth < quotes || (line.trim() !== '' && line.length - line.trimStart().length < indent);
       if (!ended) {
         out.push(line);
-        if (closesFence(bare, fence)) fence = null;
+        // Closed only at the depth it opened at: a quoted fence line inside an unquoted block is content.
+        if (depth === quotes && closesFence(bare, fence)) fence = null;
         continue;
       }
       fence = null;
