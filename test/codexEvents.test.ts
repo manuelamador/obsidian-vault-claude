@@ -37,6 +37,8 @@ test('a Codex file change is drawn as an edit per file, with its hunks for the c
   assert.deepEqual((done[0].tool_use_result as { structuredPatch: unknown }).structuredPatch, [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' line', '-old', '+new'] }]);
   assert.deepEqual((done[1].tool_use_result as { structuredPatch: { lines: string[] }[] }).structuredPatch[0].lines, ['+hello', '+world']);
   assert.deepEqual(diffHunks('', 'update'), []);
+  // Lines inside a hunk that look like file headers are content.
+  assert.deepEqual(diffHunks('--- a/n.md\n+++ b/n.md\n@@ -1 +1 @@\n--- old\n+++ new\n', 'update')[0].lines, ['--- old', '+++ new']);
   // A new note's own lines, frontmatter fences and bullets included, kept as they are.
   assert.deepEqual(diffHunks('---\ntags: [a]\n---\n- item\n+ plus\n', 'add')[0].lines, ['+---', '+tags: [a]', '+---', '+- item', '++ plus']);
 });

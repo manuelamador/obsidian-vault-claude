@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
 import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
-import type { EffortLevel, ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
+import type { EffortLevel, ModelInfo, SessionMessage, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
 import { deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
 import { codexTranscript, type CodexItem } from './codexEvents';
@@ -1367,6 +1367,15 @@ export default class VaultClaudePlugin extends Plugin {
     return { transcript: transcript as unknown as LoadedChat['transcript'], edits };
   }
 
+  /**
+   * Chat `id`'s last `count` messages that `match` keeps, oldest first: read from the end of its
+   * session file (at most `maxBytes`), or, for a Codex chat, from its thread (see loadAnyChat).
+   */
+  async recentMessages(id: string, dir: string, match: (message: SessionMessage) => boolean, count: number, maxBytes: number): Promise<SessionMessage[]> {
+    if (!this.isCodexChat(id)) return lastMessages(id, dir, match, count, maxBytes);
+    return (await this.loadAnyChat(id, dir)).transcript.filter(match).slice(-count);
+  }
+
   /** Whether chat `id` is run by Codex (see CodexSession). */
   isCodexChat(id: string): boolean {
     return (this.scratch?.id === id && this.scratch.engine === 'codex') || this.chats.some((chat) => chat.id === id && chat.engine === 'codex');
@@ -1814,7 +1823,7 @@ export default class VaultClaudePlugin extends Plugin {
       return `${head}\n${items.join('\n\n')}`;
     }
     const dir = this.vaultRoot();
-    const messages = dir ? await lastMessages(id, dir, ownMessage, DIGEST_MESSAGES, PICK_UP_BYTES).catch(() => []) : [];
+    const messages = dir ? await this.recentMessages(id, dir, ownMessage, DIGEST_MESSAGES, PICK_UP_BYTES).catch(() => []) : [];
     const digest = chatDigest(messages);
     return digest ? `${head}\nIts last exchanges:\n${digest}` : head;
   }
@@ -2682,7 +2691,7 @@ export default class VaultClaudePlugin extends Plugin {
         .map(async (item) => ({
           title: item.title,
           date: formatDate(item.updatedAt).slice(0, 10),
-          digest: dir ? chatDigest(await lastMessages(item.id, dir, ownMessage, CONTEXT_MESSAGES, PICK_UP_BYTES).catch(() => [])).slice(-CONTEXT_DIGEST_CHARS) : '',
+          digest: dir ? chatDigest(await this.recentMessages(item.id, dir, ownMessage, CONTEXT_MESSAGES, PICK_UP_BYTES).catch(() => [])).slice(-CONTEXT_DIGEST_CHARS) : '',
         })),
     );
     const reply = await this.oneShot({ system: CONTEXT_SYSTEM, prompt: contextPrompt({ name: file.basename, folder }, notes, chats), effort: 'low' }, () => undefined, signal ?? new AbortController().signal);
@@ -2881,7 +2890,7 @@ export default class VaultClaudePlugin extends Plugin {
     const memoNext = async (id: string) =>
       (await Promise.all(this.memoNotes(id).map(async (file) => memoSection(await this.app.vault.cachedRead(file), 'Next')))).filter((next) => next.trim() !== '');
     const look = async (item: HistoryItem, isOlder: boolean) =>
-      candidateOf(item, isOlder, await lastMessages(item.id, dir, ownMessage, PICK_UP_MESSAGES, PICK_UP_BYTES).catch(() => []), this.ticks[item.id] ?? {}, await memoNext(item.id));
+      candidateOf(item, isOlder, await this.recentMessages(item.id, dir, ownMessage, PICK_UP_MESSAGES, PICK_UP_BYTES).catch(() => []), this.ticks[item.id] ?? {}, await memoNext(item.id));
     const candidates: Candidate[] = [];
     for (const item of recent) candidates.push(await look(item as HistoryItem, false));
     // Older chats, in a random order, only with a clue that something was left open; no more read than PICK_UP_OLDER_READS.

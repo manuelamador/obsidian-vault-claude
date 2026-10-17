@@ -2386,6 +2386,29 @@ async function main(): Promise<void> {
     const draftOwned = draftView.holdsDraft('Drafts/draft.md');
     await draftView.sendDraft();
     const emptyOk = draftShown && draftOwned && !draftLine.isShown() && trashed.includes('Drafts/draft.md') && notesMenu.inputEl.value === '';
+    // A draft that could not be sent (no session started) is kept, as this chat's.
+    const draftHooks = view as unknown as { sendText(text: string): Promise<boolean>; draftKey(): string };
+    const sendTextWas = draftHooks.sendText;
+    draftHooks.sendText = async () => false;
+    notesOnDisk.set('Drafts/unsent.md', 'still to go');
+    draftView.draftPath = 'Drafts/unsent.md';
+    draftView.updateDraftLine();
+    await draftView.sendDraft();
+    const keptUnsent = !trashed.includes('Drafts/unsent.md') && draftView.holdsDraft('Drafts/unsent.md');
+    // Another chat opened while the draft was read: nothing is sent to it, and the draft stays.
+    let sentElsewhere = false;
+    draftHooks.sendText = async () => (sentElsewhere = true);
+    const draftKeyWas = draftHooks.draftKey;
+    let keyCalls = 0;
+    draftHooks.draftKey = () => (keyCalls++ === 0 ? 'chat-a' : 'chat-b');
+    await draftView.sendDraft();
+    draftHooks.draftKey = draftKeyWas;
+    draftHooks.sendText = sendTextWas;
+    const notSentElsewhere = !sentElsewhere && !trashed.includes('Drafts/unsent.md');
+    console.log(`draft kept when not sent ${keptUnsent}; not sent to a chat opened meanwhile ${notSentElsewhere}`);
+    if (!keptUnsent || !notSentElsewhere) process.exitCode = 1;
+    draftView.draftPath = null;
+    draftView.updateDraftLine();
     // The × throws a draft away unsent.
     notesOnDisk.set('Drafts/thrown.md', 'half a thought');
     draftView.draftPath = 'Drafts/thrown.md';
@@ -4410,6 +4433,33 @@ async function main(): Promise<void> {
       const failOk = restored.input === 'see @[[New.md]]' && JSON.stringify(restored.attachments) === '["paper.pdf"]' && restored.bubbles === 0 && restored.sent === 0 && strayed === 0;
       console.log(`unsent message: ${JSON.stringify(restored)}; image for another chat attached ${strayed} -> ${failOk}`);
       if (!failOk) process.exitCode = 1;
+    }
+
+    {
+      // Two messages sent one after the other reach the session in that order, though the first takes longer to prepare.
+      const orderView = view as unknown as { session: unknown; busy: boolean; send(): Promise<boolean>; projectContext(text: string): Promise<{ parts: unknown[]; hashes: Record<string, string> }> };
+      const orderInput = root.querySelector('.vc-input') as HTMLTextAreaElement;
+      view.newChat();
+      const order: unknown[] = [];
+      orderView.session = { send: (content: unknown) => void order.push(content), waitingContext: () => new Set<string>(), addContext() {}, setHandlers() {}, close() {} };
+      orderView.busy = false;
+      const contextWas = orderView.projectContext;
+      orderView.projectContext = async (text: string) => {
+        if (text === 'first') await new Promise((resolve) => setTimeout(resolve, 50));
+        return { parts: [], hashes: {} };
+      };
+      orderInput.value = 'first';
+      const one = orderView.send();
+      orderInput.value = 'second';
+      const two = orderView.send();
+      await Promise.all([one, two]);
+      orderView.projectContext = contextWas;
+      orderView.session = null;
+      orderInput.value = '';
+      view.newChat();
+      const orderOk = JSON.stringify(order.map((content) => String(content).split('\n').pop())) === '["first","second"]';
+      console.log(`messages keep their order: ${JSON.stringify(order).slice(0, 80)} -> ${orderOk}`);
+      if (!orderOk) process.exitCode = 1;
     }
 
     const adopted: unknown[] = [];

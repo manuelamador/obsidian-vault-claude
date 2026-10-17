@@ -71,7 +71,8 @@ export function diffHunks(diff: string, kind: string): PatchHunk[] {
     if (head) {
       hunk = { oldStart: Number(head[1]), oldLines: Number(head[2] ?? 1), newStart: Number(head[3]), newLines: Number(head[4] ?? 1), lines: [] };
       hunks.push(hunk);
-    } else if (hunk && /^[ +-]/.test(line) && !/^(\+\+\+|---) /.test(line)) {
+    } else if (hunk && /^[ +-]/.test(line)) {
+      // Inside a hunk every line is content, `--- x` and `+++ x` included: the file headers come before the first hunk.
       hunk.lines.push(line);
     } else if (hunk && line === '') {
       hunk.lines.push(' ');

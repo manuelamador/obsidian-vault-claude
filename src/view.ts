@@ -4064,7 +4064,8 @@ export class ChatView extends ItemView {
 
   // ---- Sending -----------------------------------------------------------
 
-  private async send(): Promise<void> {
+  /** Sends what is in the input; true once it went to the session, false when nothing was sent (it stays, or goes back, to be sent again). */
+  private async send(): Promise<boolean> {
     // `/plan`, as in a terminal: the chat goes into Plan mode, and what follows is the message. Claude
     // Code takes the command only in a terminal, and answers "/plan isn't available in this environment".
     const typed = this.inputEl.value.trim();
@@ -4073,26 +4074,26 @@ export class ChatView extends ItemView {
       // Switching now would change the reply that is running, not only this message: it waits.
       if (this.busy) {
         new Notice('Claude is still working. Send /plan once it has finished, or stop it first.');
-        return;
+        return false;
       }
       const rest = typed.slice(plan[0].length).trim();
       if (this.mode !== 'plan') {
         await this.changeMode('plan');
         // Refused (see changeMode): nothing is sent, the text stays to try again.
-        if ((this.mode as PermissionMode) !== 'plan') return;
+        if ((this.mode as PermissionMode) !== 'plan') return false;
       }
       this.inputEl.value = rest;
       this.growInput();
       if (!rest && this.attachments.length === 0) {
         this.saveDraft();
         new Notice('Plan mode: Claude plans first, and asks before carrying the plan out.');
-        return;
+        return false;
       }
     }
     const text = this.inputEl.value.trim();
-    if (!text && this.attachments.length === 0) return;
+    if (!text && this.attachments.length === 0) return false;
     const session = this.ensureSession();
-    if (!session) return;
+    if (!session) return false;
     // Slash commands must reach Claude Code as plain text; attachments wait for the next message.
     const slash = text.startsWith('/');
     const attachments = slash ? [] : this.attachments;
@@ -4121,6 +4122,24 @@ export class ChatView extends ItemView {
     }
     // The chat it was typed in, for its draft should another chat be opened while it is prepared.
     const draftKey = this.draftKey();
+    // Prepared one after another: a message whose notes take longer to read never overtakes the one sent after it.
+    const before = this.preparing;
+    let prepared = () => undefined as void;
+    this.preparing = new Promise<void>((resolve) => (prepared = resolve));
+    try {
+      await before;
+      return await this.deliver({ text, slash, attachments, pathOnly, uuid, bubble, session, draftKey });
+    } finally {
+      prepared();
+    }
+  }
+
+  /** Messages being prepared (see send): each waits for the one before. */
+  private preparing: Promise<void> = Promise.resolve();
+
+  /** Prepares a message taken from the input (its notes read, the project's context) and gives it to `session`; false when it was not sent. */
+  private async deliver(sent: { text: string; slash: boolean; attachments: Attachment[]; pathOnly: Set<string>; uuid: ReturnType<typeof crypto.randomUUID>; bubble: HTMLElement; session: ChatSession; draftKey: string }): Promise<boolean> {
+    const { text, slash, attachments, pathOnly, uuid, bubble, session, draftKey } = sent;
     let built: { content: UserContent; notes: string[] };
     // The chat's projects' context, once (see projectContext); never with a slash command.
     let project: Awaited<ReturnType<ChatView['projectContext']>> = { parts: [], hashes: {} };
@@ -4132,14 +4151,14 @@ export class ChatView extends ItemView {
       log('the message could not be prepared', error);
       const back = this.unsend({ uuid, bubble, session, draftKey, text, attachments, pathOnly });
       new Notice(`The message was not sent: ${errorText(error)}.${unsentWhere(back, attachments.length > 0)}`);
-      return;
+      return false;
     }
     const { content, notes } = built;
     if (session !== this.session) {
       // Another chat was opened while the mentioned notes were read.
       const back = this.unsend({ uuid, bubble, session, draftKey, text, attachments, pathOnly });
       new Notice(`The chat changed before the message was sent, so it was not sent.${unsentWhere(back, attachments.length > 0)}`);
-      return;
+      return false;
     }
     if (!this.chatName) this.setChatTitle(chatTitle(text || attachments[0]?.name || ''));
     this.sentIds.add(uuid);
@@ -4161,6 +4180,7 @@ export class ChatView extends ItemView {
         this.projectsChanged();
       });
     }
+    return true;
   }
 
   /**
@@ -6704,10 +6724,10 @@ export class ChatView extends ItemView {
   }
 
   /** Sends `text` as the next message, as if it had been typed in. */
-  async sendText(text: string): Promise<void> {
+  async sendText(text: string): Promise<boolean> {
     this.inputEl.value = text;
     this.growInput();
-    await this.send();
+    return this.send();
   }
 
   /** Sends what the draft note holds, then closes and removes it; an empty draft is only removed. */
@@ -6719,16 +6739,33 @@ export class ChatView extends ItemView {
       new Notice('No draft for this chat. Write this message in a note first.');
       return;
     }
+    // The chat it is the draft of: another opened while it is read keeps its own draft, and is sent nothing.
+    const owner = this.draftKey();
     const text = (await this.app.vault.read(file)).trim();
+    if (this.draftKey() !== owner || this.draftFile()?.path !== file.path) {
+      new Notice('The chat changed while the draft was read, so it was not sent. It is still the draft of its chat.');
+      return;
+    }
     this.draftPath = null;
     this.updateDraftLine();
-    this.closeNoteTabs(file);
     if (!text) {
       await this.discardNote(file);
       new Notice('The draft was empty: nothing was sent, and the note is gone.');
       return;
     }
-    await this.sendText(text);
+    const typed = this.inputEl.value;
+    if (!(await this.sendText(text))) {
+      // Not sent (no session could start, say): the draft stays this chat's, and the input as it was.
+      if (this.draftKey() === owner) {
+        if (this.inputEl.value.trim() === text) {
+          this.inputEl.value = typed;
+          this.growInput();
+        }
+        this.draftPath = file.path;
+        this.updateDraftLine();
+      }
+      return;
+    }
     await this.discardNote(file);
   }
 
