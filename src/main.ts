@@ -539,6 +539,11 @@ export default class VaultClaudePlugin extends Plugin {
       callback: () => (this.app.workspace.getActiveViewOfType(ChatView) ?? this.firstChatView())?.stopTurn(),
     });
     this.addCommand({
+      id: 'show-background-tasks',
+      name: 'Show background tasks',
+      callback: async () => (this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView()))?.openTasks(),
+    });
+    this.addCommand({
       id: 'rename-chat',
       name: 'Rename chat',
       callback: async () => (this.app.workspace.getActiveViewOfType(ChatView) ?? (await this.activateView()))?.renameCurrentChat(),

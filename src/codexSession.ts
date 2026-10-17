@@ -186,6 +186,10 @@ export class CodexSession {
 
   // What Claude Code offers and Codex does not, or not yet here: nothing to do, or nothing to read.
   async stopTask(): Promise<void> {}
+  /** Codex runs no background tasks (see TasksModal). */
+  async taskOutput(): Promise<null> {
+    return null;
+  }
   /** The context meter's reading, in the shape Claude Code's gives it (see contextFigures); null before Codex reports one. */
   contextUsage(): SDKControlGetContextUsageResponse | null {
     if (!this.context) return null;

@@ -3643,3 +3643,120 @@ a.vc-email-attachment:hover {
 .vc-changes-file.is-not-own .vc-edit-file {
   color: var(--text-faint);
 }
+
+/* The button beside Stop opening the background tasks (see TasksModal), with their count. */
+.vc-tasks-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.vc-tasks-count {
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The background tasks list. */
+.vc-tasks-modal .vc-task-chat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: var(--size-4-3) 0 var(--size-4-1);
+  font-weight: var(--font-semibold);
+}
+
+.vc-tasks-modal .vc-task {
+  padding: var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  margin-bottom: var(--size-4-2);
+}
+
+.vc-task-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vc-task-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.vc-task-description {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vc-task-time,
+.vc-task-progress {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.vc-task-progress {
+  margin-top: 2px;
+  margin-left: 22px;
+}
+
+.vc-task-output {
+  max-height: 240px;
+  overflow: auto;
+  margin: var(--size-4-2) 0 0;
+  padding: var(--size-4-2);
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* An empty chat's welcome: the chats to go back to (see renderRecentChats). */
+.vc-welcome-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 420px;
+  margin: var(--size-4-3) auto 0;
+  text-align: left;
+}
+
+.vc-welcome-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+}
+
+.vc-welcome-recent-row:hover,
+.vc-welcome-recent-row:focus-visible {
+  background: var(--background-modifier-hover);
+}
+
+.vc-welcome-recent-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-welcome-recent-when {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.vc-welcome-recent-pin {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.vc-welcome-recent-pin svg {
+  width: 12px;
+  height: 12px;
+}

@@ -57,7 +57,8 @@ import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
 import { renderPlainText } from './plainText';
 import { selectionWithMath } from './mathSource';
-import { trackTask } from './backgroundTasks';
+import { noteTask, trackTask, type TaskInfo } from './backgroundTasks';
+import { TasksModal } from './tasksModal';
 import { followDraftNotes, movedPath, NOTE_CHAT_ICONS, type NoteChatEntry } from './noteChats';
 import { PromptNav } from './promptNav';
 import { SideChat } from './sideChat';
@@ -347,6 +348,8 @@ interface BackgroundChat {
   remoteUrl: string | null;
   /** Background tasks still running in its process; the chat is kept running until they finish. */
   tasks: Set<string>;
+  /** What each of them is, for the task list (see noteTask). */
+  taskInfo: Map<string, TaskInfo>;
   /** Closes the chat if no turn follows its last background task (see settleBackground). */
   settleTimer: number | null;
   /** Its tool calls still running, so that an edit finishing off screen links the notes it changed. */
@@ -398,6 +401,9 @@ const LIVE_FLUSH_MS = 100;
 const MOTION_MS = 250;
 /** How long an idle background chat waits, after its last background task, for the turn that reads the result. */
 const BACKGROUND_SETTLE_MS = 30_000;
+/** How many chats an empty chat's welcome offers to go back to (see renderRecentChats). */
+const RECENT_CHATS = 4;
+
 /** The scratch chat on the ← → lists (see navPlace). */
 const NAV_SCRATCH = 'scratch';
 
@@ -525,6 +531,12 @@ export class ChatView extends ItemView {
   private activityTime: HTMLElement | null = null;
   private phase = 'Working…';
   private stopButton!: HTMLButtonElement;
+  private tasksButton!: HTMLButtonElement;
+  private tasksCount!: HTMLElement;
+  /** What each background task of the chat on screen is (see noteTask); a background chat keeps its own. */
+  private taskInfo = new Map<string, TaskInfo>();
+  /** Open task lists, redrawn when the tasks change. */
+  private readonly taskWatchers = new Set<() => void>();
   private contextRow!: HTMLElement;
   /** The button that appears over text selected in the chat and quotes it in the next message. */
   private quoteButton!: HTMLButtonElement;
@@ -1148,6 +1160,12 @@ export class ChatView extends ItemView {
     this.stopButton = actions.createEl('button', { text: 'Stop' });
     this.stopButton.hide();
     this.registerDomEvent(this.stopButton, 'click', () => this.stop());
+    // The background tasks of this panel's chats, listed (see TasksModal): shown while any run.
+    this.tasksButton = actions.createEl('button', { cls: 'clickable-icon vc-tasks-button', attr: { 'aria-label': 'Background tasks: what each is doing, its output, and stopping one' } });
+    setIcon(this.tasksButton.createSpan(), 'list-checks');
+    this.tasksCount = this.tasksButton.createSpan({ cls: 'vc-tasks-count' });
+    this.tasksButton.hide();
+    this.registerDomEvent(this.tasksButton, 'click', () => this.openTasks());
     const draftButton = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Write this message in a note' } });
     setIcon(draftButton, 'square-pen');
     this.registerDomEvent(draftButton, 'click', () => void this.editDraft());
@@ -1344,6 +1362,7 @@ export class ChatView extends ItemView {
     this.notesToLink = [];
     this.chatsToLink = [];
     this.tasks = new Set();
+    this.taskInfo = new Map();
     this.updateStopButton();
     this.sentIds = new Set();
     this.scratch = false;
@@ -2094,6 +2113,7 @@ export class ChatView extends ItemView {
       ...(this.scratch ? { scratch: true } : {}),
       notice: null,
       tasks: this.tasks,
+      taskInfo: this.taskInfo,
       settleTimer: null,
       // A subagent's calls in flight too: its edits change notes as well.
       toolCalls: new Map([
@@ -2107,6 +2127,7 @@ export class ChatView extends ItemView {
       lastText: '',
     };
     this.tasks = new Set();
+    this.taskInfo = new Map();
     for (const approval of this.openApprovals) this.adoptApproval(entry, approval);
     this.openApprovals = [];
     session.setHandlers(this.backgroundHandlers(entry));
@@ -2142,7 +2163,9 @@ export class ChatView extends ItemView {
   private backgroundHandlers(entry: BackgroundChat): SessionHandlers {
     return {
       onMessage: (message) => {
+        if (noteTask(entry.taskInfo, message)) this.tasksChanged();
         if (trackTask(entry.tasks, message)) {
+          this.tasksChanged();
           this.updateBackgroundIndicator();
           if (entry.tasks.size === 0 && !entry.busy) this.settleBackground(entry);
         }
@@ -2411,6 +2434,7 @@ export class ChatView extends ItemView {
     this.background.delete(entry);
     clearSettle(entry);
     this.tasks = entry.tasks;
+    this.taskInfo = entry.taskInfo;
     this.updateStopButton();
     entry.notice?.hide();
     this.messagesEl.empty();
@@ -2497,6 +2521,7 @@ export class ChatView extends ItemView {
   }
 
   private updateBackgroundIndicator(): void {
+    this.tasksChanged();
     const entries = [...this.background];
     const working = entries.filter((entry) => entry.busy || entry.approvals.length > 0 || entry.tasks.size > 0).length;
     const onPhone = entries.filter((entry) => entry.remoteUrl).length;
@@ -5338,8 +5363,45 @@ export class ChatView extends ItemView {
   }
 
   /** Stop shows while a reply runs, and after it for as long as the chat has background tasks running. */
+  /** The tasks of this panel's chats changed: the button beside Stop counts them, and an open list redraws. */
+  private tasksChanged(): void {
+    const count = this.tasks.size + [...this.background].reduce((sum, entry) => sum + entry.tasks.size, 0);
+    if (this.tasksButton) {
+      this.tasksButton.toggle(count > 0);
+      this.tasksCount.setText(count > 0 ? String(count) : '');
+    }
+    for (const watcher of this.taskWatchers) watcher();
+  }
+
+  /** The list of this panel's background tasks (see TasksModal). */
+  openTasks(): void {
+    const sessionOf = (chatId: string | null): ChatSession | null =>
+      chatId === (this.chatId ?? this.resumeId) ? this.session : ([...this.background].find((entry) => entry.chatId === chatId)?.session ?? null);
+    const tasksOf = (ids: Set<string>, infos: Map<string, TaskInfo>): TaskInfo[] =>
+      [...ids].map((id) => infos.get(id) ?? { id, type: 'task', description: '', started: Date.now() });
+    new TasksModal(this.app, {
+      chats: () => [
+        { chatId: this.chatId ?? this.resumeId, title: this.chatName ?? 'This chat', tasks: tasksOf(this.tasks, this.taskInfo) },
+        ...[...this.background].map((entry) => ({ chatId: entry.chatId, title: entry.title ?? 'Untitled chat', tasks: tasksOf(entry.tasks, entry.taskInfo) })),
+      ],
+      output: async (chatId, taskId) => (await sessionOf(chatId)?.taskOutput(taskId)) ?? null,
+      stop: async (chatId, taskId) => {
+        await sessionOf(chatId)?.stopTask(taskId);
+      },
+      stopAll: (chatId) => {
+        if (chatId) this.stopTasksOf(chatId);
+        else this.stopTasks();
+      },
+      watch: (changed) => {
+        this.taskWatchers.add(changed);
+        return () => this.taskWatchers.delete(changed);
+      },
+    }).open();
+  }
+
   private updateStopButton(): void {
     if (!this.stopButton) return;
+    this.tasksChanged();
     const tasksOnly = !this.busy && this.tasks.size > 0;
     this.stopButton.toggle(this.busy || tasksOnly);
     this.stopButton.setText(tasksOnly ? `Stop ${plural(this.tasks.size, 'task')}` : 'Stop');
@@ -5788,10 +5850,12 @@ export class ChatView extends ItemView {
 
   private onMessage(message: SDKMessage): void {
     if (message.type === 'assistant' && message.parent_tool_use_id === null) this.noticeQueuedTaken();
+    const described = noteTask(this.taskInfo, message);
     if (trackTask(this.tasks, message)) {
       this.updateStopButton();
       this.updateTab();
     }
+    if (described) this.tasksChanged();
     if (!this.busy && (message.type === 'stream_event' || message.type === 'assistant') && message.parent_tool_use_id === null) {
       // A reply to a message sent here is this panel's turn, even after another turn ended first.
       const answering = answeredBy(message);
@@ -5993,6 +6057,8 @@ export class ChatView extends ItemView {
     // Its background tasks ended with its process: no word of them will come.
     if (this.tasks.size > 0) {
       this.tasks = new Set();
+      this.taskInfo = new Map();
+      this.tasksChanged();
       this.updateStopButton();
       this.updateTab();
     }
@@ -7771,8 +7837,47 @@ export class ChatView extends ItemView {
       const link = line.createSpan({ cls: 'vc-welcome-link', text: 'Pick up where you left off' });
       line.appendText(': chats to carry on');
       link.addEventListener('click', () => void this.plugin.openPickUp());
+      this.renderRecentChats(el);
     }
   }
+
+  /** On an empty chat's welcome, the chats you are likely to go back to: pinned ones, then the most recent, a few in all. */
+  private renderRecentChats(el: HTMLElement): void {
+    const listed = this.plugin.listedChats();
+    if (!listed) {
+      // Not listed yet: the welcome shows them once they are.
+      if (!this.recentAsked) {
+        this.recentAsked = true;
+        void this.plugin.listChats().then(() => this.refreshWelcome(), () => undefined);
+      }
+      return;
+    }
+    const pinned = new Set(this.plugin.pinned);
+    const chats = listed
+      .filter((item) => !item.scratch && item.id !== (this.chatId ?? this.resumeId))
+      .sort((a, b) => Number(pinned.has(b.id)) - Number(pinned.has(a.id)) || b.updatedAt - a.updatedAt)
+      .slice(0, RECENT_CHATS);
+    if (chats.length === 0) return;
+    const list = el.createDiv({ cls: 'vc-welcome-recent' });
+    for (const item of chats) {
+      const row = list.createDiv({ cls: 'vc-welcome-recent-row', attr: { role: 'button', tabindex: '0' } });
+      if (pinned.has(item.id)) setIcon(row.createSpan({ cls: 'vc-welcome-recent-pin' }), 'pin');
+      row.createSpan({ cls: 'vc-welcome-recent-title', text: item.title });
+      if (this.plugin.isCodexChat(item.id)) row.createSpan({ cls: 'vc-engine-badge', text: 'Codex' });
+      row.createSpan({ cls: 'vc-welcome-recent-when', text: formatDate(item.updatedAt) });
+      const open = () => void this.openChat(item);
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Enter' || evt.key === ' ') {
+          evt.preventDefault();
+          open();
+        }
+      });
+    }
+  }
+
+  /** Whether the welcome has asked for the chats to be listed (see renderRecentChats), once. */
+  private recentAsked = false;
 
   private onMessagesClick(evt: MouseEvent): void {
     const target = evt.target as HTMLElement;

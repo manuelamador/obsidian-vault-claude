@@ -313,6 +313,18 @@ export class ClaudeSession {
   }
 
   /** Stops one background task — a subagent or a shell command Claude sent to the background. */
+  /**
+   * The end of background task `taskId`'s output (a shell command's or a monitor's: the last 8 KiB),
+   * through the SDK's get_task_output, which its typings leave out; null with no process, or from an
+   * SDK without it.
+   */
+  async taskOutput(taskId: string): Promise<{ output: string; truncated: boolean } | null> {
+    const stream = this.stream as unknown as { getTaskOutput?: (id: string) => Promise<{ output?: string; truncated?: boolean }> } | null;
+    if (!stream?.getTaskOutput) return null;
+    const read = await stream.getTaskOutput(taskId);
+    return { output: read.output ?? '', truncated: read.truncated === true };
+  }
+
   async stopTask(taskId: string): Promise<void> {
     await this.stream?.stopTask(taskId);
   }

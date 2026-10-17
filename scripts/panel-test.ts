@@ -125,6 +125,7 @@ async function main(): Promise<void> {
     homeReason: (_id: string): unknown => null,
     enclosingProjects: (): unknown[] => [],
     listedChats: (): null => null,
+    listChats: async (): Promise<unknown[]> => [],
     chatShown: () => undefined,
     isProjectNote: () => false,
     chatMarkdownLink: (id: string) => `[Chat](obsidian://vault-claude?chat=${id})`,
