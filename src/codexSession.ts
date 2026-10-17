@@ -450,6 +450,8 @@ class CodexReader {
   private next = 0;
   private idle: ReturnType<typeof setTimeout> | null = null;
   private users = 0;
+  /** What hears Codex's notifications: a one-off request's text as it comes (see runCodexOneShot). */
+  private readonly listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
   readonly ready: Promise<void>;
   dead = false;
 
@@ -490,6 +492,12 @@ class CodexReader {
     });
   }
 
+  /** `listener` hears each notification until the returned function is called. */
+  listen(listener: (method: string, params: Record<string, unknown>) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
   /** In use: not stopped meanwhile. */
   hold(): void {
     this.users += 1;
@@ -522,7 +530,8 @@ class CodexReader {
       this.buffer = this.buffer.slice(at + 1);
       if (!line) continue;
       try {
-        const message = JSON.parse(line) as { id?: number; method?: string; result?: unknown; error?: { message?: string } };
+        const message = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: string } };
+        if (message.method && message.id === undefined) for (const listener of this.listeners) listener(message.method, message.params ?? {});
         if (typeof message.id !== 'number' || message.method) continue;
         const waiting = this.pending.get(message.id);
         this.pending.delete(message.id);
@@ -548,7 +557,7 @@ export function warmCodexReader(launch: CodexLaunch): void {
 }
 
 /** Runs `use` against the Codex app-server kept for reads (see CodexReader), started for `launch` if need be. */
-async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: string, params: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
+async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: string, params: unknown) => Promise<unknown>, reader: CodexReader) => Promise<T>): Promise<T> {
   const key = JSON.stringify([launch.codexPath, launch.cwd, launch.env.PATH]);
   if (reader && (reader.dead || reader.key !== key)) reader.stop();
   const current = reader && !reader.dead ? reader : new CodexReader(key, launch, (gone) => {
@@ -558,7 +567,7 @@ async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: str
   current.hold();
   try {
     await current.ready;
-    return await use((method, params) => current.request(method, params));
+    return await use((method, params) => current.request(method, params), current);
   } finally {
     current.release();
   }
@@ -610,5 +619,53 @@ export async function readCodexThread(launch: CodexLaunch, threadId: string): Pr
   return withAppServer(launch, async (request) => {
     const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: { items?: unknown[] }[] } };
     return read.thread?.turns ?? [];
+  });
+}
+
+/**
+ * One request to Codex with no tools to use, as the panel's small jobs make them (summaries, memo
+ * suggestions, inline edits): on a thread Codex does not save, in a read-only sandbox, never asking.
+ * `onText` gets the reply so far as it comes; resolves to the whole reply.
+ */
+export async function runCodexOneShot(
+  launch: CodexLaunch,
+  request: { system: string; prompt: string; model?: string; effort?: string },
+  onText: (text: string) => void,
+  signal: AbortSignal,
+): Promise<string> {
+  return withAppServer(launch, async (call, reader) => {
+    const opened = (await call('thread/start', { cwd: launch.cwd, developerInstructions: request.system, sandbox: 'read-only', approvalPolicy: 'never', ephemeral: true })) as { thread?: { id?: string } };
+    const threadId = opened.thread?.id;
+    if (!threadId) throw new Error('Codex started no thread');
+    let streamed = '';
+    let answer = '';
+    let turnId: string | null = null;
+    const finished = new Promise<void>((resolve, reject) => {
+      const stop = reader.listen((method, params) => {
+        if (params.threadId !== threadId) return;
+        if (method === 'item/agentMessage/delta' && typeof params.delta === 'string') {
+          streamed += params.delta;
+          onText(streamed);
+        } else if (method === 'item/completed') {
+          const item = params.item as CodexItem | undefined;
+          if (item?.type === 'agentMessage' && item.text) answer = item.text;
+        } else if (method === 'turn/completed') {
+          stop();
+          const turn = params.turn as { status?: string; error?: { message?: string } | null } | undefined;
+          if (turn?.status === 'failed') reject(new Error(turn.error?.message ?? 'Codex stopped with an error'));
+          else resolve();
+        }
+      });
+      signal.addEventListener('abort', () => {
+        stop();
+        if (turnId) void call('turn/interrupt', { threadId, turnId }).catch(() => undefined);
+        resolve();
+      }, { once: true });
+    });
+    const effort = request.effort ? { effort: request.effort } : {};
+    const started = (await call('turn/start', { threadId, input: codexInput(request.prompt), ...(request.model ? { model: request.model } : {}), ...effort })) as { turn?: { id?: string } };
+    turnId = started.turn?.id ?? null;
+    await finished;
+    return answer || streamed;
   });
 }

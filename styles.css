@@ -3549,3 +3549,39 @@ body:has(.vc-pick-up) .popover.hover-popover {
   line-height: 1.4;
   letter-spacing: 0.02em;
 }
+
+/* The welcome's switch between Claude Code and Codex, for a chat not started yet (see useEngine). */
+.vc-welcome-engine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.vc-engine-switch {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.vc-engine-switch button.vc-engine-choice {
+  height: auto;
+  padding: 1px 8px;
+  border: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: inherit;
+  font-weight: var(--font-normal);
+  cursor: pointer;
+}
+
+.vc-engine-switch button.vc-engine-choice.is-active {
+  background: var(--text-normal);
+  color: var(--background-primary);
+  font-weight: var(--font-semibold);
+}

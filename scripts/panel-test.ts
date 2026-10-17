@@ -2839,8 +2839,10 @@ async function main(): Promise<void> {
     const placeholder = (view as unknown as { inputEl: HTMLTextAreaElement }).inputEl.placeholder;
     const welcomeOk =
       welcome ===
-        'Claude Code, running in this vault\n⌘↩ send · ↑ last message · @ file · / command\n⌥↑↓ your messages · ⌘F find\nOpen the scratch chat for daily odds and ends\nPick up where you left off: chats to carry on' &&
-      placeholder === 'Ask Claude about this vault…';
+        'Claude CodeCodex, running in this vault\n⌘↩ send · ↑ last message · @ file · / command\n⌥↑↓ your messages · ⌘F find\nOpen the scratch chat for daily odds and ends\nPick up where you left off: chats to carry on' &&
+      placeholder === 'Ask Claude about this vault…' &&
+      // The switch shows Claude Code chosen, for a chat not started yet.
+      root.querySelector('.vc-engine-choice.is-active')?.textContent === 'Claude Code';
     console.log(`new chat lists the keys: ${welcomeOk}`);
     if (!welcomeOk) {
       console.log(JSON.stringify({ welcome, placeholder }));

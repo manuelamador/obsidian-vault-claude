@@ -55,6 +55,10 @@ export interface VaultClaudeSettings {
   claudePath: string;
   /** The Codex CLI for Codex chats (see CodexSession); empty finds it on PATH or where the ChatGPT app installs it. */
   codexPath: string;
+  /** What runs a new chat: Claude Code, or Codex (as New Codex chat does). */
+  newChatEngine: 'claude' | 'codex';
+  /** What runs the small jobs (see smallJobModel): Claude Code, or Codex on its default model. */
+  smallJobEngine: 'claude' | 'codex';
   model: string;
   /** Vault paths left out of the notes a chat lists, one pattern per line. */
   hiddenNotePaths: string;
@@ -126,6 +130,8 @@ export function extraPathEntries(value: string): string[] {
 export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   claudePath: '',
   codexPath: '',
+  newChatEngine: 'claude',
+  smallJobEngine: 'claude',
   model: '',
   hiddenNotePaths: '*attachments/*',
   scratchChat: true,
@@ -195,6 +201,32 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           .setValue(settings.codexPath)
           .onChange(async (value) => {
             settings.codexPath = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('New chats run on')
+      .setDesc('Claude Code or Codex. The other is a click away in a new chat, and New chat\'s right-click menu offers both.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ claude: 'Claude Code', codex: 'Codex' })
+          .setValue(settings.newChatEngine)
+          .onChange(async (value) => {
+            settings.newChatEngine = value === 'codex' ? 'codex' : 'claude';
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Small jobs run on')
+      .setDesc('Claude Code, on the model for small jobs below, or Codex, on its default model: Edit selection, Save summary as note, memo suggestions, Pick up where you left off, a project\'s Context, summaries of included chats and Suggest frontmatter updates. The scratch chat stays a Claude Code chat.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ claude: 'Claude Code', codex: 'Codex' })
+          .setValue(settings.smallJobEngine)
+          .onChange(async (value) => {
+            settings.smallJobEngine = value === 'codex' ? 'codex' : 'claude';
             await this.plugin.saveSettings();
           }),
       );

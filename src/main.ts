@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
 import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
-import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
+import type { EffortLevel, ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
 import { deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
 import { codexTranscript, type CodexItem } from './codexEvents';
@@ -10,7 +10,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
-import { findCodex, listCodexModels, readCodexLimits, readCodexThread, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
+import { findCodex, listCodexModels, readCodexLimits, readCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -1803,13 +1803,13 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Asks the model for small jobs for a summary of chat `id`, used in place of its digest when it is included in another chat. */
   async summariseLinkedChat(id: string, signal: AbortSignal): Promise<void> {
-    const launch = this.claudeLaunch();
+    const problem = this.smallJobProblem();
     const dir = this.vaultRoot();
-    if (typeof launch === 'string') throw new Error(launch);
+    if (problem) throw new Error(problem);
     if (!dir) throw new Error('the vault is not a folder on this computer');
     // More of it than a digest keeps: the summary is what is kept short.
     const transcript = chatDigest((await this.loadAnyChat(id, dir)).transcript, SUMMARY_SOURCE_CHARS);
-    const text = await runOneShot(launch, { system: LINKED_SUMMARY_SYSTEM, prompt: `Conversation “${this.chatTitleOf(id)}”:\n\n${transcript}`, model: this.smallJobModel(), effort: 'low' }, () => undefined, signal);
+    const text = await this.oneShot({ system: LINKED_SUMMARY_SYSTEM, prompt: `Conversation “${this.chatTitleOf(id)}”:\n\n${transcript}`, effort: 'low' }, () => undefined, signal);
     if (signal.aborted || !text.trim()) return;
     this.chatSummaries[id] = { text: text.trim(), at: Date.now() };
     this.saveSoon();
@@ -2639,9 +2639,9 @@ export default class VaultClaudePlugin extends Plugin {
    * (their last exchanges): read locally, one request.
    */
   async writeProjectContext(file: TFile, signal?: AbortSignal): Promise<string> {
-    const launch = this.claudeLaunch();
+    const problem = this.smallJobProblem();
     const dir = this.vaultRoot();
-    if (typeof launch === 'string') throw new Error(launch);
+    if (problem) throw new Error(problem);
     await this.listChats().catch(() => []);
     const folder = this.projectFolder(file);
     const files = this.app.vault
@@ -2665,7 +2665,7 @@ export default class VaultClaudePlugin extends Plugin {
           digest: dir ? chatDigest(await lastMessages(item.id, dir, ownMessage, CONTEXT_MESSAGES, PICK_UP_BYTES).catch(() => [])).slice(-CONTEXT_DIGEST_CHARS) : '',
         })),
     );
-    const reply = await runOneShot(launch, { system: CONTEXT_SYSTEM, prompt: contextPrompt({ name: file.basename, folder }, notes, chats), model: this.smallJobModel(), effort: 'low' }, () => undefined, signal ?? new AbortController().signal);
+    const reply = await this.oneShot({ system: CONTEXT_SYSTEM, prompt: contextPrompt({ name: file.basename, folder }, notes, chats), effort: 'low' }, () => undefined, signal ?? new AbortController().signal);
     const context = readContext(reply);
     if (!context) throw new Error('Claude did not write one');
     return context;
@@ -2717,10 +2717,10 @@ export default class VaultClaudePlugin extends Plugin {
         if (guidance.trim()) this.frontmatterGuidance[folder] = guidance.trim();
         else delete this.frontmatterGuidance[folder];
         this.saveSoon();
-        const launch = this.claudeLaunch();
-        if (typeof launch === 'string') throw new Error(launch);
+        const problem = this.smallJobProblem();
+        if (problem) throw new Error(problem);
         const text = await this.app.vault.cachedRead(file);
-        const reply = await runOneShot(launch, { system: FRONTMATTER_SYSTEM, prompt: frontmatterPrompt({ path: file.path, text, neighbours, chats, guidance }), model: this.smallJobModel() }, () => undefined, signal);
+        const reply = await this.oneShot({ system: FRONTMATTER_SYSTEM, prompt: frontmatterPrompt({ path: file.path, text, neighbours, chats, guidance }) }, () => undefined, signal);
         const fields = readFrontmatterSuggestions(reply, current());
         if (!fields) throw new Error('Claude did not reply in the form asked for');
         return fields;
@@ -2854,9 +2854,8 @@ export default class VaultClaudePlugin extends Plugin {
    * read locally from their session files and the memos saved from them. Null when Claude Code cannot run.
    */
   private async suggestPickUp(signal: AbortSignal): Promise<{ suggestions: Suggestion[]; note: string; candidates: Candidate[] } | null> {
-    const launch = this.claudeLaunch();
     const dir = this.vaultRoot();
-    if (typeof launch === 'string' || !dir) return null;
+    if (this.smallJobProblem() || !dir) return null;
     const now = Date.now();
     const { recent, older } = chatsToLookAt(await this.listChats(), this.pickUp, now);
     const memoNext = async (id: string) =>
@@ -2873,7 +2872,7 @@ export default class VaultClaudePlugin extends Plugin {
     }
     if (signal.aborted) return { suggestions: [], note: '', candidates };
     if (candidates.length === 0) return { suggestions: [], note: 'No chats from the last six months to look at.', candidates };
-    const reply = await runOneShot(launch, { system: PICK_UP_SYSTEM, prompt: pickUpPrompt(candidates, now), model: this.smallJobModel(), effort: 'low' }, () => undefined, signal);
+    const reply = await this.oneShot({ system: PICK_UP_SYSTEM, prompt: pickUpPrompt(candidates, now), effort: 'low' }, () => undefined, signal);
     const read = readPickUp(reply, candidates);
     if (!read) throw new Error('Claude did not reply in the form asked for');
     return { ...read, candidates };
@@ -3090,10 +3089,8 @@ export default class VaultClaudePlugin extends Plugin {
    * MemoModal): one request with no tools. Null when Claude Code cannot run or no suggestion came.
    */
   async suggestMemo(chatTitle: string, passages: MemoPassage[], signal: AbortSignal): Promise<{ title: string; description: string } | null> {
-    const launch = this.claudeLaunch();
-    if (typeof launch === 'string') return null;
-    const model = this.smallJobModel();
-    const reply = await runOneShot(launch, { system: MEMO_SUGGESTION_SYSTEM, prompt: memoSuggestionPrompt(chatTitle, passages), model, effort: 'low' }, () => undefined, signal);
+    if (this.smallJobProblem()) return null;
+    const reply = await this.oneShot({ system: MEMO_SUGGESTION_SYSTEM, prompt: memoSuggestionPrompt(chatTitle, passages), effort: 'low' }, () => undefined, signal);
     return readMemoSuggestion(reply);
   }
 
@@ -3159,8 +3156,11 @@ export default class VaultClaudePlugin extends Plugin {
   /** "Edit selection with Claude" for the editor's selection, or for writing at the cursor. */
   /** `owner`: what holds the editor (a note's tab, a canvas card, a hover preview), by which the edit finds its note again (see InlineEditModal.accept). */
   async openInlineEdit(editor: Editor, file: TFile, owner: MarkdownFileInfo): Promise<void> {
-    const launch = this.launchOrNotice();
-    if (!launch) return;
+    const problem = this.smallJobProblem();
+    if (problem) {
+      new Notice(problem);
+      return;
+    }
     const from = editor.getCursor('from');
     const to = editor.getCursor('to');
     const text = editor.getValue();
@@ -3177,10 +3177,7 @@ export default class VaultClaudePlugin extends Plugin {
       after: text.slice(end, end + INLINE_CONTEXT_CHARS),
     };
     const conventions = await this.vaultConventions();
-    const model = this.smallJobModel();
-    new InlineEditModal(this.app, target, inlineEditSystem(target.original === '', conventions), (system, prompt, onText, signal) =>
-      runOneShot(launch, { system, prompt, model }, onText, signal),
-    ).open();
+    new InlineEditModal(this.app, target, inlineEditSystem(target.original === '', conventions), (system, prompt, onText, signal) => this.oneShot({ system, prompt }, onText, signal)).open();
   }
 
   /**
@@ -3188,18 +3185,39 @@ export default class VaultClaudePlugin extends Plugin {
    * summary model; resolves to Claude's note. `transcript` is the chat's prompts and replies.
    */
   async summarizeChat(input: { title: string; date: string; sessionId: string; transcript: string }, signal: AbortSignal): Promise<string> {
-    const launch = this.claudeLaunch();
-    if (typeof launch === 'string') throw new Error(launch);
+    const problem = this.smallJobProblem();
+    if (problem) throw new Error(problem);
     const conventions = await this.vaultConventions();
     // The summary names the model it ran on, which with none chosen is the one Claude Code's settings name.
-    if (!this.configured.model) await this.loadConfigured();
-    const model = this.smallJobModel();
-    return runOneShot(
-      launch,
-      { system: summarySystem(conventions), prompt: summaryPrompt({ ...input, model: this.modelName(model) }), model, effort: 'medium' },
-      () => undefined,
-      signal,
-    );
+    const codex = this.settings.smallJobEngine === 'codex';
+    if (!codex && !this.configured.model) await this.loadConfigured();
+    const model = codex ? (this.codexModels.find((each) => each.isDefault)?.name ?? 'Codex') : this.modelName(this.smallJobModel());
+    return this.oneShot({ system: summarySystem(conventions), prompt: summaryPrompt({ ...input, model }), effort: 'medium' }, () => undefined, signal);
+  }
+
+  /** Why the small jobs cannot run on the engine chosen for them (see oneShot); null when they can. */
+  smallJobProblem(): string | null {
+    if (this.settings.smallJobEngine === 'codex') {
+      const launch = this.codexLaunch();
+      return typeof launch === 'string' ? launch : null;
+    }
+    const launch = this.claudeLaunch();
+    return typeof launch === 'string' ? launch : null;
+  }
+
+  /**
+   * One request with no tools, as the small jobs make them: to Claude Code on the model for small
+   * jobs, or to Codex on its default model (see Small jobs run on). `onText` gets the reply so far.
+   */
+  oneShot(request: { system: string; prompt: string; effort?: EffortLevel }, onText: (text: string) => void, signal: AbortSignal): Promise<string> {
+    if (this.settings.smallJobEngine === 'codex') {
+      const launch = this.codexLaunch();
+      if (typeof launch === 'string') return Promise.reject(new Error(launch));
+      return runCodexOneShot(launch, request, onText, signal);
+    }
+    const launch = this.claudeLaunch();
+    if (typeof launch === 'string') return Promise.reject(new Error(launch));
+    return runOneShot(launch, { ...request, model: this.smallJobModel() }, onText, signal);
   }
 
   /** The model for small jobs (memo suggestions, inline edits, summaries): its own setting, else the chat's. */
@@ -3305,6 +3323,8 @@ export default class VaultClaudePlugin extends Plugin {
     // Only the times offered: anything else (a hand-edited data.json) falls back to the default.
     if (!SCRATCH_IDLE_CHOICES.includes(this.settings.scratchIdleHours)) this.settings.scratchIdleHours = DEFAULT_SETTINGS.scratchIdleHours;
     if (this.settings.sideChatContext !== 'quote') this.settings.sideChatContext = 'chat';
+    if (this.settings.newChatEngine !== 'codex') this.settings.newChatEngine = 'claude';
+    if (this.settings.smallJobEngine !== 'codex') this.settings.smallJobEngine = 'claude';
     // Up to 0.11.0 these were three settings; whichever was set becomes the one for small jobs.
     const legacy = stored as Partial<Record<'smallJobModel' | 'scratchModel' | 'summaryModel' | 'inlineEditModel', string>>;
     if (typeof legacy.smallJobModel !== 'string') {

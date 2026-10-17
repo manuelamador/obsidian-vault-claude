@@ -827,7 +827,9 @@ export class ChatView extends ItemView {
       evt.preventDefault();
       const menu = new Menu();
       menu.addItem((item) => item.setTitle('New chat in a new tab').setIcon('square-pen').onClick(() => void this.plugin.openChatTab(this.leaf).then((view) => view?.focusInput())));
-      menu.addItem((item) => item.setTitle('New Codex chat').setIcon('terminal-square').onClick(() => this.startCodexChat()));
+      // The other engine than new chats run on (see New chats run on).
+      if (this.plugin.settings.newChatEngine === 'codex') menu.addItem((item) => item.setTitle('New Claude chat').setIcon('message-square-plus').onClick(() => this.startClaudeChat()));
+      else menu.addItem((item) => item.setTitle('New Codex chat').setIcon('terminal-square').onClick(() => this.startCodexChat()));
       menu.addItem((item) => item.setTitle('Pick up where you left off').setIcon('history').onClick(() => void this.plugin.openPickUp()));
       if (this.plugin.settings.scratchChat) {
         menu.addItem((item) => item.setTitle('Open scratch chat').setIcon('eraser').onClick(() => void this.openScratch()));
@@ -1183,6 +1185,8 @@ export class ChatView extends ItemView {
     this.registerDomEvent(root, 'pointerdown', () => this.markSeen());
     this.registerEvent(this.app.workspace.on('css-change', () => this.updateStatusBarClearance()));
     this.app.workspace.onLayoutReady(() => window.requestAnimationFrame(() => this.updateStatusBarClearance()));
+    // A blank chat runs on what new chats run on (see New chats run on); a chat restored over it sets its own.
+    if (this.plugin.settings.newChatEngine === 'codex' && !this.chatId && !this.resumeId) this.useEngine('codex');
   }
 
   onResize(): void {
@@ -1295,7 +1299,7 @@ export class ChatView extends ItemView {
 
   newChat(): void {
     this.leaveDraft();
-    // A new chat is Claude's unless New Codex chat makes it Codex's (see startCodexChat).
+    // A chat is Claude's until made Codex's: a Codex chat opened, or a blank one switched (see useEngine).
     const wasCodex = this.engine === 'codex';
     // A chat that is still working keeps running in the background instead of being stopped; a
     // Codex chat's engine goes with it, so it comes back as Codex's.
@@ -4314,9 +4318,40 @@ export class ChatView extends ItemView {
   /** A new chat run by Codex: the controls Claude Code's settings drive are hidden, Codex using its own. */
   startCodexChat(): void {
     this.startNewChat();
-    this.engine = 'codex';
-    this.applyEngine();
+    this.useEngine('codex');
     this.focusInput();
+  }
+
+  /** A new chat run by Claude Code, whichever new chats run on. */
+  startClaudeChat(): void {
+    this.startNewChat();
+    this.useEngine('claude');
+    this.focusInput();
+  }
+
+  /**
+   * The blank chat on screen runs on `engine` (see the switch on its welcome): a process started for
+   * it beforehand is stopped, and the controls and the welcome follow. A chat with messages keeps its own.
+   */
+  private useEngine(engine: 'claude' | 'codex'): void {
+    if (this.engine === engine || this.chatId || this.resumeId || this.busy) return;
+    if (this.session) {
+      this.sessionToken = null;
+      this.closeSession(this.session);
+      this.session = null;
+    }
+    this.engine = engine;
+    if (engine === 'claude') {
+      this.codexModel = undefined;
+      this.codexEffort = undefined;
+    }
+    this.applyEngine();
+    if (this.inputEl && !this.busy) this.inputEl.placeholder = this.placeholderText();
+    const welcome = this.messagesEl.querySelector('.vc-welcome');
+    if (welcome) {
+      welcome.remove();
+      this.renderWelcome();
+    }
   }
 
   /**
@@ -4890,6 +4925,7 @@ export class ChatView extends ItemView {
   startNewChat(): void {
     const from = this.navPlace();
     this.newChat();
+    if (this.plugin.settings.newChatEngine === 'codex') this.useEngine('codex');
     this.remember(from);
     this.plugin.chatShown(this);
   }
@@ -7386,7 +7422,18 @@ export class ChatView extends ItemView {
         text: `It starts over after ${idleLabel(this.plugin.settings.scratchIdleHours)} idle, or on Clear scratch chat. Save it as a note to keep anything.`,
       });
     } else {
-      el.createDiv({ text: 'Claude Code, running in this vault' });
+      // Which runs the chat, switched here until its first message (see useEngine).
+      const title = el.createDiv({ cls: 'vc-welcome-engine' });
+      const choice = title.createDiv({ cls: 'vc-engine-switch', attr: { role: 'radiogroup', 'aria-label': 'What runs this chat' } });
+      for (const [engine, label] of [['claude', 'Claude Code'], ['codex', 'Codex']] as const) {
+        const on = this.engine === engine;
+        const button = choice.createEl('button', { cls: `vc-engine-choice${on ? ' is-active' : ''}`, text: label, attr: { role: 'radio', 'aria-checked': String(on) } });
+        button.addEventListener('click', () => {
+          this.useEngine(engine);
+          this.focusInput();
+        });
+      }
+      title.createSpan({ text: ', running in this vault' });
     }
     // The panel's keys.
     const mac = Platform.isMacOS;
