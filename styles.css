@@ -3638,3 +3638,8 @@ a.vc-email-attachment:hover {
 .vc-email-attachment.is-all {
   color: var(--text-accent);
 }
+
+/* A file seen changed while a command ran but not named by it (see ChangedFile.own): dimmed. */
+.vc-changes-file.is-not-own .vc-edit-file {
+  color: var(--text-faint);
+}

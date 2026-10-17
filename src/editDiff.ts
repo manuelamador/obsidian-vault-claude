@@ -348,6 +348,7 @@ class ChangedFile {
   private readonly addedEl: HTMLElement;
   private readonly removedEl: HTMLElement;
   private readonly diffEl: HTMLElement;
+  private readonly fileEl: HTMLElement;
 
   constructor(
     parent: HTMLElement,
@@ -358,6 +359,7 @@ class ChangedFile {
     this.created = first.created;
     this.fromShell = first.fromShell === true;
     const el = parent.createDiv({ cls: 'vc-changes-file' });
+    this.fileEl = el;
     const row = el.createDiv({ cls: 'vc-changes-row' });
     setIcon(row.createSpan({ cls: 'vc-changes-chevron' }), 'chevron-right');
     setIcon(row.createSpan({ cls: 'vc-edit-icon' }), first.created ? 'file-plus' : 'file-pen');
@@ -389,6 +391,12 @@ class ChangedFile {
     this.added += diff.added;
     this.removed += diff.removed;
     showCounts(this.addedEl, this.removedEl, this.added, this.removed);
+    // Only changed while a command of the chat ran, by something else (another chat, Sync): marked,
+    // and not counted among the chat's notes (see ChatView.notesInChat).
+    const own = this.own;
+    this.fileEl.toggleClass('is-not-own', !own);
+    if (own) this.fileEl.removeAttribute('title');
+    else this.fileEl.setAttr('title', 'Changed while a command of this chat ran, but the command does not name it: perhaps by another chat or program');
     if (this.diffEl.isShown()) this.draw();
   }
 

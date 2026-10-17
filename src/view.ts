@@ -4865,6 +4865,8 @@ export class ChatView extends ItemView {
       if (path) {
         // A folder, say, from a search's tool line, is not a file.
         const file = this.app.vault.getAbstractFileByPath(path) instanceof TFile ? path : undefined;
+        // A file only seen changed while a command ran, not by it, is not the chat's (see ChangedFile.own).
+        if (el.closest('.vc-changes-file.is-not-own')) continue;
         add(el.closest('.vc-changes') ? changed : mentioned, path, path, file);
         continue;
       }
