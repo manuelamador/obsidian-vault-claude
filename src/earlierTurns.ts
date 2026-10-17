@@ -56,6 +56,13 @@ export function historyParts(transcript: SessionMessage[], tailTurns: number, ta
   return { tail: transcript.slice(cut), earlier: earlier.reverse() };
 }
 
+/** `transcript`'s turns, newest first, as historyParts gives the earlier ones: what came before the first prompt goes with the first turn. */
+export function turnsOf(transcript: SessionMessage[]): SessionMessage[][] {
+  const starts = turnStarts(transcript);
+  const bounds = [0, ...starts.slice(1), transcript.length];
+  return bounds.slice(0, -1).map((from, k) => transcript.slice(from, bounds[k + 1])).filter((turn) => turn.length > 0).reverse();
+}
+
 /** A message on one line, at most `max` characters: its text, or the names of its attachments when it has none. */
 export function promptSummary(text: string, chips: { label: string }[], max: number): string {
   const line = oneLine(text, max);
@@ -141,10 +148,12 @@ export class EarlierDrawing implements FindEarlier {
     turns: SessionMessage[][],
     parent: HTMLElement,
     private readonly host: EarlierHost,
+    before?: Node | null,
   ) {
     this.turns = [...turns];
     const doc = parent.ownerDocument;
-    const line = parent.appendChild(doc.createElement('div'));
+    // At the end of `parent`, or before `before` (the turns drawn already, when the earlier ones come later).
+    const line = parent.insertBefore(doc.createElement('div'), before ?? null);
     line.className = 'vc-muted vc-earlier';
     // A line about the chat, not in it: find leaves it out.
     line.setAttribute('data-no-find', '');

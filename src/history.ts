@@ -741,6 +741,45 @@ async function readSessionNow(id: string, dir: string, withEdits: boolean, remem
   return { transcript, edits: new Map([...read.edits, ...last.edits]) };
 }
 
+/**
+ * Chat `id` read for opening: whole when it is short or remembered (see ReadSoFar), else its last
+ * messages only, read from the end of its file until `enough` says they are enough (handed them
+ * oldest first), with `rest`, the whole chat read meanwhile, to draw the earlier turns from. Null
+ * when its file cannot be read.
+ */
+export async function openChatFile(id: string, dir: string, enough: (messages: SessionMessage[]) => boolean): Promise<{ chat: LoadedChat; rest: Promise<LoadedChat> | null } | null> {
+  if (!isChatId(id)) return null;
+  const file = sessionFile(id, dir);
+  const stat = await fs.stat(file).catch(() => null);
+  if (!stat) return null;
+  if (stat.size < KEEP_READ_BYTES || readSoFar.has(`${file}\n${true}`)) return { chat: await loadChat(id, dir, true), rest: null };
+  const rows: SessionMessage[] = [];
+  const edits = new Map<string, unknown>();
+  const queued = new Map<SessionMessage, string | undefined>();
+  const own = new Set<string>();
+  let stopped = false;
+  await eachRowFromEnd(id, dir, (row) => {
+    const edit = rowToolResult(row, true);
+    if (edit) edits.set(...edit);
+    const message = rowMessage(row, id);
+    if (!message) return false;
+    rows.push(message);
+    if (row.type === 'attachment') queued.set(message, row.attachment?.source_uuid);
+    else if (message.uuid) own.add(message.uuid);
+    // Asked only at a message of yours, where a turn may start.
+    if (message.type !== 'user') return false;
+    stopped = enough([...rows].reverse());
+    return stopped;
+  }, Infinity, TAIL_BYTES, drawnRow);
+  // The whole file read on the way: no need to read it again.
+  const messages = rows.reverse().filter((message) => {
+    const source = queued.get(message);
+    return source === undefined || !own.has(source);
+  });
+  if (!stopped || messages.length === 0) return { chat: await loadChat(id, dir, true), rest: null };
+  return { chat: { transcript: messages, edits }, rest: loadChat(id, dir, true) };
+}
+
 /** The end of a session file lastMessages reads first; each further read, further back, is twice the last. */
 const TAIL_BYTES = 256 * 1024;
 
@@ -750,7 +789,8 @@ const TAIL_BYTES = 256 * 1024;
  * each further one goes further back, twice as far as the last; each byte is read and parsed once,
  * so a row costs in proportion to its distance from the end.
  */
-async function eachRowFromEnd(id: string, dir: string, visit: (row: SessionRow) => boolean, maxBytes = Infinity, firstBytes = TAIL_BYTES): Promise<boolean> {
+/** `wanted`: the lines worth parsing (see drawnRow); others are passed over unparsed. */
+async function eachRowFromEnd(id: string, dir: string, visit: (row: SessionRow) => boolean, maxBytes = Infinity, firstBytes = TAIL_BYTES, wanted: (line: string) => boolean = () => true): Promise<boolean> {
   let file: fs.FileHandle;
   try {
     file = await fs.open(sessionFile(id, dir), 'r');
@@ -780,7 +820,7 @@ async function eachRowFromEnd(id: string, dir: string, visit: (row: SessionRow) 
         cut = start > 0 ? block.subarray(0, first) : Buffer.alloc(0);
         const lines = block.subarray(start > 0 ? first + 1 : 0).toString('utf8').split('\n');
         for (let i = lines.length - 1; i >= 0 && !done; i -= 1) {
-          const row = lines[i] ? parseRow(lines[i]) : null;
+          const row = lines[i] && wanted(lines[i]) ? parseRow(lines[i]) : null;
           if (row) done = visit(row);
         }
       }

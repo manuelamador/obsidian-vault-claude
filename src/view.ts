@@ -29,8 +29,8 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, sessionStamp, deleteSessionIfAny, entryBefore, formatDate, lastMessages, messageDates, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
-import { EarlierDrawing, historyParts } from './earlierTurns';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, sessionStamp, deleteSessionIfAny, entryBefore, formatDate, lastMessages, messageDates, openChatFile, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { EarlierDrawing, historyParts, turnStarts, turnsOf } from './earlierTurns';
 import {
   filePathOf,
   imageFromBlob,
@@ -2434,7 +2434,7 @@ export class ChatView extends ItemView {
     this.populateModeSelect();
     this.populateModelSelect();
     const working = entry.busy || entry.approvals.length > 0;
-    this.renderHistory(chat, working, read.readMs);
+    this.renderHistory(chat, working, read.readMs, read.rest);
     this.showKnownContext(entry.chatId);
     // The turn in progress, as drawn from the saved messages: the reply goes on in it.
     const unfinished = working ? this.unfinishedTurn : null;
@@ -2863,7 +2863,7 @@ export class ChatView extends ItemView {
           ? `Branch of “${branch.title}”`
           : `${item.title} · last active ${formatDate(item.updatedAt)}${item.copied ? ' · a copy of a chat from outside the panel' : ''}`,
     });
-    this.renderHistory(chat, false, read.readMs);
+    this.renderHistory(chat, false, read.readMs, read.rest);
     this.showKnownContext(item.id);
     const afterDraw = performance.now();
     this.recordMentions();
@@ -2900,19 +2900,32 @@ export class ChatView extends ItemView {
    * that took, for the log; or null altogether when another chat was opened, or a new one started,
    * while it was read.
    */
-  private async readForOpening(id: string | null): Promise<{ chat: LoadedChat | null; readMs: number } | null> {
+  /**
+   * Chat `id` read to be shown. A long Claude chat not read before is read from the end of its file
+   * first, as far as its last turns (see openChatFile): those are drawn at once, and `rest`, the
+   * whole chat read meanwhile, brings the turns before them.
+   */
+  private async readForOpening(id: string | null): Promise<{ chat: LoadedChat | null; readMs: number; rest?: Promise<LoadedChat> | null } | null> {
     const generation = ++this.chatGeneration;
     const started = performance.now();
     const root = this.plugin.vaultRoot();
     let chat: LoadedChat | null = null;
+    let rest: Promise<LoadedChat> | null = null;
     if (id && root) {
       try {
-        chat = await this.plugin.loadAnyChat(id, root, true);
+        // As many turns as are drawn at once (see historyParts): each turn a prompt starts is whole, read from the end.
+        const enough = (messages: SessionMessage[]) => {
+          const starts = turnStarts(messages);
+          return starts.length >= TAIL_TURNS || (starts.length > 0 && messages.length - starts[0] > TAIL_MESSAGES);
+        };
+        const opened = this.plugin.isCodexChat(id) ? null : await openChatFile(id, root, enough);
+        if (opened) ({ chat, rest } = opened);
+        else chat = await this.plugin.loadAnyChat(id, root, true);
       } catch (error) {
         log('loading transcript failed', error);
       }
     }
-    return this.chatGeneration === generation ? { chat, readMs: Math.round(performance.now() - started) } : null;
+    return this.chatGeneration === generation ? { chat, readMs: Math.round(performance.now() - started), rest } : null;
   }
 
   /**
@@ -2929,36 +2942,63 @@ export class ChatView extends ItemView {
    * all on the line, find stepping back into them, or the list of your messages going to one.
    * `readMs`: how long the chat's file took to read, for the log.
    */
-  private renderHistory(chat: LoadedChat, running: boolean, readMs: number): void {
+  private renderHistory(chat: LoadedChat, running: boolean, readMs: number, rest?: Promise<LoadedChat> | null): void {
     const drawStart = performance.now();
     const { tail, earlier } = historyParts(chat.transcript, TAIL_TURNS, TAIL_MESSAGES);
-    // Only the diffs are kept for the earlier turns, not the whole chat read.
-    const { edits } = chat;
     // Made first, so that its line goes in above the last turns, drawn below it.
-    const drawing: EarlierDrawing | null =
-      earlier.length === 0
-        ? null
-        : new EarlierDrawing(earlier, this.messagesEl, {
-            scroller: this.messagesEl,
-            drawTurn: (turn, holder) => this.drawSavedTurn(turn, holder, edits),
-            held: () => this.contentEl.ownerDocument.querySelector('.modal-container, body > .menu') !== null,
-            caughtUp: (done) => {
-              if (done && this.earlier === drawing) this.earlier = null;
-              this.promptNav.schedule();
-              this.findBar.refresh();
-              this.checkEarlier();
-            },
-          });
-    this.renderTranscript(tail, { running, edits });
+    const drawing = earlier.length === 0 ? null : this.earlierDrawing(earlier, chat.edits);
+    this.renderTranscript(tail, { running, edits: chat.edits });
     log(
-      `opening a chat: ${chat.transcript.length} messages; file read in ${readMs} ms;`,
+      `opening a chat: ${chat.transcript.length} messages${rest ? ' read from the end' : ''}; file read in ${readMs} ms;`,
       `last ${tail.length} drawn in ${Math.round(performance.now() - drawStart)} ms; ${earlier.length} earlier turns kept undrawn`,
     );
-    if (!drawing) return;
+    if (drawing) this.earlierReady(drawing);
+    if (!rest) return;
+    // Read from the end only: the turns before those drawn come once the whole chat is read.
+    const generation = this.chatGeneration;
+    const first = tail.find((message) => message.uuid);
+    void rest.then(
+      (whole) => {
+        if (generation !== this.chatGeneration || !first) return;
+        const at = whole.transcript.findIndex((message) => message.uuid === first.uuid) - tail.indexOf(first);
+        if (at <= 0) return;
+        const turns = turnsOf(whole.transcript.slice(0, at));
+        if (turns.length === 0) return;
+        log(`opening a chat: ${whole.transcript.length} messages read in all; ${turns.length} earlier turns kept undrawn`);
+        this.earlierReady(this.earlierDrawing(turns, whole.edits, this.messagesEl.firstChild));
+      },
+      (error: unknown) => log('reading the rest of a chat failed', error),
+    );
+  }
+
+  /** The line above the drawn turns that draws `turns` (newest first) when needed: at the end of the messages, or before `before`. */
+  private earlierDrawing(turns: SessionMessage[][], edits: Map<string, unknown>, before?: Node | null): EarlierDrawing {
+    const drawing: EarlierDrawing = new EarlierDrawing(
+      turns,
+      this.messagesEl,
+      {
+        scroller: this.messagesEl,
+        drawTurn: (turn, holder) => this.drawSavedTurn(turn, holder, edits),
+        held: () => this.contentEl.ownerDocument.querySelector('.modal-container, body > .menu') !== null,
+        caughtUp: (done) => {
+          if (done && this.earlier === drawing) this.earlier = null;
+          this.promptNav.schedule();
+          this.findBar.refresh();
+          this.checkEarlier();
+        },
+      },
+      before,
+    );
+    return drawing;
+  }
+
+  /** `drawing` is the chat's earlier turns: drawn as soon as the turns shown are shorter than the panel. */
+  private earlierReady(drawing: EarlierDrawing): void {
     this.earlier = drawing;
     // Once the chat is scrolled to its end: drawn turns shorter than the panel need the next ones at once.
     void Promise.resolve().then(() => this.checkEarlier());
   }
+
 
   /** Scrolled to within a screen of the top of what is drawn: the next earlier turns. */
   private checkEarlier(): void {
