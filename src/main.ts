@@ -1384,8 +1384,8 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** Chat `id`'s saved messages: from its session file, or, for a Codex chat, read through Codex (see readCodexThread). */
-  async loadAnyChat(id: string, root: string): Promise<LoadedChat> {
-    if (!this.isCodexChat(id)) return loadChat(id, root);
+  async loadAnyChat(id: string, root: string, opening = false): Promise<LoadedChat> {
+    if (!this.isCodexChat(id)) return loadChat(id, root, opening);
     const launch = this.codexLaunch();
     if (typeof launch === 'string') throw new Error(launch);
     const { transcript, edits } = codexTranscript(id, (await readCodexThread(launch, id)) as { items?: CodexItem[] }[], launch.cwd);

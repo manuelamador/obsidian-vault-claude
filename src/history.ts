@@ -508,8 +508,9 @@ export interface LoadedChat {
  * Where the chat was compacted, a `system` message stands in for the boundary, its `message`
  * holding `{ subtype: 'compact_boundary', trigger, preTokens }`.
  */
-export function loadChat(id: string, dir: string): Promise<LoadedChat> {
-  return readSession(id, dir, true);
+/** `remember`: the chat is being opened, and a long one is remembered as read (see ReadSoFar); other reads only use what is remembered. */
+export function loadChat(id: string, dir: string, remember = false): Promise<LoadedChat> {
+  return readSession(id, dir, true, remember);
 }
 
 /** A chat's prompts and replies (see loadChat), for reading rather than drawing: its diffs are not collected. */
@@ -635,7 +636,7 @@ interface ReadSoFar {
 /** Session files this big are remembered as read (see READ_KEPT), so that opening one again reads only what was added. */
 const KEEP_READ_BYTES = 4 * 1024 * 1024;
 /** How many such files are remembered, the most recently read kept, and how many bytes of the messages they keep in all (the latest is kept whatever its size). */
-const READ_KEPT = 2;
+const READ_KEPT = 5;
 const READ_KEPT_BYTES = 192 * 1024 * 1024;
 /** How many bytes at each end of what was read must be unchanged for it to be reused. */
 const CHECK_BYTES = 1024;
@@ -651,13 +652,13 @@ async function readBytes(handle: fs.FileHandle, position: number, length: number
 /** Reads of a session file under way, by file and kind: a read waits for the one before, which it may build on (see ReadSoFar). */
 const reading = new Map<string, Promise<unknown>>();
 
-async function readSession(id: string, dir: string, withEdits: boolean): Promise<LoadedChat> {
+async function readSession(id: string, dir: string, withEdits: boolean, remember = false): Promise<LoadedChat> {
   // Not passed on to the SDK's reader either, which would read it as a path.
   if (!isChatId(id)) throw new Error(`not a chat id: ${id}`);
   const key = `${sessionFile(id, dir)}\n${withEdits}`;
   // One at a time: two reads at once would both add what was appended to the same remembered read.
   const before = reading.get(key) ?? Promise.resolve();
-  const read = before.catch(() => undefined).then(() => readSessionNow(id, dir, withEdits));
+  const read = before.catch(() => undefined).then(() => readSessionNow(id, dir, withEdits, remember));
   reading.set(key, read);
   try {
     return await read;
@@ -666,7 +667,7 @@ async function readSession(id: string, dir: string, withEdits: boolean): Promise
   }
 }
 
-async function readSessionNow(id: string, dir: string, withEdits: boolean): Promise<LoadedChat> {
+async function readSessionNow(id: string, dir: string, withEdits: boolean, remember: boolean): Promise<LoadedChat> {
   const file = sessionFile(id, dir);
   let handle: fs.FileHandle;
   try {
@@ -709,10 +710,12 @@ async function readSessionNow(id: string, dir: string, withEdits: boolean): Prom
     // A last row with no newline after it (still being written, or the file's end) is drawn when whole, and read again next time.
     last = { messages: [], edits: new Map(), queued: new Map(), own: new Set() };
     if (end < bytes.length) take(bytes.toString('utf8', end), last);
-    if (read.size >= KEEP_READ_BYTES) {
+    // Opened: remembered, if long. Read for something else (search, connections): only kept up to date if remembered already, never pushing out one that was opened.
+    if (read.size >= KEEP_READ_BYTES && (remember || readSoFar.has(key))) {
       read.head = await readBytes(handle, 0, Math.min(CHECK_BYTES, read.size));
       read.tail = await readBytes(handle, Math.max(0, read.size - CHECK_BYTES), Math.min(CHECK_BYTES, read.size));
-      readSoFar.delete(key);
+      // Opened: the most recently read; else kept where it was.
+      if (remember) readSoFar.delete(key);
       readSoFar.set(key, read);
       for (const old of [...readSoFar.keys()].slice(0, Math.max(0, readSoFar.size - READ_KEPT))) readSoFar.delete(old);
       let bytes = [...readSoFar.values()].reduce((sum, each) => sum + each.kept, 0);
@@ -721,7 +724,7 @@ async function readSessionNow(id: string, dir: string, withEdits: boolean): Prom
         readSoFar.delete(old);
         bytes -= each.kept;
       }
-    } else {
+    } else if (read.size < KEEP_READ_BYTES) {
       readSoFar.delete(key);
     }
   } finally {

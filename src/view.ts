@@ -2907,7 +2907,7 @@ export class ChatView extends ItemView {
     let chat: LoadedChat | null = null;
     if (id && root) {
       try {
-        chat = await this.plugin.loadAnyChat(id, root);
+        chat = await this.plugin.loadAnyChat(id, root, true);
       } catch (error) {
         log('loading transcript failed', error);
       }

@@ -15,7 +15,7 @@ test('a long chat opened again reads only what was added; a file rewritten since
   const padding = `${JSON.stringify({ type: 'api-request', body: 'x'.repeat(5 * 1024 * 1024) })}\n`;
   const before = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = config;
-  const texts = async () => (await loadChat('s1', root)).transcript.map((message) => (message.message as { content: unknown }).content);
+  const texts = async () => (await loadChat('s1', root, true)).transcript.map((message) => (message.message as { content: unknown }).content);
   try {
     writeFileSync(file, row('u1', 'first') + padding + row('u2', 'second'));
     assert.deepEqual(await texts(), ['first', 'second']);
