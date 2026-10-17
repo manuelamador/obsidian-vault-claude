@@ -579,15 +579,28 @@ export class ConnectionsView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    // What is still being read for the map is dropped (see move), and nothing is drawn after.
+    this.move();
+    this.closedPane = true;
+    this.host = null;
     this.stopLinks();
     this.contentEl.empty();
   }
 
-  /** Shows the map of the panel's chat (`host`; null, none), or with `atProject`, that project's. */
-  async follow(host: ChatMapHost | null, atProject: string | null = null): Promise<void> {
+  /** Set once the pane has closed: reads finishing after are not drawn. */
+  private closedPane = false;
+
+  /**
+   * Shows the map of the panel's chat (`host`, or what it resolves to; null, none), or with
+   * `atProject`, that project's. Claimed before `host` is read, so that a later call wins over it.
+   */
+  async follow(host: ChatMapHost | null | Promise<ChatMapHost | null>, atProject: string | null = null): Promise<void> {
     const generation = this.move();
-    const project = host && atProject ? await host.projectMap(atProject).catch(() => null) : null;
-    if (generation !== this.generation) return;
+    const shown = await Promise.resolve(host).catch(() => null);
+    if (generation !== this.generation || this.closedPane) return;
+    const project = shown && atProject ? await shown.projectMap(atProject).catch(() => null) : null;
+    host = shown;
+    if (generation !== this.generation || this.closedPane) return;
     this.host = host;
     this.project = project;
     this.draw();
@@ -700,6 +713,7 @@ export class ConnectionsView extends ItemView {
   }
 
   private draw(): void {
+    if (this.closedPane) return;
     const previous = this.drawing?.positions ?? new Map<string, Point>();
     this.drawing = null;
     for (const el of [this.barEl, this.actionEl, this.mapEl, this.footEl]) el.empty();

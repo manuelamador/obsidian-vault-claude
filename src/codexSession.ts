@@ -65,6 +65,22 @@ export function findCodex(configured: string): string | null {
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
+/** How long a request to Codex is given (see CodexSession.request), and how long Stop waits for a turn still starting. */
+const REQUEST_TIMEOUT_MS = 60_000;
+const INTERRUPT_WAIT_MS = 5_000;
+/** How long a Codex asked to stop is given before it is killed outright. */
+const KILL_AFTER_MS = 3_000;
+
+/** Asks Codex to stop, and kills it if it has not within KILL_AFTER_MS. */
+function stopChild(child: ChildProcessWithoutNullStreams): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill();
+  const timer = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }, KILL_AFTER_MS);
+  child.once('exit', () => clearTimeout(timer));
+}
+
 export class CodexSession {
   /** The Codex thread's id, once started: the chat's id, as a Claude session's is. */
   sessionId: string | null = null;
@@ -114,7 +130,8 @@ export class CodexSession {
       return;
     }
     this.sending = this.sending
-      .then(() => this.start())
+      // Closed while earlier sends were waiting: nothing is started for it.
+      .then(() => (this.closed ? Promise.reject(new Error('the Codex session was closed')) : this.start()))
       .then(async () => {
         // The context waiting goes before the message, as Claude Code's hook adds it (see ClaudeSession.addContext).
         const context = this.pendingContext.splice(0);
@@ -151,8 +168,8 @@ export class CodexSession {
   }
 
   async interrupt(): Promise<void> {
-    // A turn still starting is stopped once Codex has said which it is.
-    await this.sending;
+    // A turn still starting is stopped once Codex has said which it is, if it says so soon.
+    await Promise.race([this.sending, new Promise((resolve) => setTimeout(resolve, INTERRUPT_WAIT_MS))]);
     if (!this.turnId || !this.sessionId) return;
     await this.request('turn/interrupt', { threadId: this.sessionId, turnId: this.turnId }).catch((error: unknown) => log('interrupting codex failed', error));
   }
@@ -163,7 +180,7 @@ export class CodexSession {
     this.withdrawApprovals();
     for (const { reject } of this.pending.values()) reject(new Error('the Codex session was closed'));
     this.pending.clear();
-    if (this.child) this.child.kill();
+    if (this.child) stopChild(this.child);
     else this.markEnded();
   }
 
@@ -226,6 +243,7 @@ export class CodexSession {
   /** Starts Codex's app-server, once: the handshake, then the thread, new or carried on. */
   private start(): Promise<void> {
     this.starting ??= (async () => {
+      if (this.closed) throw new Error('the Codex session was closed');
       log('starting codex', { cwd: this.config.cwd, codexPath: this.config.codexPath, resume: this.config.resume ?? null });
       const child = spawn(this.config.codexPath, ['app-server'], { cwd: this.config.cwd, env: this.config.env, stdio: ['pipe', 'pipe', 'pipe'] });
       this.child = child;
@@ -283,11 +301,25 @@ export class CodexSession {
     return this.starting;
   }
 
+  /** A request to Codex, given up after REQUEST_TIMEOUT_MS: Codex answers at once, a turn's work coming as notifications. */
   private request(method: string, params: unknown): Promise<unknown> {
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       if (!this.child) return reject(new Error('Codex is not running'));
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Codex did not answer ${method} in time`));
+      }, REQUEST_TIMEOUT_MS);
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
       this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
     });
   }
@@ -410,7 +442,7 @@ export class CodexSession {
     this.failure = error instanceof Error ? error : new Error(String(error));
     this.closed = true;
     if (this.child) {
-      this.child.kill();
+      stopChild(this.child);
       return;
     }
     this.withdrawApprovals();
@@ -518,7 +550,10 @@ class CodexReader {
     if (this.idle) clearTimeout(this.idle);
     for (const { reject } of this.pending.values()) reject(error ?? new Error('Codex was stopped'));
     this.pending.clear();
-    this.child.kill();
+    // What waits on a turn's notifications hears that none will come (see runCodexOneShot).
+    for (const listener of [...this.listeners]) listener(READER_STOPPED, { error: error?.message ?? 'Codex was stopped' });
+    this.listeners.clear();
+    stopChild(this.child);
     this.gone(this);
   }
 
@@ -543,6 +578,9 @@ class CodexReader {
     }
   }
 }
+
+/** The notification a reader's listeners get when it stops (see CodexReader.stop). */
+const READER_STOPPED = 'vault-claude/stopped';
 
 let reader: CodexReader | null = null;
 
@@ -638,15 +676,31 @@ export async function runCodexOneShot(
   onText: (text: string) => void,
   signal: AbortSignal,
 ): Promise<string> {
+  // Given up before it began: nothing is started.
+  if (signal.aborted) return '';
   return withAppServer(launch, async (call, reader) => {
     const opened = (await call('thread/start', { cwd: launch.cwd, developerInstructions: request.system, sandbox: 'read-only', approvalPolicy: 'never', ephemeral: true })) as { thread?: { id?: string } };
     const threadId = opened.thread?.id;
     if (!threadId) throw new Error('Codex started no thread');
+    if (signal.aborted) return '';
     let streamed = '';
     let answer = '';
     let turnId: string | null = null;
+    let cleanup = () => undefined as void;
     const finished = new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        cleanup();
+        // Stopped as soon as Codex says which turn it is, if it has not yet.
+        if (turnId) void call('turn/interrupt', { threadId, turnId }).catch(() => undefined);
+        resolve();
+      };
       const stop = reader.listen((method, params) => {
+        // The reader stopped (Codex exited, or did not answer in time): no more will come.
+        if (method === READER_STOPPED) {
+          cleanup();
+          reject(new Error(typeof params.error === 'string' ? params.error : 'Codex stopped'));
+          return;
+        }
         if (params.threadId !== threadId) return;
         if (method === 'item/agentMessage/delta' && typeof params.delta === 'string') {
           streamed += params.delta;
@@ -655,21 +709,29 @@ export async function runCodexOneShot(
           const item = params.item as CodexItem | undefined;
           if (item?.type === 'agentMessage' && item.text) answer = item.text;
         } else if (method === 'turn/completed') {
-          stop();
+          cleanup();
           const turn = params.turn as { status?: string; error?: { message?: string } | null } | undefined;
           if (turn?.status === 'failed') reject(new Error(turn.error?.message ?? 'Codex stopped with an error'));
           else resolve();
         }
       });
-      signal.addEventListener('abort', () => {
+      cleanup = () => {
         stop();
-        if (turnId) void call('turn/interrupt', { threadId, turnId }).catch(() => undefined);
-        resolve();
-      }, { once: true });
+        signal.removeEventListener('abort', onAbort);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
     });
+    // Rejected while turn/start is still awaited: handled below, by the await, not left unhandled meanwhile.
+    finished.catch(() => undefined);
     const effort = request.effort ? { effort: request.effort } : {};
-    const started = (await call('turn/start', { threadId, input: codexInput(request.prompt), ...(request.model ? { model: request.model } : {}), ...effort })) as { turn?: { id?: string } };
-    turnId = started.turn?.id ?? null;
+    try {
+      const started = (await call('turn/start', { threadId, input: codexInput(request.prompt), ...(request.model ? { model: request.model } : {}), ...effort })) as { turn?: { id?: string } };
+      turnId = started.turn?.id ?? null;
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+    if (signal.aborted && turnId) void call('turn/interrupt', { threadId, turnId }).catch(() => undefined);
     await finished;
     return answer || streamed;
   });

@@ -2011,7 +2011,8 @@ export default class VaultClaudePlugin extends Plugin {
     const shown = view?.connectionsChat() ?? null;
     if (!view || !shown) return pane.follow(null);
     const home = atProject ? this.homeProject(shown.id) : null;
-    await pane.follow(await this.chatMapHost(view, shown.id, false, shown.lookOnly), home?.path ?? null);
+    // The map's read handed over unawaited: the pane claims its turn first, so that a later chat's map is not replaced by this one's.
+    await pane.follow(this.chatMapHost(view, shown.id, false, shown.lookOnly), home?.path ?? null);
   }
 
   /** Panel `view` is closing: a Connections pane following it follows another panel, or none. */

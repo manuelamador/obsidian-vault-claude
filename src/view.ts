@@ -5873,6 +5873,8 @@ export class ChatView extends ItemView {
   }
 
   private stepMotion(): void {
+    // Nothing to see with the window hidden (minimised, another space).
+    if (document.hidden) return;
     this.motionStep += 1;
     const icon = this.tabIcon();
     // 30 degrees a step: the icon is eight spokes, so 45 would land on the same shape every time.

@@ -632,8 +632,9 @@ interface ReadSoFar {
 
 /** Session files this big are remembered as read (see READ_KEPT), so that opening one again reads only what was added. */
 const KEEP_READ_BYTES = 4 * 1024 * 1024;
-/** How many such files are remembered, the most recently read kept. */
+/** How many such files are remembered, the most recently read kept, and how many of their bytes in all (the latest is kept whatever its size). */
 const READ_KEPT = 2;
+const READ_KEPT_BYTES = 128 * 1024 * 1024;
 /** How many bytes at each end of what was read must be unchanged for it to be reused. */
 const CHECK_BYTES = 1024;
 const readSoFar = new Map<string, ReadSoFar>();
@@ -645,9 +646,25 @@ async function readBytes(handle: fs.FileHandle, position: number, length: number
   return buffer.subarray(0, bytesRead);
 }
 
+/** Reads of a session file under way, by file and kind: a read waits for the one before, which it may build on (see ReadSoFar). */
+const reading = new Map<string, Promise<unknown>>();
+
 async function readSession(id: string, dir: string, withEdits: boolean): Promise<LoadedChat> {
   // Not passed on to the SDK's reader either, which would read it as a path.
   if (!isChatId(id)) throw new Error(`not a chat id: ${id}`);
+  const key = `${sessionFile(id, dir)}\n${withEdits}`;
+  // One at a time: two reads at once would both add what was appended to the same remembered read.
+  const before = reading.get(key) ?? Promise.resolve();
+  const read = before.catch(() => undefined).then(() => readSessionNow(id, dir, withEdits));
+  reading.set(key, read);
+  try {
+    return await read;
+  } finally {
+    if (reading.get(key) === read) reading.delete(key);
+  }
+}
+
+async function readSessionNow(id: string, dir: string, withEdits: boolean): Promise<LoadedChat> {
   const file = sessionFile(id, dir);
   let handle: fs.FileHandle;
   try {
@@ -695,6 +712,12 @@ async function readSession(id: string, dir: string, withEdits: boolean): Promise
       readSoFar.delete(key);
       readSoFar.set(key, read);
       for (const old of [...readSoFar.keys()].slice(0, Math.max(0, readSoFar.size - READ_KEPT))) readSoFar.delete(old);
+      let bytes = [...readSoFar.values()].reduce((sum, each) => sum + each.size, 0);
+      for (const [old, each] of readSoFar) {
+        if (bytes <= READ_KEPT_BYTES || old === key) break;
+        readSoFar.delete(old);
+        bytes -= each.size;
+      }
     } else {
       readSoFar.delete(key);
     }

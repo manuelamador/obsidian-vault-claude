@@ -24,6 +24,11 @@ test('a long chat opened again reads only what was added; a file rewritten since
     assert.deepEqual(await texts(), ['first', 'second', 'third']);
     appendFileSync(file, `,"message":{"role":"user","content":"fourth"}}\n`);
     assert.deepEqual(await texts(), ['first', 'second', 'third', 'fourth']);
+    // Two reads at once, after a row was added: each sees it once.
+    appendFileSync(file, row('u5', 'fifth'));
+    const [a, b] = await Promise.all([texts(), texts()]);
+    assert.deepEqual(a, ['first', 'second', 'third', 'fourth', 'fifth']);
+    assert.deepEqual(b, a);
     // Rewritten (a chat cut, say), even to a longer file: read again from the start.
     writeFileSync(file, row('v1', 'other') + padding + row('v2', 'rows') + row('v3', 'here') + row('v4', 'now') + row('v5', 'longer'));
     assert.deepEqual(await texts(), ['other', 'rows', 'here', 'now', 'longer']);
