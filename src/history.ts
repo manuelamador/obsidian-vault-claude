@@ -622,6 +622,8 @@ function drawnRow(line: string): boolean {
 /** A session file read so far (see readSession): the rows up to `size` bytes, and the bytes around its start and end that tell it is still the same file, only grown. */
 interface ReadSoFar {
   size: number;
+  /** The bytes of the rows kept as messages: what it holds in memory, the bookkeeping rows skipped (see drawnRow). */
+  kept: number;
   head: Buffer;
   tail: Buffer;
   messages: SessionMessage[];
@@ -632,9 +634,9 @@ interface ReadSoFar {
 
 /** Session files this big are remembered as read (see READ_KEPT), so that opening one again reads only what was added. */
 const KEEP_READ_BYTES = 4 * 1024 * 1024;
-/** How many such files are remembered, the most recently read kept, and how many of their bytes in all (the latest is kept whatever its size). */
+/** How many such files are remembered, the most recently read kept, and how many bytes of the messages they keep in all (the latest is kept whatever its size). */
 const READ_KEPT = 2;
-const READ_KEPT_BYTES = 128 * 1024 * 1024;
+const READ_KEPT_BYTES = 192 * 1024 * 1024;
 /** How many bytes at each end of what was read must be unchanged for it to be reused. */
 const CHECK_BYTES = 1024;
 const readSoFar = new Map<string, ReadSoFar>();
@@ -684,7 +686,7 @@ async function readSessionNow(id: string, dir: string, withEdits: boolean): Prom
       size >= kept.size &&
       (await readBytes(handle, 0, kept.head.length)).equals(kept.head) &&
       (await readBytes(handle, kept.size - kept.tail.length, kept.tail.length)).equals(kept.tail);
-    read = same && kept ? kept : { size: 0, head: Buffer.alloc(0), tail: Buffer.alloc(0), messages: [], edits: new Map(), queued: new Map(), own: new Set() };
+    read = same && kept ? kept : { size: 0, kept: 0, head: Buffer.alloc(0), tail: Buffer.alloc(0), messages: [], edits: new Map(), queued: new Map(), own: new Set() };
     const bytes = await readBytes(handle, read.size, size - read.size);
     const take = (line: string, into: Pick<ReadSoFar, 'messages' | 'edits' | 'queued' | 'own'>) => {
       if (!line || !drawnRow(line)) return;
@@ -695,6 +697,7 @@ async function readSessionNow(id: string, dir: string, withEdits: boolean): Prom
       const message = rowMessage(row, id);
       if (!message) return;
       into.messages.push(message);
+      if (into === read) read.kept += line.length;
       // Queued messages taken up mid-turn (see rowMessage), with the uuid they were sent with, and the uuids of the messages of their own.
       if (row.type === 'attachment') into.queued.set(message, row.attachment?.source_uuid);
       else if (message.uuid) into.own.add(message.uuid);
@@ -712,11 +715,11 @@ async function readSessionNow(id: string, dir: string, withEdits: boolean): Prom
       readSoFar.delete(key);
       readSoFar.set(key, read);
       for (const old of [...readSoFar.keys()].slice(0, Math.max(0, readSoFar.size - READ_KEPT))) readSoFar.delete(old);
-      let bytes = [...readSoFar.values()].reduce((sum, each) => sum + each.size, 0);
+      let bytes = [...readSoFar.values()].reduce((sum, each) => sum + each.kept, 0);
       for (const [old, each] of readSoFar) {
         if (bytes <= READ_KEPT_BYTES || old === key) break;
         readSoFar.delete(old);
-        bytes -= each.size;
+        bytes -= each.kept;
       }
     } else {
       readSoFar.delete(key);
