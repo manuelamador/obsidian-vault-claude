@@ -398,6 +398,9 @@ const LIVE_FLUSH_MS = 100;
 const MOTION_MS = 250;
 /** How long an idle background chat waits, after its last background task, for the turn that reads the result. */
 const BACKGROUND_SETTLE_MS = 30_000;
+/** The scratch chat on the ← → lists (see navPlace). */
+const NAV_SCRATCH = 'scratch';
+
 /** The scratch chat's fixed title. */
 const SCRATCH_TITLE = 'Scratch';
 /** The uuid shape the SDK echoes back in a result's `user_message_uuids`. */
@@ -979,6 +982,19 @@ export class ChatView extends ItemView {
     };
     this.scope.register(['Alt'], 'ArrowUp', stepKey(-1));
     this.scope.register(['Alt'], 'ArrowDown', stepKey(1));
+    // Back and forward through the chats shown here, as a browser goes through pages, even while
+    // typing: ⌘[ and ⌘] on macOS, Alt+← and Alt+→ elsewhere (which move by word in a Mac's input).
+    const go = (way: 'back' | 'forward') => () => {
+      void this.navigate(way);
+      return false;
+    };
+    if (Platform.isMacOS) {
+      this.scope.register(['Mod'], '[', go('back'));
+      this.scope.register(['Mod'], ']', go('forward'));
+    } else {
+      this.scope.register(['Alt'], 'ArrowLeft', go('back'));
+      this.scope.register(['Alt'], 'ArrowRight', go('forward'));
+    }
     // A right-click on selected text offers to quote it in the next message.
     this.registerDomEvent(this.messagesEl, 'contextmenu', (evt) => {
       const selected = this.selectedInChat();
@@ -5045,14 +5061,19 @@ export class ChatView extends ItemView {
 
   /** The chat on screen as the back and forward arrows hold it: none for a new chat or the scratch chat. */
   private navPlace(): { id: string; title: string } | null {
+    // The scratch chat by what it is, not by its id: going back to it opens the one there is now,
+    // its id changing each time it starts over.
+    if (this.scratch) return { id: NAV_SCRATCH, title: SCRATCH_TITLE };
     const id = this.chatId ?? this.resumeId;
-    return id && !this.scratch ? { id, title: this.chatName ?? 'Chat' } : null;
+    return id ? { id, title: this.chatName ?? 'Chat' } : null;
   }
 
   /** After a move from `from` to another chat, not by the arrows: `from` goes on the back list and the forward list empties. */
   private remember(from: { id: string; title: string } | null): void {
     const now = this.navPlace();
     if (this.navigating || !from || from.id === now?.id) return;
+    // Already the last one back (remembered twice for one move): not again.
+    if (this.navBack[this.navBack.length - 1]?.id === from.id) return;
     this.navBack.push(from);
     if (this.navBack.length > NAV_DEPTH) this.navBack.shift();
     this.navForward = [];
@@ -5066,6 +5087,18 @@ export class ChatView extends ItemView {
     while (from.length > 0) {
       const target = from.pop();
       if (!target || target.id === here?.id) continue;
+      if (target.id === NAV_SCRATCH) {
+        if (!this.plugin.settings.scratchChat) continue;
+        this.navigating = true;
+        try {
+          await this.openScratch();
+        } finally {
+          this.navigating = false;
+        }
+        if (!this.scratch) continue;
+        if (here) to.push(here);
+        break;
+      }
       // Open in another panel: shown there, and this panel stays where it is, its arrows too.
       const holder = this.plugin.chatHolder(target.id, this);
       if (holder) {
@@ -5091,9 +5124,10 @@ export class ChatView extends ItemView {
     const back = this.navBack[this.navBack.length - 1];
     const forward = this.navForward[this.navForward.length - 1];
     this.backButton.toggleClass('is-disabled', !back);
-    this.backButton.setAttr('aria-label', back ? `Back to “${back.title}”` : 'No chat to go back to');
+    const [backKey, forwardKey] = Platform.isMacOS ? ['⌘[', '⌘]'] : ['Alt+←', 'Alt+→'];
+    this.backButton.setAttr('aria-label', back ? `Back to “${back.title}” (${backKey})` : 'No chat to go back to');
     this.forwardButton.toggleClass('is-disabled', !forward);
-    this.forwardButton.setAttr('aria-label', forward ? `Forward to “${forward.title}”` : 'No chat to go forward to');
+    this.forwardButton.setAttr('aria-label', forward ? `Forward to “${forward.title}” (${forwardKey})` : 'No chat to go forward to');
   }
 
   /** New chat, as its button and command start one: the chat left can be gone back to. */
@@ -6758,6 +6792,16 @@ export class ChatView extends ItemView {
       new Notice('The scratch chat is turned off in the settings.');
       return;
     }
+    // The chat left can be gone back to, a new scratch chat started here or not (see remember).
+    const from = this.navPlace();
+    try {
+      await this.openScratchHere();
+    } finally {
+      this.remember(from);
+    }
+  }
+
+  private async openScratchHere(): Promise<void> {
     const id = this.plugin.scratchSession();
     if (this.scratch && id && id === this.chatId) return;
     // Shown in the panel holding it, or given way to a chat picked meanwhile, it is left as it is.

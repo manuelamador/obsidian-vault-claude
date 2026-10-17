@@ -335,6 +335,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 | ↑ in the empty input | Bring back the last message you sent; each ↑ goes one older, this chat's then other chats'. ↓ goes forward, Esc clears |
 | Esc | Stop the reply (background tasks keep running); close the side chat |
 | ⌥↑ / ⌥↓ | Previous / next message you sent |
+| ⌘[ / ⌘] (Alt+← / Alt+→ on Windows) | Back / forward through the chats shown in the panel, as the ← → buttons do; the scratch chat among them opens as it is now |
 | ⌘F | Find in the chat; ↩ and ⇧↩ move between matches, Esc closes |
 | ⌘-click the new-chat button | New chat in a new tab |
 | ⌘-click / ⌥-click a note in the notes menu | Open it in a new tab / attach it as an `@` mention |

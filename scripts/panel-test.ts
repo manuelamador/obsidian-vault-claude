@@ -2887,7 +2887,7 @@ async function main(): Promise<void> {
     navView.navForward = [{ id: 'later', title: 'Later chat' }];
     navView.remember({ id: 'prev', title: 'Earlier chat' });
     const remembered = JSON.stringify(navView.navBack) === '[{"id":"prev","title":"Earlier chat"}]' && navView.navForward.length === 0;
-    const backLabel = backArrow.getAttribute('aria-label') === 'Back to “Earlier chat”' && !backArrow.hasClass('is-disabled');
+    const backLabel = backArrow.getAttribute('aria-label') === 'Back to “Earlier chat” (⌘[)' && !backArrow.hasClass('is-disabled');
     navView.navBack = [];
     navView.updateNavButtons();
     const backOff = backArrow.hasClass('is-disabled');
