@@ -1,6 +1,6 @@
 # Vault Claude
 
-An [Obsidian](https://obsidian.md) sidebar chat that runs your locally installed Claude Code in the vault, through the Claude Agent SDK. It uses the same sign-in as the `claude` CLI, so a Claude subscription works without an API key.
+An [Obsidian](https://obsidian.md) sidebar chat that runs your locally installed Claude Code in the vault, through the Claude Agent SDK. It uses the same sign-in as the `claude` CLI, so a Claude subscription works without an API key. It can also run [Codex](https://developers.openai.com/codex), with your ChatGPT sign-in, in the same panel: chat by chat, or for everything.
 
 > [!NOTE]
 > This plugin was built for my own personal use. Use it at your own risk.
@@ -15,6 +15,7 @@ Built by **Claude Opus 5** (`claude-opus-5`) and **Claude Opus 5.5** (`claude-op
 - Claude Code, installed with the [native installer](https://docs.claude.com/en/docs/claude-code/setup) and signed in (run `claude` once in a terminal and log in):
   - macOS: `curl -fsSL https://claude.ai/install.sh | bash`
   - Windows (PowerShell): `irm https://claude.ai/install.ps1 | iex`. Claude Code on Windows also needs [Git for Windows](https://git-scm.com/downloads/win). An npm install of Claude Code (`claude.cmd`) does not work with the plugin on Windows.
+- Optionally, or instead of Claude Code, the Codex CLI, signed in. The ChatGPT desktop app installs it; so do `npm install -g @openai/codex` and `brew install codex`. Run `codex` once in a terminal to sign in.
 - Node.js 18 or later, only to build from source.
 
 ## Installation
@@ -60,7 +61,7 @@ Copy-Item main.js, manifest.json, styles.css "<vault>\.obsidian\plugins\vault-cl
 
 Then enable and open it as in steps 3 and 4.
 
-The plugin finds Claude Code in `~/.local/bin` (`%USERPROFILE%\.local\bin\claude.exe` on Windows), Homebrew's folders or PATH; otherwise set its path under **Settings → Vault Claude → Claude Code executable**.
+The plugin finds Codex on PATH, in the ChatGPT app's folder (`~/.codex/plugins/.plugin-appserver/codex-cli/bin`) or Homebrew's; otherwise set its path under **Settings → Vault Claude → Codex executable**. It finds Claude Code in `~/.local/bin` (`%USERPROFILE%\.local\bin\claude.exe` on Windows), Homebrew's folders or PATH; otherwise set its path under **Settings → Vault Claude → Claude Code executable**.
 
 **Updating:** replace the three files with a newer release's, then switch the plugin off and on.
 
@@ -102,7 +103,7 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/message-list.png" width="560" alt="The bar over the chat naming the message being answered, with its list of all three messages open over the reply and the current one highlighted">
 
-- Long chats open on their last ten exchanges; scroll up to draw earlier ones.
+- Long chats open on their last exchanges (up to ten, and about 250 messages); scroll up to draw earlier ones. A long chat opened again reads only what was added since.
 - Messages sent while Claude works are queued. **send now** on a bubble delivers it at once.
 - The pencil beside Send writes your message in a draft note. Send it from the line above the input or discard it with ×.
 
@@ -190,7 +191,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 - **Answer questions in place.** Question cards support single or multiple choices and your own answers.
 - **Get notified.** A system notification arrives when a long reply finishes, or Claude needs an approval or an answer, while Obsidian is in the background.
-- **Track usage.** The meter under the title shows context and plan usage, with reset times; hover for details.
+- **Track usage.** The meter under the title shows context and plan usage, with reset times; hover for details. A chat opened again shows its last context reading until its next reply.
 
 <details>
 <summary>Controls, plans, questions and usage</summary>
@@ -222,7 +223,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 - **Pick up where you left off.** The command, the link on an empty chat, or the New chat button's right-click menu asks Claude's model for small jobs which chats you are likely to carry on: a few recent ones, and one or two older ones that look unfinished, picked at random. The list is kept for the day; **Suggest again** asks anew. Click a row for its details beside the list: the suggested next step (never a decision made for you), the notes it touched with their folders and tags, the memos saved from it, what made it a candidate, and its last exchanges, whose links and file names open the note (⌘-hover for a preview). **Use suggested step** opens the chat with the step added after any draft there; **Open chat** opens it as it is. On each row, the clock reminds you of it first each time you open the list, on up to five days (the clock on a reminder stops it); ↻ skips it for a week, another taking its place; the crossed-out eye never suggests it again (**Clear ignored chats**, at the foot of the list, brings those back). It reads the chats and the memos saved from them locally, and sends short excerpts to the model only when it asks; nothing is sent in a chat.
 - **Keep several conversations going.** Chats continue working when you switch away, keeping their drafts and attached notes. When one finishes out of sight, a tab on the panel's right edge says so (✓ or !); point at it for the start of the reply, click it to open the chat. Open chats in separate tabs or branch from a reply or one of your messages.
-- **Use a scratch chat.** A standing chat for quick questions starts over after 24 hours unused by default. Keep a useful exchange as a separate chat.
+- **Use a scratch chat.** A standing chat for quick questions starts over after 24 hours unused by default. Keep a useful exchange as a separate chat. It runs on Claude Code or Codex, as **Scratch chat model** says.
 - **Save a conversation.** Buttons beside the title save the chat or a summary as a note, or delete it.
 
 <details>
@@ -272,10 +273,30 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 <summary>Connections, projects and links between chats</summary>
 
 - Open it with **Open connections**, or from the project and links chips above the input. It opens as a tab among your notes.
+- Codex chats carry a **Codex** mark: beside their label on the map, in the map's bar and in the links list.
+- Right-click a note on the map, or open a project's menu, for **Open local graph**: the note opens with Obsidian's local graph of its links beside it (when the Graph view core plugin is on).
 - Click a chat on the map to open it in the panel; the map follows. Click the chat's project to see the project's map, and ← and → in the tab to go back and forth. A chat started outside the panel is shown look-only until you send it a message: its map, without the controls that change it.
 - **Projects:** a project is a note tied to a folder. A chat belongs to one, from the notes it worked on or put there by hand (**Put in**, **Move…**, **Take out**, **Add to a project…**). Its project's context goes with the chat's messages. **Create project…** makes one; **Write every project's context anew** rewrites them all, after asking. A project's context goes again after Claude Code compacts the chat.
 - **Links between chats:** **Link a chat…**, in the links under the map, links the chat with another, so you can go from one to the other; both show it. Nothing is sent unless you tick **Include**, which sends a short digest of the other chat once, with your next message; **Summarise first** sends a summary written from more of it instead.
 - **Rebuild connections from chat files** (also in the Connections tab's ⋯ menu and the settings) reads every chat's file again and adds the links it shows to the notes each chat changed, was sent or mentioned. It takes no link away.
+
+</details>
+
+### Codex
+
+**Run a chat on Codex instead of Claude Code.** Choose **New Codex chat** in the New chat button's right-click menu or the command palette, or flip the switch on an empty chat (**Claude Code | Codex**) before its first message. **New chats run on** in the settings makes Codex the default. A Codex chat is marked **Codex** beside its title and in the history, and runs through Codex's own app-server with its settings (`~/.codex/config.toml`).
+
+<details>
+<summary>What a Codex chat does, and what stays Claude Code's</summary>
+
+- Replies, thinking summaries, commands and file changes are drawn as in a Claude chat, with the changed files and their diffs under each reply.
+- The model and effort menus list Codex's models and the chosen model's reasoning efforts. The meter shows the chat's context and Codex's own usage limits, in place of Claude's plan.
+- Codex's requests to run a command or change files come as approval cards, naming the command or the files. The deny rules in the settings apply: a command they match is refused without asking.
+- A project's context and included chats go with a Codex chat's messages as with Claude's.
+- The side chat beside a Codex chat runs on Codex, on a copy of the chat that Codex does not save and that only reads; it cannot be kept as a chat.
+- Small jobs (Edit selection, summaries, memo suggestions, Pick up where you left off, a project's Context, Suggest frontmatter updates) and the scratch chat can run on Codex too: **Small jobs run on** and **Scratch chat model** in the settings. With both on Codex, the plugin works without Claude Code.
+- Codex chats are listed in the history and reopened by reading the conversation through Codex. Codex keeps the conversation in its own history: removing a Codex chat takes it out of the panel's history only. A Codex scratch chat that starts over is archived in Codex.
+- Claude Code's own features are not offered in a Codex chat: Plan mode and `/plan`, slash commands, fast mode, the phone, branching, and the arrow menu on your messages (copy, move or remove from here on).
 
 </details>
 
@@ -315,24 +336,34 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ## Your data
 
-- **Conversations** are Claude Code's own session files, in `~/.claude/projects/` on your computer, outside the vault. Deleting a chat from the history deletes its file.
-- **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings; each chat's title, pin, unsent text, attached note, note links, ticked checkboxes and, when one was asked for, its summary; and the guidance last given to Suggest frontmatter updates, by folder. Deleting a chat removes its entries there, including its links to other chats, its project and its summary. Obsidian Sync copies the file if it syncs plugin settings.
+- **Conversations** are Claude Code's own session files, in `~/.claude/projects/` on your computer, outside the vault. Deleting a chat from the history deletes its file. A Codex chat's conversation is in Codex's own store (`~/.codex/`), which the plugin reads only through Codex's app-server; removing it from the history leaves it there.
+- **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings; each chat's title (and, for a Codex chat, that it is one), pin, unsent text, draft note, attached note, note links, ticked checkboxes, last context reading and, when one was asked for, its summary; and the guidance last given to Suggest frontmatter updates, by folder. Deleting a chat removes its entries there, including its links to other chats, its project and its summary. Obsidian Sync copies the file if it syncs plugin settings.
 - **The diagnostic log** records process starts, stops and errors, with session ids and paths (the vault's and Claude Code's), never message text: `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
-- Nothing is sent anywhere but through Claude Code itself.
+- Nothing is sent anywhere but through Claude Code or Codex themselves.
 
 ## Settings
 
 | Setting | What it does |
 | --- | --- |
+| New chats run on | Claude Code (default) or Codex; the other is a click away on an empty chat |
+| Small jobs run on | Claude Code (default) or Codex, each on its model for small jobs: Edit selection, Save summary as note, memo suggestions, Pick up where you left off, a project's Context, summaries of included chats, Suggest frontmatter updates |
+| **Claude Code** | |
 | Claude Code executable | Path to `claude`; detected automatically when empty |
-| Default model, effort, permission mode | Starting values for new chats. **Default** is Claude Code's default model; **Claude Code's setting** runs the model Claude Code's own settings name, when they name one |
+| Default model, effort | Starting values for new Claude Code chats. **Default** is Claude Code's default model; **Claude Code's setting** runs the model Claude Code's own settings name, when they name one |
+| Model for small jobs | For small jobs run on Claude Code (default Sonnet) |
+| Default permission mode | Starting mode for new Claude Code chats |
+| **Codex** | |
+| Codex executable | Path to `codex`; detected automatically when empty |
+| Default Codex model, effort | Starting values for new Codex chats (default: Codex's own) |
+| Codex model for small jobs | For small jobs run on Codex (default: same as Codex chats) |
+| **Chats** | |
 | Files left out of a chat's notes | Patterns of notes not listed (default `*attachments/*`) |
 | Scratch chat | Offer the scratch chat in the history, an empty chat and the new-chat menu (default on) |
 | Scratch chat starts over after | 1 hour to 1 week unused (default 24 hours) |
+| Scratch chat model | A Claude Code or Codex model for the scratch chat (default: as small jobs run) |
 | Side chat knows | The whole chat it was opened from (default), or only what you ask it |
-| Model for small jobs | Model for Edit selection with Claude, Save summary as note, memo title and description suggestions, Pick up where you left off, a project's Context, summaries of chats included in another, Suggest frontmatter updates, and the scratch chat (default Sonnet) |
 | Offer bypass permissions | Adds Bypass to the mode menus |
-| Deny rules | Actions refused in every mode, one rule per line |
+| Deny rules | Actions refused in every mode, one rule per line; Codex's commands too |
 | Gmail features | Cards for mail and drafts, Make a todo, Draft an email from this note and mail read by chats, for Claude Code's Gmail connector; turn off without Gmail (default on) |
 | Mail: drafts only | With Claude Code's Gmail connector, Claude reads mail and writes drafts but cannot send, reply or forward (default on) |
 | Todo note | Where Make a todo on an email card adds its line, and the section (default `Todo.md`, Open) |
@@ -349,11 +380,12 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ## Commands
 
-Open chat · New chat · New chat in a new tab · Chat history · Pick up where you left off · Pick up where you left off: show ignored chats again · Edit selection with Claude · Find in chat · Go to previous / next message you sent · List messages you sent · Write this message in a note · Send the draft note · Send this note to Claude as a prompt · Suggest frontmatter updates for this note · Draft an email from this note… · Quote the selected chat text in your next message · Open side chat · Open scratch chat · Clear scratch chat · Toggle fast mode · Focus chat input · Stop Claude · Rename chat · Branch this chat into a new tab · Save chat as note · Save chat summary as note · Ask Claude about selection · Continue from this memo · Open connections · Create project… · Write every project’s context anew · Rebuild connections from chat files · Take all chats off the phone · Toggle phone access (Remote Control)
+Open chat · New chat · New chat in a new tab · New Codex chat · Chat history · Pick up where you left off · Pick up where you left off: show ignored chats again · Edit selection with Claude · Find in chat · Go to previous / next message you sent · List messages you sent · Write this message in a note · Send the draft note · Send this note to Claude as a prompt · Suggest frontmatter updates for this note · Draft an email from this note… · Quote the selected chat text in your next message · Open side chat · Open scratch chat · Clear scratch chat · Toggle fast mode · Focus chat input · Stop Claude · Rename chat · Branch this chat into a new tab · Save chat as note · Save chat summary as note · Ask Claude about selection · Continue from this memo · Open connections · Create project… · Write every project’s context anew · Rebuild connections from chat files · Take all chats off the phone · Toggle phone access (Remote Control)
 
 ## Limitations
 
-- Each open or working chat runs its own Claude Code process (about 360 MB).
+- Each open or working chat runs its own Claude Code or Codex process (Claude Code's about 360 MB).
+- A Codex chat cannot be branched, copied from a message, or put on the phone.
 - Background tasks end when Obsidian quits or the last Claude panel closes.
 - Each chat put on the phone appears as its own session in the Claude app.
 - Tested on macOS. Windows support is built in but has not yet been run on a Windows machine; Linux is untested.
@@ -361,6 +393,7 @@ Open chat · New chat · New chat in a new tab · Chat history · Pick up where 
 ## Troubleshooting
 
 - **The panel stays blank after an update:** close its tab and open it again from the ribbon.
+- **"Codex was not found":** install the Codex CLI (see Requirements), or set its path under **Settings → Vault Claude → Codex executable**. Run `codex` once in a terminal to sign in.
 - **"Claude Code executable not found":** install Claude Code with the native installer (see Requirements), or set its path under **Settings → Vault Claude → Claude Code executable**.
 - **A notice that Claude Code is far from the plugin's SDK version:** update Claude Code (`claude update`), or the plugin if Claude Code is ahead.
 - **Windows, with Claude Code installed through npm:** the plugin cannot start `claude.cmd`; install it with the native Windows installer, which provides `claude.exe`.
