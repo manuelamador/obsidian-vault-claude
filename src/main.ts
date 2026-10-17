@@ -40,6 +40,9 @@ import { ChatView, VIEW_TYPE } from './view';
 import { DEFAULT_SETTINGS, SCRATCH_IDLE_CHOICES, VaultClaudeSettingTab, chatModel, extraPathEntries, type VaultClaudeSettings } from './settings';
 
 const MAX_CHAT_RECORDS = 500;
+/** How many sent messages ↑ in the input can bring back from any chat, and the longest one kept (see recordPrompt). */
+const PROMPT_HISTORY = 100;
+const PROMPT_HISTORY_CHARS = 4000;
 const MODEL_CACHE_MS = 24 * 60 * 60 * 1000;
 const PLAN_CACHE_MS = 5 * 60 * 1000;
 /** How long saveSoon waits to save, gathering the changes of a burst of events. */
@@ -179,6 +182,8 @@ interface PluginData {
   /** Each chat's last context reading (see setChatContext), shown when the chat is opened again. */
   chatContext?: Record<string, ContextReading>;
   frontmatterGuidance?: Record<string, string>;
+  /** Messages you sent, in any chat, newest first (see recordPrompt), for ↑ in the input. */
+  promptHistory?: string[];
 }
 
 export default class VaultClaudePlugin extends Plugin {
@@ -1396,6 +1401,17 @@ export default class VaultClaudePlugin extends Plugin {
     await this.app.workspace.openLinkText(path, '', 'tab');
     const commands = (this.app as unknown as { commands?: { executeCommandById(id: string): boolean } }).commands;
     if (!commands?.executeCommandById('graph:open-local')) new Notice('Obsidian could not open the local graph: is the Graph view core plugin on?');
+  }
+
+  /** Messages you sent, in any chat, newest first and each once: what ↑ in the input steps back through after the chat's own. */
+  promptHistory: string[] = [];
+
+  /** Records message `text`, sent in a chat, at the head of the history ↑ steps through (at most PROMPT_HISTORY, each at most PROMPT_HISTORY_CHARS). */
+  recordPrompt(text: string): void {
+    const prompt = text.trim();
+    if (!prompt || prompt.length > PROMPT_HISTORY_CHARS) return;
+    this.promptHistory = [prompt, ...this.promptHistory.filter((each) => each !== prompt)].slice(0, PROMPT_HISTORY);
+    this.saveSoon();
   }
 
   /** Clean-ups to run later, by timer (see later). */
@@ -3493,6 +3509,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.chatLinks = raw.chatLinks && typeof raw.chatLinks === 'object' ? raw.chatLinks : {};
     this.chatSummaries = raw.chatSummaries && typeof raw.chatSummaries === 'object' ? raw.chatSummaries : {};
     this.chatMail = raw.chatMail && typeof raw.chatMail === 'object' ? raw.chatMail : {};
+    this.promptHistory = Array.isArray(raw.promptHistory) ? raw.promptHistory.filter((each): each is string => typeof each === 'string').slice(0, PROMPT_HISTORY) : [];
     this.chatContext = raw.chatContext && typeof raw.chatContext === 'object' ? raw.chatContext : {};
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
     this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};
@@ -3551,6 +3568,7 @@ export default class VaultClaudePlugin extends Plugin {
       chatMail: this.chatMail,
       chatContext: this.chatContext,
       frontmatterGuidance: this.frontmatterGuidance,
+      promptHistory: this.promptHistory,
     };
   }
 }

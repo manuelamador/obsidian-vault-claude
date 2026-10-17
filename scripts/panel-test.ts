@@ -231,6 +231,8 @@ async function main(): Promise<void> {
     scratchSession: () => null,
     scratchRunner: () => ({ engine: 'claude' as const, model: 'sonnet' }),
     memoBoxWanted: new Map<string, boolean>(),
+    promptHistory: ['from another chat', 'older still'],
+    recordPrompt: () => undefined,
     later: (run: () => void, ms: number) => {
       const timer = setTimeout(run, ms);
       return () => clearTimeout(timer);
@@ -357,7 +359,8 @@ async function main(): Promise<void> {
     const draftKept = recallInput.value === 'draft';
     recallInput.value = '';
     console.log(`recall: ${JSON.stringify(recalled)}, pressed again: ${JSON.stringify(again)}; typed text kept: ${draftKept}`);
-    if (recalled !== 'third question' || again !== 'third question' || !draftKept) process.exitCode = 1;
+    // Pressed again, the chat's message before it.
+    if (recalled !== 'third question' || again !== 'second question' || !draftKept) process.exitCode = 1;
 
     // Slash-command suggestions: "/to" lists todo and todosync; ArrowDown then Enter picks todosync.
     const input = root.querySelector('.vc-input') as HTMLTextAreaElement;
@@ -4469,6 +4472,32 @@ async function main(): Promise<void> {
       const failOk = restored.input === 'see @[[New.md]]' && JSON.stringify(restored.attachments) === '["paper.pdf"]' && restored.bubbles === 0 && restored.sent === 0 && strayed === 0;
       console.log(`unsent message: ${JSON.stringify(restored)}; image for another chat attached ${strayed} -> ${failOk}`);
       if (!failOk) process.exitCode = 1;
+    }
+
+    {
+      // ↑ in an empty input steps back through the messages sent, this chat's then other chats'; ↓ comes forward again.
+      const histView = view as unknown as { lastSent: string | null; onInputKeydown(evt: KeyboardEvent): void };
+      const histInput = root.querySelector('.vc-input') as HTMLTextAreaElement;
+      view.newChat();
+      histView.lastSent = 'my last message';
+      const key = (name: string) => histView.onInputKeydown(new dom.window.KeyboardEvent('keydown', { key: name, cancelable: true }) as unknown as KeyboardEvent);
+      histInput.value = '';
+      const seen: string[] = [];
+      for (let i = 0; i < 4; i += 1) {
+        key('ArrowUp');
+        seen.push(histInput.value);
+      }
+      key('ArrowDown');
+      const back = histInput.value;
+      key('ArrowDown');
+      key('ArrowDown');
+      key('ArrowDown');
+      const empty = histInput.value;
+      histInput.value = '';
+      view.newChat();
+      const histOk = JSON.stringify(seen) === JSON.stringify(['my last message', 'from another chat', 'older still', 'older still']) && back === 'from another chat' && empty === '';
+      console.log(`↑ steps back through messages sent: ${JSON.stringify(seen)}; ↓ ${JSON.stringify(back)}, then empty ${empty === ''} -> ${histOk}`);
+      if (!histOk) process.exitCode = 1;
     }
 
     {

@@ -1041,7 +1041,11 @@ export class ChatView extends ItemView {
       this.engine === 'codex' ? [] : this.plugin.commands.some((command) => command.name === 'plan') ? this.plugin.commands : [...this.plugin.commands, PLAN_COMMAND],
     );
     this.registerDomEvent(this.inputEl, 'keydown', (evt) => this.onInputKeydown(evt));
-    this.registerDomEvent(this.inputEl, 'input', () => this.inputEdited());
+    this.registerDomEvent(this.inputEl, 'input', () => {
+      // Typing in a message brought back from the history makes it yours to edit: ↑ and ↓ move the caret again.
+      this.historyAt = null;
+      this.inputEdited();
+    });
     // Undo in the input stays within the chat on screen. The window keeps one undo history, and the
     // input's text is swapped from code when the chat changes, which that history does not record:
     // undoing past the swap would bring back, or mangle, what was typed in another chat. So undo
@@ -1308,6 +1312,7 @@ export class ChatView extends ItemView {
     this.codexEffort = undefined;
     this.unseen = null;
     this.lastSent = null;
+    this.historyAt = null;
     this.findBar.close();
     this.sessionToken = null;
     this.closeSession(this.session);
@@ -3768,16 +3773,59 @@ export class ChatView extends ItemView {
 
   // ---- Input -------------------------------------------------------------
 
+  /** Where ↑ has gone back to in the messages you sent (see stepHistory); null when not stepping through them. */
+  private historyAt: number | null = null;
+  /** The message ↑ or ↓ last put in the input: any other text there (typed, quoted) ends the stepping. */
+  private historyShown = '';
+
+  /** The messages ↑ steps back through, newest first, each once: this chat's (its last sent first), then those sent in any chat. */
+  private promptHistory(): string[] {
+    const own = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user-text')].map((el) => el.textContent?.trim() ?? '').reverse();
+    return [...new Set([...(this.lastSent ? [this.lastSent.trim()] : []), ...own, ...this.plugin.promptHistory].filter(Boolean))];
+  }
+
+  /**
+   * One step through the messages you sent: `by` 1 older, -1 newer. Taken only from an empty input,
+   * or while stepping with the caret on the first line (↑) or the last (↓), so that the arrows still
+   * move the caret in a message being written. Whether it stepped.
+   */
+  private stepHistory(by: 1 | -1): boolean {
+    const input = this.inputEl;
+    const value = input.value;
+    if (this.historyAt !== null && value !== this.historyShown) this.historyAt = null;
+    if (this.historyAt === null) {
+      if (by === -1 || value !== '') return false;
+    } else {
+      const caret = input.selectionStart ?? 0;
+      const onEdge = by === 1 ? !value.slice(0, caret).includes('\n') : !value.slice(caret).includes('\n');
+      if (!onEdge) return false;
+    }
+    const history = this.promptHistory();
+    const at = (this.historyAt ?? -1) + by;
+    if (at >= history.length) return this.historyAt !== null;
+    this.historyAt = at < 0 ? null : at;
+    input.value = at < 0 ? '' : history[at];
+    this.historyShown = input.value;
+    this.growInput();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+    return true;
+  }
+
   private onInputKeydown(evt: KeyboardEvent): void {
     if (this.suggest.handleKey(evt)) return;
-    // ↑ in an empty input brings back the last message, to edit and send again (after Stop, say).
+    // ↑ in an empty input brings back the last message you sent, and each ↑ after it an older one:
+    // this chat's, then other chats'. ↓ goes forward again, back to an empty input; Esc puts it back.
     const plainKey = !evt.shiftKey && !evt.altKey && !evt.metaKey && !evt.ctrlKey && !evt.isComposing;
-    if (evt.key === 'ArrowUp' && plainKey && this.inputEl.value === '' && this.lastSent) {
+    if (plainKey && (evt.key === 'ArrowUp' || evt.key === 'ArrowDown') && this.stepHistory(evt.key === 'ArrowUp' ? 1 : -1)) {
       evt.preventDefault();
-      this.inputEl.value = this.lastSent;
+      return;
+    }
+    if (evt.key === 'Escape' && this.historyAt !== null) {
+      evt.preventDefault();
+      this.historyAt = null;
+      this.inputEl.value = '';
       this.growInput();
-      const end = this.inputEl.value.length;
-      this.inputEl.setSelectionRange(end, end);
       return;
     }
     if (evt.key === 'Enter' && !evt.isComposing) {
@@ -4161,7 +4209,11 @@ export class ChatView extends ItemView {
       this.renderTray();
     }
     // ↑ brings back what was typed, `/plan` included, so it can be sent again the same way.
-    if (text) this.lastSent = plan ? typed : text;
+    if (text) {
+      this.lastSent = plan ? typed : text;
+      this.plugin.recordPrompt(this.lastSent);
+    }
+    this.historyAt = null;
     // Taken before the input empties, which lets them go (see followMentions).
     const pathOnly = new Set(this.pathOnlyMentions);
     this.inputEl.value = '';
