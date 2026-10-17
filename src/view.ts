@@ -119,6 +119,9 @@ import {
   type UsageWindow,
 } from './usageDisplay';
 
+/** How long after a panel writes a memo's Send box its own write is told from someone else's edit (see setMemoBox). */
+const MEMO_BOX_SETTLE_MS = 1500;
+
 /** The most chats the back arrow goes through. */
 const NAV_DEPTH = 50;
 
@@ -1773,7 +1776,15 @@ export class ChatView extends ItemView {
       const item = this.plugin.listedChats()?.find((each) => each.id === id);
       return item ? formatDate(item.updatedAt) : 'not found';
     };
+    // The chat the list is for: once another is on screen (its map still loading), the list's controls change nothing.
+    const owner = this.draftKey();
+    const stale = () => {
+      if (this.draftKey() === owner) return false;
+      new Notice('Another chat is open now: its links show in a moment.');
+      return true;
+    };
     const update = (change: (state: ChatProjectState) => ChatProjectState) => {
+      if (stale()) return;
       this.setProjectStateNow(change({ ...this.projectStateNow() }));
       this.projectsChanged();
     };
@@ -1800,6 +1811,7 @@ export class ChatView extends ItemView {
       setInclude: (id, on) => update((state) => ({ ...state, includeChats: [...(state.includeChats ?? []).filter((each) => each !== id), ...(on ? [id] : [])] })),
       sendAgain: (id) => update((state) => ({ ...state, sent: state.sent?.filter((key) => key !== `chat:${id}`) })),
       unlink: (id) => {
+        if (stale()) return;
         if (this.chatId && (this.plugin.chatLinks[this.chatId] ?? []).includes(id)) this.plugin.unlinkChat(this.chatId, id);
         // Linked in the message being typed: its link there goes.
         const value = removeChatLinks(this.inputEl.value, id);
@@ -1818,7 +1830,9 @@ export class ChatView extends ItemView {
         this.plugin.forgetLinkedSummary(id);
         this.projectsChanged();
       },
-      chooseChat: () => void this.openHistory(true),
+      chooseChat: () => {
+        if (!stale()) void this.openHistory(true);
+      },
     });
   }
 
@@ -3912,13 +3926,27 @@ export class ChatView extends ItemView {
   /** Ticks or clears a memo's Send box; cleared only when no other panel still has the memo in its input. */
   private setMemoBox(path: string, on: boolean): void {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile) || (this.app.metadataCache.getFileCache(file)?.frontmatter?.send === true) === on) return;
+    if (!(file instanceof TFile)) return;
+    // Against what a write still under way will make it, not only the index: a mention taken out and
+    // put back at once ticks the box again.
+    const wanted = this.plugin.memoBoxWanted;
+    if ((wanted.get(path) ?? this.app.metadataCache.getFileCache(file)?.frontmatter?.send === true) === on) return;
     if (!on && this.plugin.mentionedElsewhere(path, this)) return;
+    wanted.set(path, on);
+    let wrote = on;
     this.app.fileManager
       .processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-        frontmatter.send = on;
+        // The latest wanted, should a later call have changed its mind before this one ran.
+        wrote = wanted.get(path) ?? on;
+        frontmatter.send = wrote;
       })
-      .catch((error: unknown) => log('setting a memo box failed', error));
+      .catch((error: unknown) => log('setting a memo box failed', error))
+      .finally(() => {
+        // Once the index has caught up with the last write, the box is followed as edited by anyone again.
+        window.setTimeout(() => {
+          if (wanted.get(path) === wrote) wanted.delete(path);
+        }, MEMO_BOX_SETTLE_MS);
+      });
   }
 
   /** Whether the input @-mentions the file at `path`. */

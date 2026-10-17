@@ -230,6 +230,7 @@ async function main(): Promise<void> {
     chatHolder: () => null,
     scratchSession: () => null,
     scratchRunner: () => ({ engine: 'claude' as const, model: 'sonnet' }),
+    memoBoxWanted: new Map<string, boolean>(),
     forgetScratch: () => undefined,
     scratchLeft: () => 0,
     setScratch: () => undefined,
@@ -4464,6 +4465,38 @@ async function main(): Promise<void> {
       const failOk = restored.input === 'see @[[New.md]]' && JSON.stringify(restored.attachments) === '["paper.pdf"]' && restored.bubbles === 0 && restored.sent === 0 && strayed === 0;
       console.log(`unsent message: ${JSON.stringify(restored)}; image for another chat attached ${strayed} -> ${failOk}`);
       if (!failOk) process.exitCode = 1;
+    }
+
+    {
+      // A memo taken out of the message and put back at once ends ticked: the later write wins.
+      const boxView = view as unknown as { setMemoBox(path: string, on: boolean): void };
+      const fileManager = app.fileManager as unknown as Record<string, unknown>;
+      const cacheStub = app.metadataCache as unknown as { getFileCache: (file: unknown) => unknown };
+      const cacheWas = cacheStub.getFileCache;
+      notesOnDisk.set('Memo.md', 'memo');
+      let send: unknown = true;
+      cacheStub.getFileCache = () => ({ frontmatter: { send: true } });
+      const writes: Promise<void>[] = [];
+      fileManager.processFrontMatter = (_file: unknown, change: (frontmatter: Record<string, unknown>) => void) => {
+        const write = new Promise<void>((resolve) => setTimeout(() => {
+          const frontmatter: Record<string, unknown> = { send };
+          change(frontmatter);
+          send = frontmatter.send;
+          resolve();
+        }, 30));
+        writes.push(write);
+        return write;
+      };
+      boxView.setMemoBox('Memo.md', false);
+      boxView.setMemoBox('Memo.md', true);
+      await Promise.all(writes);
+      delete fileManager.processFrontMatter;
+      cacheStub.getFileCache = cacheWas;
+      notesOnDisk.delete('Memo.md');
+      (plugin as unknown as { memoBoxWanted: Map<string, boolean> }).memoBoxWanted.clear();
+      const boxOk = send === true;
+      console.log(`memo box put back at once ends ticked: ${boxOk}`);
+      if (!boxOk) process.exitCode = 1;
     }
 
     {

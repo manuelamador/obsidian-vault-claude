@@ -1537,6 +1537,9 @@ export default class VaultClaudePlugin extends Plugin {
   async followMemoBox(file: TFile, on: boolean): Promise<void> {
     const before = this.memoBoxes.get(file.path);
     this.memoBoxes.set(file.path, on);
+    // A panel's own write landing (see ChatView.setMemoBox) is not a change to act on; nor is an earlier
+    // one landing after the panel wanted the other value, which its latest write puts right.
+    if (this.memoBoxWanted.has(file.path)) return;
     // A box not seen before (see seedMemoBoxes) is taken as it is: only a change of it is acted on.
     if (before === on || before === undefined) return;
     const views = this.chatViews();
@@ -1547,6 +1550,9 @@ export default class VaultClaudePlugin extends Plugin {
     if (views.some((view) => view.mentions(file.path))) return;
     await this.attachToClaude([file]);
   }
+
+  /** Send boxes a panel is writing, with the value it wants now (see ChatView.setMemoBox). */
+  readonly memoBoxWanted = new Map<string, boolean>();
 
   /** Each memo's Send box as it is when Obsidian has loaded, so that a later edit of a memo left ticked does not count as ticking it. */
   private seedMemoBoxes(): void {
