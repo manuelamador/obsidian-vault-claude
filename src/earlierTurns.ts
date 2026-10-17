@@ -21,13 +21,19 @@ export function turnStarts(transcript: SessionMessage[]): number[] {
     for (const block of blocksOf(message)) if (block.type === 'tool_result' && block.tool_use_id) answered.add(block.tool_use_id);
   }
   const waiting = new Set<string>();
+  // Results met so far: calls made side by side can be saved after their results, and such a call
+  // waits for nothing.
+  const met = new Set<string>();
   const starts: number[] = [];
   transcript.forEach((message, i) => {
     if (message.parent_tool_use_id !== null) return;
     if (waiting.size === 0 && startsTurn(message)) starts.push(i);
     for (const block of blocksOf(message)) {
-      if (block.type === 'tool_use' && block.id && answered.has(block.id)) waiting.add(block.id);
-      else if (block.type === 'tool_result' && block.tool_use_id) waiting.delete(block.tool_use_id);
+      if (block.type === 'tool_use' && block.id && answered.has(block.id) && !met.has(block.id)) waiting.add(block.id);
+      else if (block.type === 'tool_result' && block.tool_use_id) {
+        waiting.delete(block.tool_use_id);
+        met.add(block.tool_use_id);
+      }
     }
   });
   return starts;

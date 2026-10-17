@@ -44,3 +44,9 @@ test('turns full of tool calls: the tail stops short of its turns once it holds 
   const all = historyParts(transcript, 10, 20);
   assert.equal(all.earlier.flat().length + all.tail.length, transcript.length);
 });
+
+test('a call saved after its own result holds back no cut', () => {
+  // Two calls made side by side: the second's result was written before the call itself.
+  const transcript = [prompt('p1'), call('t1'), result('t2'), result('t1'), call('t2'), answer('a1'), prompt('p2'), answer('a2')];
+  assert.deepEqual(turnStarts(transcript), [0, 6]);
+});
