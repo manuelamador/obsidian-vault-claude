@@ -231,6 +231,10 @@ async function main(): Promise<void> {
     scratchSession: () => null,
     scratchRunner: () => ({ engine: 'claude' as const, model: 'sonnet' }),
     memoBoxWanted: new Map<string, boolean>(),
+    later: (run: () => void, ms: number) => {
+      const timer = setTimeout(run, ms);
+      return () => clearTimeout(timer);
+    },
     forgetScratch: () => undefined,
     scratchLeft: () => 0,
     setScratch: () => undefined,

@@ -180,7 +180,11 @@ export class CodexConnection {
         log('codex sent a line that is not JSON', line.slice(0, 200));
         continue;
       }
-      if (message.method && message.id !== undefined) this.handlers.onRequest?.(message.id, message.method, message.params ?? {});
+      if (message.method && message.id !== undefined) {
+        // A request with nothing to answer it is declined at once, never left waiting (Codex would wait on it).
+        if (this.handlers.onRequest) this.handlers.onRequest(message.id, message.method, message.params ?? {});
+        else this.refuse(message.id, `${message.method} is not supported by this client`);
+      }
       else if (message.method) this.handlers.onNotification?.(message.method, message.params ?? {});
       else if (typeof message.id === 'number') {
         const waiting = this.pending.get(message.id);

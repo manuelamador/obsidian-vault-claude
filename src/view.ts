@@ -623,8 +623,6 @@ export class ChatView extends ItemView {
   private findBar!: FindBar;
   /** Tabs on the margin for the chats that finished in this panel's background (see DoneTabs). */
   private doneTabs!: DoneTabs;
-  /** Timers deleting what a removal left once its Undo has passed (see removeFrom); cleared when the panel closes. */
-  private readonly removalTimers = new Set<number>();
   /** Claude Code refused the sign-in: the next message starts its process afresh (see ensureSession). */
   private restartSession = false;
   /** "Memo" beside Quote and Side chat over a selection in the chat (see saveMemoFromSelection). */
@@ -1215,8 +1213,6 @@ export class ChatView extends ItemView {
   async onClose(): Promise<void> {
     this.closing = true;
     this.doneTabs.stop();
-    for (const timer of this.removalTimers) window.clearTimeout(timer);
-    this.removalTimers.clear();
     this.plugin.panelClosing(this);
     closeImage();
     this.sideChat.close();
@@ -3391,14 +3387,11 @@ export class ChatView extends ItemView {
     const before = this.plugin.contextLeft(id, { sent: /<project_context>|<linked_chats>/.test(done.cut), summary: true });
     if (reopen) await this.openChat(item);
     let undoing = false;
-    let leftovers = 0;
+    let cancelLeftovers = () => undefined as void;
+    // Kept by the plugin, not this panel: closing the panel does not leave the files behind.
     const later = () => {
       if (copy) return;
-      leftovers = window.setTimeout(() => {
-        this.removalTimers.delete(leftovers);
-        void deleteCutLeftovers(id, root, done).catch((error: unknown) => log('deleting what a removal left failed', error));
-      }, REMOVAL_UNDO_MS + 1000);
-      this.removalTimers.add(leftovers);
+      cancelLeftovers = this.plugin.later(() => void deleteCutLeftovers(id, root, done).catch((error: unknown) => log('deleting what a removal left failed', error)), REMOVAL_UNDO_MS + 1000);
     };
     later();
     const notice = createFragment((el) => {
@@ -3406,8 +3399,7 @@ export class ChatView extends ItemView {
       el.createEl('a', { text: 'Undo' }).addEventListener('click', () => {
         if (undoing) return;
         undoing = true;
-        window.clearTimeout(leftovers);
-        this.removalTimers.delete(leftovers);
+        cancelLeftovers();
         void this.undoRemove(item, done, dropped, copy).then((put) => {
           if (put) return this.plugin.restoreContext(id, before);
           undoing = false;

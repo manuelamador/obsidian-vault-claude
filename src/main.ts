@@ -847,6 +847,12 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   onunload(): void {
+    // Clean-ups still waiting (what a removal left, see ChatView.removeFrom) are done now, not lost.
+    for (const [timer, run] of this.cleanups) {
+      window.clearTimeout(timer);
+      run();
+    }
+    this.cleanups.clear();
     // The Codex app-server kept for reads (see CodexReader).
     stopCodexReader();
     if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
@@ -1390,6 +1396,25 @@ export default class VaultClaudePlugin extends Plugin {
     await this.app.workspace.openLinkText(path, '', 'tab');
     const commands = (this.app as unknown as { commands?: { executeCommandById(id: string): boolean } }).commands;
     if (!commands?.executeCommandById('graph:open-local')) new Notice('Obsidian could not open the local graph: is the Graph view core plugin on?');
+  }
+
+  /** Clean-ups to run later, by timer (see later). */
+  private readonly cleanups = new Map<number, () => void>();
+
+  /**
+   * Runs `run` in `ms`, whichever panel asked for it and even once that panel has closed; on unload,
+   * at once. Returns what cancels it.
+   */
+  later(run: () => void, ms: number): () => void {
+    const timer = window.setTimeout(() => {
+      this.cleanups.delete(timer);
+      run();
+    }, ms);
+    this.cleanups.set(timer, run);
+    return () => {
+      window.clearTimeout(timer);
+      this.cleanups.delete(timer);
+    };
   }
 
   /** Whether chat `id` is run by Codex (see CodexSession). */

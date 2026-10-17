@@ -44,3 +44,13 @@ test('a Codex chat closed right after a message is sent starts no Codex', async 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a one-off request to Codex is not held up by a question Codex asks: it is refused, and the turn goes on', async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  try {
+    assert.equal(await runCodexOneShot(launchIn(dir, 'ask'), { system: 's', prompt: 'p' }, () => undefined, new AbortController().signal), '');
+  } finally {
+    stopCodexReader();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
