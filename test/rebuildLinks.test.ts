@@ -35,3 +35,9 @@ test('transcriptNotes skips a subagent’s messages', () => {
   ];
   assert.deepEqual(transcriptNotes(rows), { sent: ['A.md'], mentioned: ['B'] });
 });
+
+test('replyLinks reads links in angle brackets and with a heading, and none inside code', () => {
+  assert.deepEqual(replyLinks('See [note](<Research/My Note.md>) and [n](Research/Note.md#Results) and [b](Notes/B.md#^block).'), ['Research/My Note.md', 'Research/Note.md', 'Notes/B.md']);
+  const text = ['Inline `[[Example]]` and:', '```markdown', '[[Fenced]] and [x](Fenced.md)', '```', '> ```', '> [[Quoted]]', '> ```', 'but [[Real]].'].join('\n');
+  assert.deepEqual(replyLinks(text), ['Real']);
+});

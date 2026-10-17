@@ -2,6 +2,7 @@
 // notes (see VaultClaudePlugin.rebuildConnections): the notes sent with its messages, read from the
 // context block the panel prepends, and the notes its replies link to. The notes it changed come
 // from its tool results (see savedChangedFiles). Kept free of `obsidian` imports so the tests can use it.
+import { closesFence, fenceMarker } from './fences';
 
 const CONTEXT = /<obsidian_context>([\s\S]*?)<\/obsidian_context>/;
 
@@ -16,15 +17,43 @@ export function promptNotes(text: string): string[] {
   return [...new Set(found)];
 }
 
-/** The link targets in a reply: `[[wikilinks]]` (without heading, block or alias) and Markdown links to `.md` files, decoded. */
+/** `text` with its code left out: fenced blocks (in a quote too) and inline code spans, whose links are examples, not links. */
+function withoutCode(text: string): string {
+  const kept: string[] = [];
+  let fence: string | null = null;
+  for (const line of text.split('\n')) {
+    const bare = line.replace(/^(?: {0,3}>[ \t]?)+/, '');
+    if (fence) {
+      if (closesFence(bare, fence)) fence = null;
+      continue;
+    }
+    const opening = fenceMarker(bare);
+    if (opening) {
+      fence = opening;
+      continue;
+    }
+    kept.push(line);
+  }
+  // A code span: a run of backticks closed by a run of the same length, within one paragraph.
+  return kept.join('\n').replace(/(?<![`\\])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g, ' ');
+}
+
+/**
+ * The link targets in a reply, outside its code: `[[wikilinks]]` (without heading, block or alias)
+ * and Markdown links to `.md` files, in angle brackets (`[x](<My Note.md>)`) or not, without a
+ * heading or block after `#`, decoded.
+ */
 export function replyLinks(text: string): string[] {
+  const prose = withoutCode(text);
   const found: string[] = [];
-  for (const match of text.matchAll(/\[\[([^\]|#^\n]+)/g)) found.push(match[1].trim());
-  for (const match of text.matchAll(/\]\(<?([^)\s>]+\.md)>?\)/g)) {
+  for (const match of prose.matchAll(/\[\[([^\]|#^\n]+)/g)) found.push(match[1].trim());
+  for (const match of prose.matchAll(/\]\((?:<([^<>\n]+)>|([^)\s<>]+))/g)) {
+    const target = (match[1] ?? match[2]).split('#')[0].trim();
+    if (!/\.md$/i.test(target)) continue;
     try {
-      found.push(decodeURIComponent(match[1]));
+      found.push(decodeURIComponent(target));
     } catch {
-      found.push(match[1]);
+      found.push(target);
     }
   }
   return [...new Set(found.filter(Boolean))];
