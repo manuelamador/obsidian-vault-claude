@@ -1308,10 +1308,12 @@ export default class VaultClaudePlugin extends Plugin {
   /** When the Codex models were last asked for: a failed listing is not asked again at once. */
   private codexModelsTriedAt = 0;
 
-  loadCodexModels(): void {
-    if (this.codexModels.length > 0 || this.codexModelsLoading || Date.now() - this.codexModelsTriedAt < PLAN_CACHE_MS) return;
+  /** Codex's models read when not yet known; the read, or undefined when none is started. */
+  loadCodexModels(): Promise<void> | undefined {
+    if (this.codexModelsLoading) return this.codexModelsLoading;
+    if (this.codexModels.length > 0 || Date.now() - this.codexModelsTriedAt < PLAN_CACHE_MS) return undefined;
     const launch = this.codexLaunch();
-    if (typeof launch === 'string') return;
+    if (typeof launch === 'string') return undefined;
     this.codexModelsTriedAt = Date.now();
     this.codexModelsLoading = listCodexModels(launch)
       .then((models) => {
@@ -1320,6 +1322,7 @@ export default class VaultClaudePlugin extends Plugin {
       })
       .catch((error: unknown) => log('listing codex models failed', error))
       .finally(() => (this.codexModelsLoading = null));
+    return this.codexModelsLoading;
   }
 
   /** Codex's usage limits as last read (see readCodexLimits), and when; a reading at most every PLAN_CACHE_MS unless forced. */
@@ -3191,7 +3194,8 @@ export default class VaultClaudePlugin extends Plugin {
     // The summary names the model it ran on, which with none chosen is the one Claude Code's settings name.
     const codex = this.settings.smallJobEngine === 'codex';
     if (!codex && !this.configured.model) await this.loadConfigured();
-    const model = codex ? (this.codexModels.find((each) => each.isDefault)?.name ?? 'Codex') : this.modelName(this.smallJobModel());
+    const codexModel = this.settings.smallJobCodexModel || this.settings.codexModel;
+    const model = codex ? (this.codexModels.find((each) => (codexModel ? each.id === codexModel : each.isDefault))?.name ?? (codexModel || 'Codex')) : this.modelName(this.smallJobModel());
     return this.oneShot({ system: summarySystem(conventions), prompt: summaryPrompt({ ...input, model }), effort: 'medium' }, () => undefined, signal);
   }
 
@@ -3213,7 +3217,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (this.settings.smallJobEngine === 'codex') {
       const launch = this.codexLaunch();
       if (typeof launch === 'string') return Promise.reject(new Error(launch));
-      return runCodexOneShot(launch, request, onText, signal);
+      return runCodexOneShot(launch, { ...request, model: this.settings.smallJobCodexModel || this.settings.codexModel || undefined }, onText, signal);
     }
     const launch = this.claudeLaunch();
     if (typeof launch === 'string') return Promise.reject(new Error(launch));
@@ -3325,6 +3329,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (this.settings.sideChatContext !== 'quote') this.settings.sideChatContext = 'chat';
     if (this.settings.newChatEngine !== 'codex') this.settings.newChatEngine = 'claude';
     if (this.settings.smallJobEngine !== 'codex') this.settings.smallJobEngine = 'claude';
+    for (const key of ['codexModel', 'codexEffort', 'smallJobCodexModel'] as const) if (typeof this.settings[key] !== 'string') this.settings[key] = '';
     // Up to 0.11.0 these were three settings; whichever was set becomes the one for small jobs.
     const legacy = stored as Partial<Record<'smallJobModel' | 'scratchModel' | 'summaryModel' | 'inlineEditModel', string>>;
     if (typeof legacy.smallJobModel !== 'string') {

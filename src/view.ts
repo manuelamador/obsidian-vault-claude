@@ -4341,10 +4341,9 @@ export class ChatView extends ItemView {
       this.session = null;
     }
     this.engine = engine;
-    if (engine === 'claude') {
-      this.codexModel = undefined;
-      this.codexEffort = undefined;
-    }
+    // A new Codex chat starts on the Codex model and effort set in the settings.
+    this.codexModel = engine === 'codex' ? this.plugin.settings.codexModel || undefined : undefined;
+    this.codexEffort = engine === 'codex' ? this.plugin.settings.codexEffort || undefined : undefined;
     this.applyEngine();
     if (this.inputEl && !this.busy) this.inputEl.placeholder = this.placeholderText();
     const welcome = this.messagesEl.querySelector('.vc-welcome');
@@ -4380,7 +4379,7 @@ export class ChatView extends ItemView {
       this.populateEffortSelect();
       return;
     }
-    this.plugin.loadCodexModels();
+    void this.plugin.loadCodexModels();
     const models = this.plugin.codexModels;
     const fallback = models.find((model) => model.isDefault);
     this.modelMenu.clear();

@@ -59,6 +59,10 @@ export interface VaultClaudeSettings {
   newChatEngine: 'claude' | 'codex';
   /** What runs the small jobs (see smallJobModel): Claude Code, or Codex on its default model. */
   smallJobEngine: 'claude' | 'codex';
+  /** Codex chats' model and reasoning effort to start with, and the small jobs' when run on Codex; empty for Codex's own. */
+  codexModel: string;
+  codexEffort: string;
+  smallJobCodexModel: string;
   model: string;
   /** Vault paths left out of the notes a chat lists, one pattern per line. */
   hiddenNotePaths: string;
@@ -132,6 +136,9 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   codexPath: '',
   newChatEngine: 'claude',
   smallJobEngine: 'claude',
+  codexModel: '',
+  codexEffort: '',
+  smallJobCodexModel: '',
   model: '',
   hiddenNotePaths: '*attachments/*',
   scratchChat: true,
@@ -171,6 +178,34 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
     const { settings } = this.plugin;
     containerEl.empty();
 
+    new Setting(containerEl)
+      .setName('New chats run on')
+      .setDesc('Claude Code or Codex. The other is a click away in a new chat, and New chat\'s right-click menu offers both.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ claude: 'Claude Code', codex: 'Codex' })
+          .setValue(settings.newChatEngine)
+          .onChange(async (value) => {
+            settings.newChatEngine = value === 'codex' ? 'codex' : 'claude';
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Small jobs run on')
+      .setDesc('Claude Code or Codex, each on its model for small jobs below: Edit selection, Save summary as note, memo suggestions, Pick up where you left off, a project\'s Context, summaries of included chats and Suggest frontmatter updates. The scratch chat stays a Claude Code chat.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ claude: 'Claude Code', codex: 'Codex' })
+          .setValue(settings.smallJobEngine)
+          .onChange(async (value) => {
+            settings.smallJobEngine = value === 'codex' ? 'codex' : 'claude';
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl).setName('Claude Code').setHeading();
+
     const detected = detectClaudePath();
     new Setting(containerEl)
       .setName('Claude Code executable')
@@ -187,46 +222,6 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           .setValue(settings.claudePath)
           .onChange(async (value) => {
             settings.claudePath = value.trim();
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    const codex = findCodex('');
-    new Setting(containerEl)
-      .setName('Codex executable')
-      .setDesc(codex ? `For Codex chats (New Codex chat). Leave empty to use ${codex}. Codex runs with its own settings (~/.codex/config.toml).` : 'For Codex chats (New Codex chat). No Codex found; enter its full path, or install Codex.')
-      .addText((text) =>
-        text
-          .setPlaceholder(codex ?? '/path/to/codex')
-          .setValue(settings.codexPath)
-          .onChange(async (value) => {
-            settings.codexPath = value.trim();
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName('New chats run on')
-      .setDesc('Claude Code or Codex. The other is a click away in a new chat, and New chat\'s right-click menu offers both.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions({ claude: 'Claude Code', codex: 'Codex' })
-          .setValue(settings.newChatEngine)
-          .onChange(async (value) => {
-            settings.newChatEngine = value === 'codex' ? 'codex' : 'claude';
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName('Small jobs run on')
-      .setDesc('Claude Code, on the model for small jobs below, or Codex, on its default model: Edit selection, Save summary as note, memo suggestions, Pick up where you left off, a project\'s Context, summaries of included chats and Suggest frontmatter updates. The scratch chat stays a Claude Code chat.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions({ claude: 'Claude Code', codex: 'Codex' })
-          .setValue(settings.smallJobEngine)
-          .onChange(async (value) => {
-            settings.smallJobEngine = value === 'codex' ? 'codex' : 'claude';
             await this.plugin.saveSettings();
           }),
       );
@@ -257,7 +252,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Default model')
-      .setDesc('Model for new chats. The model button in the panel header switches it for the current chat.')
+      .setDesc('Model for new Claude Code chats. The model button in the panel header switches it for the current chat.')
       .addDropdown((dropdown) =>
         dropdown
           .addOptions(
@@ -269,6 +264,107 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
+
+    new Setting(containerEl)
+      .setName('Default effort')
+      .setDesc('Effort for new Claude Code chats. The effort menu in the panel header changes it for the current chat.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ '': 'Claude Code default', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' })
+          .setValue(settings.effort)
+          .onChange(async (value) => {
+            settings.effort = value as EffortLevel | '';
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Model for small jobs')
+      .setDesc('For small jobs run on Claude Code (see Small jobs run on), and the scratch chat. These are short requests where a smaller model answers faster and uses less of the plan.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(modelChoices(settings.smallJobModel, 'Same as chats'))
+          .setValue(settings.smallJobModel)
+          .onChange(async (value) => {
+            settings.smallJobModel = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl).setName('Codex').setHeading();
+
+    const codex = findCodex('');
+    new Setting(containerEl)
+      .setName('Codex executable')
+      .setDesc(codex ? `Leave empty to use ${codex}. Codex runs with its own settings (~/.codex/config.toml).` : 'No Codex found; enter its full path, or install Codex.')
+      .addText((text) =>
+        text
+          .setPlaceholder(codex ?? '/path/to/codex')
+          .setValue(settings.codexPath)
+          .onChange(async (value) => {
+            settings.codexPath = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    // Codex's models, as Codex lists them (see loadCodexModels); read when this tab is first shown.
+    const codexModels = this.plugin.codexModels;
+    if (codexModels.length === 0) void this.plugin.loadCodexModels()?.then(() => this.plugin.codexModels.length > 0 && this.display());
+    const codexDefault = codexModels.find((model) => model.isDefault);
+    const codexChoices = (current: string, empty: string): Record<string, string> => {
+      const choices: Record<string, string> = { '': empty };
+      for (const model of codexModels) choices[model.id] = model.name;
+      if (current && !(current in choices)) choices[current] = current;
+      return choices;
+    };
+    const codexDefaultName = codexDefault ? `Codex default (${codexDefault.name})` : 'Codex default';
+
+    new Setting(containerEl)
+      .setName('Default Codex model')
+      .setDesc('Model for new Codex chats. The model button in the panel header switches it for the current chat.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(codexChoices(settings.codexModel, codexDefaultName))
+          .setValue(settings.codexModel)
+          .onChange(async (value) => {
+            settings.codexModel = value;
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+
+    // The efforts the chosen model offers, else Codex's usual ones.
+    const chosenCodex = codexModels.find((model) => model.id === settings.codexModel) ?? codexDefault;
+    const codexEfforts: Record<string, string> = { '': chosenCodex?.defaultEffort ? `Model default (${chosenCodex.defaultEffort})` : 'Model default' };
+    for (const effort of chosenCodex?.efforts.map((each) => each.value) ?? ['low', 'medium', 'high', 'xhigh']) codexEfforts[effort] = `${effort[0].toUpperCase()}${effort.slice(1)}`;
+    if (settings.codexEffort && !(settings.codexEffort in codexEfforts)) codexEfforts[settings.codexEffort] = settings.codexEffort;
+    new Setting(containerEl)
+      .setName('Default Codex effort')
+      .setDesc('Reasoning effort for new Codex chats. The effort menu in the panel header changes it for the current chat.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(codexEfforts)
+          .setValue(settings.codexEffort)
+          .onChange(async (value) => {
+            settings.codexEffort = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Codex model for small jobs')
+      .setDesc('For small jobs run on Codex (see Small jobs run on). A smaller model answers faster and uses less of the plan.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(codexChoices(settings.smallJobCodexModel, 'Same as Codex chats'))
+          .setValue(settings.smallJobCodexModel)
+          .onChange(async (value) => {
+            settings.smallJobCodexModel = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl).setName('Chats').setHeading();
 
     new Setting(containerEl)
       .setName('Files left out of a chat\'s notes')
@@ -314,32 +410,6 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           .setValue(settings.sideChatContext)
           .onChange(async (value) => {
             settings.sideChatContext = value === 'quote' ? 'quote' : 'chat';
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName('Model for small jobs')
-      .setDesc('Model for Edit selection with Claude, Save summary as note, memo title and description suggestions, Pick up where you left off, a project\'s Context, summaries of chats included in another, Suggest frontmatter updates, and the scratch chat. These are short requests where a smaller model answers faster and uses less of the plan.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions(modelChoices(settings.smallJobModel, 'Same as chats'))
-          .setValue(settings.smallJobModel)
-          .onChange(async (value) => {
-            settings.smallJobModel = value;
-            await this.plugin.saveSettings();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName('Default effort')
-      .setDesc('Effort for new chats. The effort menu in the panel header changes it for the current chat.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions({ '': 'Claude Code default', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' })
-          .setValue(settings.effort)
-          .onChange(async (value) => {
-            settings.effort = value as EffortLevel | '';
             await this.plugin.saveSettings();
           }),
       );
