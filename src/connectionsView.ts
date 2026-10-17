@@ -32,6 +32,8 @@ interface MapActions {
   /** Whether chat `id` is a Codex chat: marked so on the map. */
   isCodex(id: string): boolean;
   openNote(path: string, newTab: boolean): void;
+  /** Opens note `path` with Obsidian's local graph of it beside; absent when the core Graph plugin is off. */
+  localGraph?: (path: string) => void;
   previewNote(path: string, event: MouseEvent | KeyboardEvent, target: Element, parent: unknown): void;
   openChat(id: string): void;
   /** Whether the chat the map is from links to chat `id`; null when there is none (a project's map with no chat on screen). */
@@ -401,6 +403,15 @@ function noteNode(group: SVGGElement, path: string, actions: MapActions, parent:
   group.toggleClass('is-hub', hub);
   group.addEventListener('click', () => actions.openNote(path, true));
   previewOnHover(group, (evt) => actions.previewNote(path, evt, group, parent));
+  // A right-click offers the note's links to other notes, in Obsidian's local graph.
+  group.addEventListener('contextmenu', (evt) => {
+    evt.preventDefault();
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle('Open in a new tab').setIcon('file-text').onClick(() => actions.openNote(path, true)));
+    const { localGraph } = actions;
+    if (localGraph) menu.addItem((item) => item.setTitle('Open local graph').setIcon('git-fork').onClick(() => localGraph(path)));
+    menu.showAtMouseEvent(evt);
+  });
 }
 
 /**
@@ -887,6 +898,8 @@ export class ConnectionsView extends ItemView {
     const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
     if (this.project?.path !== path) add('Show the project', 'locate-fixed', () => void this.moveToProject(path));
     add('Open project note', 'file-text', () => host.openProjectNote(path));
+    const { localGraph } = host;
+    if (localGraph) add('Open local graph', 'git-fork', () => localGraph(path));
     if (host.lookOnly) {
       menu.showAtMouseEvent(evt);
       return;

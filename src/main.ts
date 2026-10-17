@@ -1379,6 +1379,19 @@ export default class VaultClaudePlugin extends Plugin {
     return (await this.loadAnyChat(id, dir)).transcript.filter(match).slice(-count);
   }
 
+  /** Whether Obsidian's core Graph plugin is on, which Open local graph needs. */
+  private graphPluginOn(): boolean {
+    const internal = (this.app as unknown as { internalPlugins?: { getPluginById?(id: string): { enabled?: boolean } | null } }).internalPlugins;
+    return internal?.getPluginById?.('graph')?.enabled === true;
+  }
+
+  /** Opens note `path` in a tab, and Obsidian's local graph of it beside (its Open local graph command, on the note in front). */
+  private async openLocalGraph(path: string): Promise<void> {
+    await this.app.workspace.openLinkText(path, '', 'tab');
+    const commands = (this.app as unknown as { commands?: { executeCommandById(id: string): boolean } }).commands;
+    if (!commands?.executeCommandById('graph:open-local')) new Notice('Obsidian could not open the local graph: is the Graph view core plugin on?');
+  }
+
   /** Whether chat `id` is run by Codex (see CodexSession). */
   isCodexChat(id: string): boolean {
     return (this.scratch?.id === id && this.scratch.engine === 'codex') || this.chats.some((chat) => chat.id === id && chat.engine === 'codex');
@@ -1889,6 +1902,7 @@ export default class VaultClaudePlugin extends Plugin {
       titleOf: (id: string) => this.chatTitleOf(id),
       isCodex: (id: string) => this.isCodexChat(id),
       openNote: (path: string, newTab: boolean) => void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false),
+      ...(this.graphPluginOn() ? { localGraph: (path: string) => void this.openLocalGraph(path) } : {}),
       previewNote: (path: string, event: MouseEvent | KeyboardEvent, target: Element, parent: unknown) =>
         this.app.workspace.trigger('hover-link', { event, source: VIEW_TYPE, hoverParent: parent, targetEl: target, linktext: path }),
       openChat: (id: string) => void this.openChatById(id, this.chatTitleOf(id), view),
