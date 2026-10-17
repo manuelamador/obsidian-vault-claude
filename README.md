@@ -200,7 +200,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 - **Answer questions in place.** Question cards support single or multiple choices and your own answers.
 - **Get notified.** A system notification arrives when a long reply finishes, or Claude needs an approval or an answer, while Obsidian is in the background.
-- **Track usage.** The meter under the title shows context and plan usage, with reset times; hover for details. A chat opened again shows its last context reading until its next reply.
+- **Track usage.** The meter under the title shows context and plan usage, with reset times; hover for details. In a Claude chat, the card has **Compact now** under the context reading. A chat opened again shows its last context reading until its next reply.
 
 <details>
 <summary>Controls, plans, questions and usage</summary>
@@ -255,7 +255,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
   <img src="docs/done-tabs-closed.png" width="54" alt="Two tabs on the panel's right edge, each marked ✓"> <img src="docs/done-tab.png" width="300" alt="A tab pointed at, open to the left: the chat “demo chat”, “Claude finished”, the start of its reply “This is a test”, and × to remove it">
 
-- Background agents and commands can keep running after a reply ends. **Stop N tasks** beside Send, or ■ in history, stops them; a dot on the tab icon shows tasks are running. The list button beside Stop (also **Show background tasks**) lists the tasks of the panel's chats: what each is, for how long, its latest progress, a command's output so far, and **Stop** for one alone.
+- Background agents and commands can keep running after a reply ends. **Stop N tasks** beside Send, or ■ in history, stops them; a dot on the tab icon shows tasks are running. The list button beside Stop (also **Show background tasks**) lists the tasks of the panel's chats: what each is, for how long, its latest progress, a command's output so far, and **Stop** for one alone. Tasks that ended stay listed under **Finished** (the last 20, until Obsidian restarts) with their output, and one that ends in a chat not on screen says so in a notice.
 
   <img src="docs/background-tasks.png" width="480" alt="The input after a reply that left two background agents running: “Stop 2 tasks” beside Send">
 

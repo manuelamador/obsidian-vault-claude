@@ -1,4 +1,5 @@
-import { existsSync } from 'fs';
+import { existsSync, promises as fsPromises } from 'fs';
+import type { TaskInfo } from './backgroundTasks';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
 import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
@@ -40,6 +41,9 @@ import { ChatView, VIEW_TYPE } from './view';
 import { DEFAULT_SETTINGS, SCRATCH_IDLE_CHOICES, VaultClaudeSettingTab, chatModel, extraPathEntries, type VaultClaudeSettings } from './settings';
 
 const MAX_CHAT_RECORDS = 500;
+/** How many ended background tasks the task list keeps, and how much of each one's output it reads. */
+const FINISHED_TASKS = 20;
+const TASK_TAIL_BYTES = 8 * 1024;
 /** How many sent messages ↑ in the input can bring back from any chat, and the longest one kept (see recordPrompt). */
 const PROMPT_HISTORY = 100;
 const PROMPT_HISTORY_CHARS = 1000;
@@ -142,6 +146,18 @@ export interface MailThread {
 interface PlanNote {
   path: string;
   plan: string;
+}
+
+/** A background task that ended: whose chat, what it was, how it ended, and where its output is kept. */
+export interface FinishedTask {
+  chatId: string | null;
+  chatTitle: string;
+  info: TaskInfo;
+  status: 'completed' | 'failed' | 'stopped';
+  ended: number;
+  outputFile: string;
+  summary: string;
+  seen: boolean;
 }
 
 /** A chat run to report back, finished: its final answer, for the chat it reports to (see ChatView.renderReports). */
@@ -1446,6 +1462,40 @@ export default class VaultClaudePlugin extends Plugin {
     if (!this.settings.rememberPrompts || !prompt || prompt.length > PROMPT_HISTORY_CHARS) return;
     this.promptHistory = [prompt, ...this.promptHistory.filter((each) => each !== prompt)].slice(0, PROMPT_HISTORY);
     this.saveSoon();
+  }
+
+  /** Background tasks that have ended, newest first, until Obsidian restarts (see FinishedTask). */
+  finishedTasks: FinishedTask[] = [];
+
+  /** A background task of chat `task.chatId` ended: kept for the task list, and the panels' list buttons follow. */
+  taskEnded(task: FinishedTask): void {
+    this.finishedTasks = [task, ...this.finishedTasks.filter((each) => each.info.id !== task.info.id)].slice(0, FINISHED_TASKS);
+    for (const view of this.chatViews()) view.tasksUpdated();
+  }
+
+  /** The finished tasks are seen (the task list was opened): the list buttons no longer stay up for them. */
+  finishedTasksSeen(): void {
+    if (!this.finishedTasks.some((task) => !task.seen)) return;
+    for (const task of this.finishedTasks) task.seen = true;
+    for (const view of this.chatViews()) view.tasksUpdated();
+  }
+
+  /** The end of a finished task's output file, which Claude Code keeps (the last 8 KiB); null when it is gone. */
+  async taskFileTail(path: string): Promise<{ output: string; truncated: boolean } | null> {
+    try {
+      const handle = await fsPromises.open(path, 'r');
+      try {
+        const { size } = await handle.stat();
+        const length = Math.min(size, TASK_TAIL_BYTES);
+        const buffer = Buffer.alloc(length);
+        await handle.read(buffer, 0, length, size - length);
+        return { output: buffer.toString('utf8'), truncated: size > length };
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      return null;
+    }
   }
 
   /** Chats run to report back (see ChatView.runInNewChat), each with the chat it reports to. */

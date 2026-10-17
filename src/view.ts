@@ -2174,6 +2174,7 @@ export class ChatView extends ItemView {
   private backgroundHandlers(entry: BackgroundChat): SessionHandlers {
     return {
       onMessage: (message) => {
+        this.noteTaskEnded(entry.chatId, entry.title ?? 'Untitled chat', entry.taskInfo, message, false);
         if (noteTask(entry.taskInfo, message)) this.tasksChanged();
         if (trackTask(entry.tasks, message)) {
           this.tasksChanged();
@@ -5468,12 +5469,33 @@ export class ChatView extends ItemView {
   }
 
   /** Stop shows while a reply runs, and after it for as long as the chat has background tasks running. */
+  /**
+   * A background task of chat `chatId` ended (`message`, its notice): kept by the plugin for the task
+   * list, its output still readable there; a notice says so when its chat is not the one on screen.
+   */
+  private noteTaskEnded(chatId: string | null, title: string, infos: Map<string, TaskInfo>, message: SDKMessage, onScreen: boolean): void {
+    if (message.type !== 'system' || message.subtype !== 'task_notification' || message.ambient || message.skip_transcript) return;
+    const info = infos.get(message.task_id) ?? { id: message.task_id, type: 'task', description: message.summary, started: Date.now() };
+    this.plugin.taskEnded({ chatId, chatTitle: title, info, status: message.status, ended: Date.now(), outputFile: message.output_file, summary: message.summary, seen: false });
+    if (onScreen && this.isOnScreen()) return;
+    const what = info.description || 'A background task';
+    new Notice(`${what} (in “${title}”) ${message.status === 'completed' ? 'finished' : message.status === 'failed' ? 'failed' : 'was stopped'}. Its output is in the task list.`);
+  }
+
+  /** The tasks changed elsewhere (one ended in another panel, or the list was seen): the button follows. */
+  tasksUpdated(): void {
+    this.tasksChanged();
+  }
+
   /** The tasks of this panel's chats changed: the button beside Stop counts them, and an open list redraws. */
   private tasksChanged(): void {
     const count = this.tasks.size + [...this.background].reduce((sum, entry) => sum + entry.tasks.size, 0);
+    // Up too while a task that ended has not been looked at, its output in the list.
+    const unseen = this.plugin.finishedTasks.some((task) => !task.seen);
     if (this.tasksButton) {
-      this.tasksButton.toggle(count > 0);
-      this.tasksCount.setText(count > 0 ? String(count) : '');
+      this.tasksButton.toggle(count > 0 || unseen);
+      this.tasksButton.toggleClass('has-finished', unseen);
+      this.tasksCount.setText(count > 0 ? String(count) : '✓');
     }
     for (const watcher of this.taskWatchers) watcher();
   }
@@ -5490,6 +5512,9 @@ export class ChatView extends ItemView {
         ...[...this.background].map((entry) => ({ chatId: entry.chatId, title: entry.title ?? 'Untitled chat', tasks: tasksOf(entry.tasks, entry.taskInfo) })),
       ],
       output: async (chatId, taskId) => (await sessionOf(chatId)?.taskOutput(taskId)) ?? null,
+      finished: () => this.plugin.finishedTasks,
+      finishedOutput: (task) => this.plugin.taskFileTail(task.outputFile),
+      seen: () => this.plugin.finishedTasksSeen(),
       stop: async (chatId, taskId) => {
         await sessionOf(chatId)?.stopTask(taskId);
       },
@@ -5922,7 +5947,27 @@ export class ChatView extends ItemView {
       plan: this.plugin.planUsage,
       planFetchedAt: this.plugin.planFetchedAt,
       ...(this.engine === 'codex' ? { codex: { limits: this.plugin.codexLimits, fetchedAt: this.plugin.codexLimitsFetchedAt } } : {}),
+      ...(this.engine === 'claude' && !this.busy && (this.chatId ?? this.resumeId) ? { compact: () => void this.compactNow() } : {}),
     });
+  }
+
+  /** Compacts the chat now, as `/compact` typed does; what is in the input stays there. */
+  private async compactNow(): Promise<void> {
+    this.usageCard.hide();
+    if (this.busy) {
+      new Notice('Claude is working: compact once the reply has finished.');
+      return;
+    }
+    const typed = this.inputEl.value;
+    // A command the panel sent for you: not kept for ↑.
+    this.generated.add('/compact');
+    this.inputEl.value = '/compact';
+    const sent = await this.send();
+    if (!sent) this.generated.delete('/compact');
+    if (this.inputEl.value.trim() === '' || this.inputEl.value.trim() === '/compact') {
+      this.inputEl.value = typed;
+      this.inputEdited();
+    }
   }
 
   // ---- Stream handling ---------------------------------------------------
@@ -5955,6 +6000,7 @@ export class ChatView extends ItemView {
 
   private onMessage(message: SDKMessage): void {
     if (message.type === 'assistant' && message.parent_tool_use_id === null) this.noticeQueuedTaken();
+    this.noteTaskEnded(this.chatId ?? this.resumeId, this.chatName ?? 'This chat', this.taskInfo, message, true);
     const described = noteTask(this.taskInfo, message);
     if (trackTask(this.tasks, message)) {
       this.updateStopButton();

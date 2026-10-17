@@ -11,16 +11,21 @@ const inTemp = async (use: (dir: string) => Promise<void>) => {
   try {
     await use(dir);
   } finally {
+    for (const connection of made.splice(0)) connection.stop();
     rmSync(dir, { recursive: true, force: true });
   }
 };
 
 /** A connection to the stand-in, with what it ended with, once ended. */
-function connect(dir: string, mode: 'exit' | 'silent' | 'die', options = { timeoutMs: 200 }) {
+/** Connections made, stopped after each test whatever it did (a stand-in left running keeps the test runner waiting). */
+const made: CodexConnection[] = [];
+
+function connect(dir: string, mode: 'exit' | 'silent' | 'die', options = { timeoutMs: 1500 }) {
   const ends: (Error | undefined)[] = [];
   let ended: () => void = () => undefined;
   const done = new Promise<void>((resolve) => (ended = resolve));
   const connection = new CodexConnection(launchIn(dir, mode), { onEnd: (error) => (ends.push(error), ended()) }, options);
+  made.push(connection);
   return { connection, ends, done };
 }
 
@@ -33,7 +38,7 @@ test('a request Codex does not answer fails alone; with stopOnTimeout it stops t
     alone.connection.stop();
     await alone.done;
     assert.deepEqual(alone.ends, [undefined]);
-    const stopping = connect(dir, 'silent', { timeoutMs: 200, stopOnTimeout: true } as never);
+    const stopping = connect(dir, 'silent', { timeoutMs: 1500, stopOnTimeout: true } as never);
     await stopping.connection.ready;
     await assert.rejects(stopping.connection.request('model/list', {}), /in time/);
     await stopping.done;

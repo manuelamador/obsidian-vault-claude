@@ -3812,3 +3812,21 @@ a.vc-email-attachment:hover {
   gap: var(--size-4-2);
   justify-content: flex-end;
 }
+
+.vc-tasks-button.has-finished .vc-tasks-count {
+  color: var(--text-accent);
+}
+
+.vc-tasks-modal .vc-task.is-ended {
+  opacity: 0.85;
+}
+
+.vc-tasks-modal .vc-task.is-failed .vc-task-icon {
+  color: var(--text-error);
+}
+
+/* Compact now, under the context reading in the usage card. */
+.vc-usage-compact {
+  margin-top: var(--size-4-1);
+  font-size: var(--font-ui-smaller);
+}

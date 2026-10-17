@@ -3,6 +3,8 @@ import { codexWindows, contextFigures, planExtras, prettyModel, resetTime, timeL
 
 /** What the hover card shows: the chat's last context reading and model, and the last plan-usage reading. */
 export interface UsageCardData {
+  /** Compacts the chat now (its /compact), when it can be: a Claude chat with a reading, not working. */
+  compact?: () => void;
   context: SDKControlGetContextUsageResponse | null;
   model: string | null;
   plan: SDKControlGetUsageResponse | null;
@@ -34,6 +36,11 @@ export function renderUsageCard(card: HTMLElement, data: UsageCardData): void {
       detail: `${used.toLocaleString()} of ${max.toLocaleString()} tokens${compaction}`,
       level: threshold !== null && used >= threshold * 0.9 ? 'warning' : 'normal',
     });
+    if (data.compact) {
+      const run = data.compact;
+      const button = contextSection.createEl('button', { cls: 'vc-usage-compact', text: 'Compact now', attr: { 'aria-label': 'Summarise the conversation so far (/compact), freeing its context' } });
+      button.addEventListener('click', () => run());
+    }
   } else {
     contextSection.createDiv({ cls: 'vc-usage-note', text: 'Shown after the first reply.' });
   }

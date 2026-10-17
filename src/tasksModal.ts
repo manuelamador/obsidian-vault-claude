@@ -3,6 +3,7 @@
 // Claude Code's only: a Codex turn runs nothing past its end.
 import { Modal, setIcon, type App } from 'obsidian';
 import { hasOutput, type TaskInfo } from './backgroundTasks';
+import type { FinishedTask } from './main';
 import { formatDuration } from './usageDisplay';
 import { errorText, log } from './log';
 
@@ -19,6 +20,11 @@ export interface TasksHost {
   output(chatId: string | null, taskId: string): Promise<{ output: string; truncated: boolean } | null>;
   stop(chatId: string | null, taskId: string): Promise<void>;
   stopAll(chatId: string | null): void;
+  /** Tasks that have ended, newest first, with their output still readable (see finishedOutput). */
+  finished(): FinishedTask[];
+  finishedOutput(task: FinishedTask): Promise<{ output: string; truncated: boolean } | null>;
+  /** The list was looked at: the tasks that ended are seen. */
+  seen(): void;
   /** Called with a redraw for whenever the tasks change; returns what stops it. */
   watch(changed: () => void): () => void;
 }
@@ -50,6 +56,7 @@ export class TasksModal extends Modal {
     this.modalEl.addClass('vc-tasks-modal');
     this.stopWatching = this.host.watch(() => this.draw());
     this.draw();
+    this.host.seen();
     this.timer = window.setInterval(() => this.draw(), OUTPUT_EVERY_MS);
   }
 
@@ -65,10 +72,8 @@ export class TasksModal extends Modal {
     const scrolls = new Map([...contentEl.querySelectorAll<HTMLElement>('.vc-task-output')].map((el) => [el.dataset.task ?? '', el.scrollTop]));
     contentEl.empty();
     const chats = this.host.chats().filter((chat) => chat.tasks.length > 0);
-    if (chats.length === 0) {
-      contentEl.createDiv({ cls: 'vc-muted', text: 'No tasks running in the background.' });
-      return;
-    }
+    const finished = this.host.finished();
+    if (chats.length === 0) contentEl.createDiv({ cls: 'vc-muted', text: 'No tasks running in the background.' });
     for (const chat of chats) {
       const head = contentEl.createDiv({ cls: 'vc-task-chat' });
       head.createSpan({ cls: 'vc-task-chat-title', text: chat.title });
@@ -78,6 +83,39 @@ export class TasksModal extends Modal {
       }
       for (const task of chat.tasks) this.drawTask(contentEl, chat, task, scrolls.get(task.id));
     }
+    if (finished.length === 0) return;
+    contentEl.createDiv({ cls: 'vc-task-chat', text: 'Finished' });
+    for (const task of finished) this.drawFinished(contentEl, task, scrolls.get(task.info.id));
+  }
+
+  /** A task that ended: how, when, in which chat, and its output from the file Claude Code keeps. */
+  private drawFinished(parent: HTMLElement, task: FinishedTask, scroll: number | undefined): void {
+    const kind = KIND[task.info.type] ?? { icon: 'circle-dot', label: 'Task' };
+    const row = parent.createDiv({ cls: `vc-task is-ended is-${task.status}` });
+    const top = row.createDiv({ cls: 'vc-task-head' });
+    setIcon(top.createSpan({ cls: 'vc-task-icon', attr: { 'aria-label': task.status } }), task.status === 'completed' ? 'check' : task.status === 'failed' ? 'alert-circle' : 'square');
+    top.createSpan({ cls: 'vc-task-description', text: task.info.description || task.summary || kind.label });
+    top.createSpan({ cls: 'vc-task-time', text: `${task.status === 'completed' ? 'finished' : task.status === 'failed' ? 'failed' : 'stopped'} ${new Date(task.ended).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` });
+    const shown = this.shown.has(task.info.id);
+    const toggle = top.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': shown ? 'Hide its output' : 'Show its output' } });
+    setIcon(toggle, shown ? 'chevron-up' : 'scroll-text');
+    toggle.addEventListener('click', () => {
+      if (shown) this.shown.delete(task.info.id);
+      else this.shown.add(task.info.id);
+      this.draw();
+    });
+    row.createDiv({ cls: 'vc-task-progress', text: `In “${task.chatTitle}”` });
+    if (!shown) return;
+    const out = row.createEl('pre', { cls: 'vc-task-output', attr: { 'data-task': task.info.id } });
+    out.setText(this.outputs.get(task.info.id) ?? 'Reading…');
+    if (scroll !== undefined) out.scrollTop = scroll;
+    void this.host.finishedOutput(task).then((read) => {
+      if (!out.isConnected) return;
+      const text = read ? `${read.truncated ? '… ' : ''}${read.output || '(it wrote nothing)'}` : task.summary || 'Its output file is gone.';
+      this.outputs.set(task.info.id, text);
+      out.setText(text);
+      out.scrollTop = scroll ?? out.scrollHeight;
+    });
   }
 
   private drawTask(parent: HTMLElement, chat: TaskChat, task: TaskInfo, scroll: number | undefined): void {
