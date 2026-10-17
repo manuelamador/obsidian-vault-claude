@@ -61,12 +61,15 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
   // Its attachments by name and type, images (often a signature's) folded into a count; opened in Gmail.
   if (message.attachments) {
     const line = card.createDiv({ cls: 'vc-email-attachments' });
+    // Whether a download was started from this card: Into the vault starts one first if not.
+    let downloaded = false;
     const files = message.attachments.filter((each) => !each.type.startsWith('image/'));
     const images = message.attachments.length - files.length;
     for (const file of files) {
       // The file itself in Gmail where its address is known, else the message holding it.
       const href = file.url ?? message.url;
       const chip = href ? line.createEl('a', { cls: 'vc-email-attachment', href, attr: { 'aria-label': file.url ? 'Open this attachment in Gmail' : 'Open the message in Gmail, with its attachments' } }) : line.createSpan({ cls: 'vc-email-attachment' });
+      if (file.url) chip.addEventListener('click', () => (downloaded = true));
       setIcon(chip.createSpan({ cls: 'vc-email-attachment-icon' }), 'paperclip');
       chip.createSpan({ text: file.name });
       chip.createSpan({ cls: 'vc-email-attachment-kind', text: attachmentKind(file.type) });
@@ -77,7 +80,24 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
       const all = line.createEl('a', { cls: 'vc-email-attachment is-all', href: message.attachmentsZip, attr: { 'aria-label': 'Download all the attachments from Gmail, as one zip' } });
       setIcon(all.createSpan({ cls: 'vc-email-attachment-icon' }), 'download');
       all.createSpan({ text: 'Download all' });
+      all.addEventListener('click', () => (downloaded = true));
     }
+    // Into the vault: the files downloaded from Gmail copied in by Claude (see EmailCardActions.bringIn).
+    // Nothing downloaded yet: it downloads them first (the zip of them all, or the one file), then asks to be clicked again.
+    const download = message.attachmentsZip ?? (message.attachments.length === 1 ? message.attachments[0].url : undefined);
+    const vault = line.createEl('button', { cls: 'vc-email-attachment is-vault', attr: { 'aria-label': 'Copy the attachments into the vault, once downloaded from Gmail' } });
+    setIcon(vault.createSpan({ cls: 'vc-email-attachment-icon' }), 'folder-down');
+    const label = vault.createSpan({ text: 'Into the vault' });
+    vault.addEventListener('click', () => {
+      if (!downloaded && download) {
+        downloaded = true;
+        window.open(download);
+        label.setText('Downloaded? Click to bring it in');
+        vault.setAttr('aria-label', 'Once the download has finished: copy it into the vault');
+        return;
+      }
+      actions.bringIn(message);
+    });
   }
   // A thread or a message carries the whole text: a click on the card opens it there, and closes it again.
   if (message.body && textEl) {
@@ -108,7 +128,6 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
   // A search's card carries only the snippet: Claude opens the thread, whose messages then expand.
   if (!message.body && message.threadId) button('book-open', 'Ask Claude to open this thread', () => actions.openThread(message));
   button('reply', 'Reply with Claude', () => actions.reply(message));
-  if (message.attachments) button('folder-down', 'Bring its downloaded attachments into the vault', () => actions.bringIn(message));
   button('quote', 'Quote in your next message', () => actions.quote(message));
   button('message-square-plus', 'New chat about this message', () => actions.chat(message));
   button('list-plus', 'Make a todo', () => actions.todo(message));
