@@ -6152,19 +6152,6 @@ export class ChatView extends ItemView {
         new TodoModal(this.app, `Reply to ${message.sender.replace(/\s*<[^>]*>/, '')}: ${message.subject || 'their message'}`, where, (text, due) => void this.plugin.addTodo(`${text}${link}`, due)).open();
       },
       saveThread: (messages) => void this.replyToNewNote(threadMarkdown(messages), messages[0]?.subject || 'Email thread'),
-      // Claude copies what was downloaded from Gmail into the vault: the plugin itself reads nothing in ~/Downloads.
-      bringIn: (message, since) => {
-        const files = (message.attachments ?? []).map((each) => `“${each.name}”`).join(', ');
-        const folder = normalizePath([this.plugin.settings.savedChatsFolder.trim(), 'attachments'].filter(Boolean).join('/'));
-        const who = message.sender.replace(/\s*<[^>]*>/, '');
-        // Where browsers save downloads, and how a zip is opened, on this system.
-        const downloads = Platform.isWin ? '%USERPROFILE%\\Downloads' : '~/Downloads';
-        const unzip = Platform.isWin ? 'unzipping a zip there (with tar -xf, or PowerShell\'s Expand-Archive if tar cannot)' : 'unzipping a zip there';
-        this.sendOrDraft(
-          `Bring the attachments of the email “${message.subject || '(no subject)'}” from ${who} into the vault: ${files}. I downloaded them from Gmail into my Downloads folder (${downloads}), one by one or as one zip of them all (Gmail names it after the subject or the first file), which the browser may already have unzipped into a folder of that name; a browser may have added a number such as “ (1)” to a name, as it does when an older file has it.${since ? ` I started the download at ${new Date(since).toLocaleString()}: use only files saved at or after then, never an older copy of the same name.` : ' Take the newest of them, never an older copy of the same name.'} Find them there, and copy them into the vault folder “${folder}”, ${unzip}; keep the names; a file already there with the same contents is used as it is, not copied again; never overwrite a different file: add a number instead. Leave the Downloads folder as it is. If a note saved from this email is in the vault, add a wikilink to each file in it, beside its attachment's name. Then list where each file went, as wikilinks. If they are not in the Downloads folder, say so, and that the card's links download them.`,
-          'Request added below your draft: send it when ready',
-        );
-      },
       reply: (message) => {
         const who = message.sender.replace(/\s*<[^>]*>/, '');
         new ReplyModal(this.app, `“${message.subject || 'the message'}” from ${who}`, (instructions) => {

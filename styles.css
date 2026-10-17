@@ -3638,17 +3638,3 @@ a.vc-email-attachment:hover {
 .vc-email-attachment.is-all {
   color: var(--text-accent);
 }
-
-/* Into the vault: a chip like the attachments', not a button's frame. */
-button.vc-email-attachment.is-vault {
-  height: auto;
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-accent);
-  font-weight: var(--font-normal);
-  cursor: pointer;
-}
-
-button.vc-email-attachment.is-vault:hover {
-  background: var(--background-modifier-hover);
-}
