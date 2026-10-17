@@ -4,7 +4,7 @@
 // away; an opened thread shows its messages framed together, in place of its card in the search.
 import { setIcon } from 'obsidian';
 import { formatDate } from './history';
-import type { EmailDraft, EmailMessage } from './emailMessages';
+import { attachmentKind, type EmailDraft, type EmailMessage } from './emailMessages';
 
 /** Cards shown before "Show N more". */
 const FIRST_CARDS = 5;
@@ -31,9 +31,10 @@ export function emailDate(message: EmailMessage): string {
   return Number.isNaN(message.time) ? '' : formatDate(message.time);
 }
 
-/** `message` as Markdown, to quote or save: who, when and what, then its text. */
+/** `message` as Markdown, to quote or save: who, when and what, its attachments by name (the files stay in Gmail), then its text. */
 export function emailMarkdown(message: EmailMessage): string {
   const head = [`**${message.subject || '(no subject)'}**`, `From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`];
+  if (message.attachments) head.push(`Attachments: ${message.attachments.map((each) => `${each.name} (${attachmentKind(each.type)})`).join(', ')}`);
   if (message.url) head.push(`[Open in Gmail](${message.url})`);
   return [...head, '', ...(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
 }
@@ -55,6 +56,19 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
   if (subject && message.subject) card.createDiv({ cls: 'vc-email-subject', text: message.subject });
   const text = message.text.length > CARD_TEXT_CHARS ? `${message.text.slice(0, CARD_TEXT_CHARS)}…` : message.text;
   const textEl = text ? card.createDiv({ cls: 'vc-email-text', text }) : null;
+  // Its attachments by name and type, images (often a signature's) folded into a count; opened in Gmail.
+  if (message.attachments) {
+    const line = card.createDiv({ cls: 'vc-email-attachments' });
+    const files = message.attachments.filter((each) => !each.type.startsWith('image/'));
+    const images = message.attachments.length - files.length;
+    for (const file of files) {
+      const chip = message.url ? line.createEl('a', { cls: 'vc-email-attachment', href: message.url, attr: { 'aria-label': 'Open the message in Gmail, with its attachments' } }) : line.createSpan({ cls: 'vc-email-attachment' });
+      setIcon(chip.createSpan({ cls: 'vc-email-attachment-icon' }), 'paperclip');
+      chip.createSpan({ text: file.name });
+      chip.createSpan({ cls: 'vc-email-attachment-kind', text: attachmentKind(file.type) });
+    }
+    if (images > 0) line.createSpan({ cls: 'vc-email-attachment is-images', text: `+${images} image${images === 1 ? '' : 's'}` });
+  }
   // A thread or a message carries the whole text: a click on the card opens it there, and closes it again.
   if (message.body && textEl) {
     const body = message.body;

@@ -3592,3 +3592,45 @@ body:has(.vc-pick-up) .popover.hover-popover {
   font-weight: var(--font-semibold);
   fill: var(--text-normal);
 }
+
+/* An email card's attachments, by name and type (see drawCard): the files are opened in Gmail. */
+.vc-email-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.vc-email-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  text-decoration: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+a.vc-email-attachment:hover {
+  background: var(--background-modifier-hover);
+}
+
+.vc-email-attachment.is-images,
+.vc-email-attachment-kind {
+  color: var(--text-muted);
+}
+
+.vc-email-attachment-icon {
+  display: inline-flex;
+}
+
+.vc-email-attachment-icon svg {
+  width: 12px;
+  height: 12px;
+}

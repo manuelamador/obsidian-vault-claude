@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeEntities, emailDraft, emailMessages, readsMail, resultText, readsThread } from '../src/emailMessages';
+import { attachmentKind, decodeEntities, emailDraft, emailMessages, readsMail, resultText, readsThread } from '../src/emailMessages';
 
 const msg = (over: Record<string, unknown> = {}) => ({ sender: 'a@b.c', subject: 'Hello', date: '2026-09-24T17:28:34Z', snippet: 'Hi there', toRecipients: ['me@x.y'], labelIds: ['UNREAD'], viewUrl: 'https://mail.google.com/x', ...over });
 
@@ -64,4 +64,15 @@ test('a draft written or changed shows what the call set, and where Gmail opens 
   assert.equal(emailDraft('mcp__claude_ai_Gmail__update_draft', { body: 'x' }, JSON.stringify({ id: 'r-1' }))?.updated, true);
   assert.equal(emailDraft('mcp__claude_ai_Gmail__create_draft', {}, 'Error'), null);
   assert.equal(emailDraft('mcp__claude_ai_Gmail__get_thread', {}, '{"id":"x"}'), null);
+});
+
+test("a message's attachments are kept by name and type; a message without any has none", () => {
+  const text = JSON.stringify({ messages: [
+    { sender: 'a@b.c', subject: 'Report', plaintextBody: 'See attached.', attachments: [{ filename: 'report.pdf', mimeType: 'application/pdf', id: 'x' }, { filename: 'logo.png', mimeType: 'image/png', id: 'y' }, { filename: '', mimeType: 'text/plain' }] },
+    { sender: 'a@b.c', subject: 'Plain', plaintextBody: 'Nothing.' },
+  ] });
+  const [withFiles, without] = emailMessages('mcp__claude_ai_Gmail__get_thread', text) ?? [];
+  assert.deepEqual(withFiles.attachments, [{ name: 'report.pdf', type: 'application/pdf' }, { name: 'logo.png', type: 'image/png' }]);
+  assert.equal(without.attachments, undefined);
+  assert.deepEqual(['application/pdf', 'image/jpeg', 'text/calendar', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'].map(attachmentKind), ['PDF', 'image', 'calendar', 'Word', 'zip']);
 });

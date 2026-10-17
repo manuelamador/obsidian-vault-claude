@@ -20,6 +20,19 @@ export interface EmailMessage {
   count?: number;
   /** Gmail's id for its thread: how an opened thread finds its card in a search shown before it. */
   threadId?: string;
+  /** Its attachments, by name and type, when the tool gave them (a thread or a message read whole); the files themselves are in Gmail. */
+  attachments?: { name: string; type: string }[];
+}
+
+/** A file type as a card names it: `PDF`, `Word`, `image`, or the type's last part. */
+export function attachmentKind(type: string): string {
+  if (type === 'application/pdf') return 'PDF';
+  if (type.startsWith('image/')) return 'image';
+  if (/wordprocessingml|msword/.test(type)) return 'Word';
+  if (/spreadsheetml|ms-excel|text\/csv/.test(type)) return 'spreadsheet';
+  if (/presentationml|ms-powerpoint/.test(type)) return 'slides';
+  if (/calendar|ics/.test(type)) return 'calendar';
+  return type.split('/').pop()?.replace(/^x-/, '') || 'file';
 }
 
 /** The Gmail tools whose results are messages: a search, a thread, a message. */
@@ -45,6 +58,7 @@ interface RawMessage {
   labelIds?: unknown;
   viewUrl?: unknown;
   threadId?: unknown;
+  attachments?: unknown;
 }
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
@@ -68,6 +82,9 @@ function message(raw: RawMessage, count?: number): EmailMessage {
   const body = decodeEntities(full);
   const url = str(raw.viewUrl);
   const threadId = str(raw.threadId);
+  const attachments = (Array.isArray(raw.attachments) ? raw.attachments : []).flatMap((each: { filename?: unknown; mimeType?: unknown }) =>
+    each && typeof each.filename === 'string' && each.filename ? [{ name: decodeEntities(each.filename), type: str(each.mimeType) }] : [],
+  );
   return {
     sender: decodeEntities(str(raw.sender)) || 'Unknown sender',
     to: Array.isArray(raw.toRecipients) ? raw.toRecipients.filter((each): each is string => typeof each === 'string') : [],
@@ -81,6 +98,7 @@ function message(raw: RawMessage, count?: number): EmailMessage {
     ...(url ? { url } : {}),
     ...(count && count > 1 ? { count } : {}),
     ...(threadId ? { threadId } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
   };
 }
 
