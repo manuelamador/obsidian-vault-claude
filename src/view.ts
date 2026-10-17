@@ -4141,7 +4141,11 @@ export class ChatView extends ItemView {
       }
       const rest = typed.slice(plan[0].length).trim();
       if (this.mode !== 'plan') {
+        // The chat it was typed in: if another is opened while the mode changes, nothing is sent to it,
+        // and `/plan …` stays in this chat's draft.
+        const owner = this.draftKey();
         await this.changeMode('plan');
+        if (this.draftKey() !== owner) return false;
         // Refused (see changeMode): nothing is sent, the text stays to try again.
         if ((this.mode as PermissionMode) !== 'plan') return false;
       }
@@ -4169,6 +4173,8 @@ export class ChatView extends ItemView {
     // Taken before the input empties, which lets them go (see followMentions).
     const pathOnly = new Set(this.pathOnlyMentions);
     this.inputEl.value = '';
+    // An empty input: messages that fail from here on come back from its start (see restoreUnsent).
+    this.unsentHead.delete(this.draftKey());
     this.growInput();
     this.saveDraft();
     this.suggest.hide();
@@ -4281,21 +4287,37 @@ export class ChatView extends ItemView {
     }
     // The chat on screen, or one that is its like (a new chat after a new chat): its input.
     if (sent.session === this.session || sent.draftKey === this.draftKey()) {
-      this.restoreUnsent(sent.text, sent.attachments, sent.pathOnly);
+      this.restoreUnsent(sent.text, sent.attachments, sent.pathOnly, this.draftKey());
       // A new chat's opening lines, taken away for the message, come back.
       if (this.messagesEl.childElementCount === 0) this.renderWelcome();
       return 'input';
     }
     if (!sent.text) return null;
     const draft = this.readDraft(sent.draftKey) ?? {};
-    this.writeDraft(sent.draftKey, { ...draft, text: draft.text?.trim() ? `${sent.text}\n${draft.text}` : sent.text });
+    this.writeDraft(sent.draftKey, { ...draft, text: this.afterUnsent(sent.draftKey, draft.text ?? '', sent.text) });
     return 'draft';
   }
 
-  /** Puts a message that was not sent back in the input, before anything typed since, with its attachments and path-only mentions. */
-  private restoreUnsent(text: string, attachments: Attachment[], pathOnly: ReadonlySet<string>): void {
-    const typed = this.inputEl.value;
-    this.inputEl.value = typed.trim() ? `${text}\n${typed}` : text;
+  /** How much of each chat's input (or draft), from its start, is messages put back unsent, oldest first (see afterUnsent). */
+  private readonly unsentHead = new Map<string, number>();
+
+  /**
+   * `text`, a message not sent, put back into `typed`, the input or draft of chat `key`: after any
+   * put back before it, so that several come back in the order they were sent, and before anything
+   * typed since.
+   */
+  private afterUnsent(key: string, typed: string, text: string): string {
+    const head = Math.min(this.unsentHead.get(key) ?? 0, typed.length);
+    const before = typed.slice(0, head);
+    const after = typed.slice(head).replace(/^\n/, '');
+    const restored = before ? `${before}\n${text}` : text;
+    this.unsentHead.set(key, restored.length);
+    return after.trim() ? `${restored}\n${after}` : restored;
+  }
+
+  /** Puts a message that was not sent back in the input, after others put back and before anything typed since, with its attachments and path-only mentions. */
+  private restoreUnsent(text: string, attachments: Attachment[], pathOnly: ReadonlySet<string>, key = this.draftKey()): void {
+    this.inputEl.value = this.afterUnsent(key, this.inputEl.value, text);
     this.attachments = [...attachments, ...this.attachments];
     for (const path of pathOnly) this.pathOnlyMentions.add(path);
     this.inputEdited();

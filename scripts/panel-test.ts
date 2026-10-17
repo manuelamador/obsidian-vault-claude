@@ -4468,6 +4468,49 @@ async function main(): Promise<void> {
     }
 
     {
+      // Two messages that fail come back in the order they were sent, before what was typed since.
+      const backView = view as unknown as { session: unknown; busy: boolean; send(): Promise<boolean>; projectContext(text: string): Promise<unknown> };
+      const backInput = root.querySelector('.vc-input') as HTMLTextAreaElement;
+      view.newChat();
+      backView.session = { send() {}, waitingContext: () => new Set<string>(), addContext() {}, setHandlers() {}, close() {} };
+      backView.busy = false;
+      const contextWas = backView.projectContext;
+      backView.projectContext = async () => {
+        throw new Error('unreadable');
+      };
+      backInput.value = 'first';
+      const one = backView.send();
+      backInput.value = 'second';
+      const two = backView.send();
+      backInput.value = 'typed since';
+      await Promise.all([one, two]);
+      const backOrder = backInput.value;
+      backView.projectContext = contextWas;
+      // `/plan …` sent while another chat is opened as the mode changes: nothing goes to that chat.
+      const planView = view as unknown as { changeMode(mode: string): Promise<void>; draftKey(): string; mode: string };
+      const changeWas = planView.changeMode;
+      const keyWas = planView.draftKey;
+      let switched = false;
+      planView.changeMode = async () => {
+        switched = true;
+      };
+      planView.draftKey = () => (switched ? 'other-chat' : keyWas.call(view));
+      const sentPlan: unknown[] = [];
+      backView.session = { send: (content: unknown) => void sentPlan.push(content), waitingContext: () => new Set<string>(), addContext() {}, setHandlers() {}, close() {} };
+      planView.mode = 'default';
+      backInput.value = '/plan meant for this chat';
+      const planSent = await backView.send();
+      planView.changeMode = changeWas;
+      planView.draftKey = keyWas;
+      backView.session = null;
+      backInput.value = '';
+      view.newChat();
+      const backOk = backOrder === 'first\nsecond\ntyped since' && !planSent && sentPlan.length === 0;
+      console.log(`failed messages come back in order: ${JSON.stringify(backOrder)}; /plan for a chat left not sent ${!planSent && sentPlan.length === 0} -> ${backOk}`);
+      if (!backOk) process.exitCode = 1;
+    }
+
+    {
       // A memo taken out of the message and put back at once ends ticked: the later write wins.
       const boxView = view as unknown as { setMemoBox(path: string, on: boolean): void };
       const fileManager = app.fileManager as unknown as Record<string, unknown>;
