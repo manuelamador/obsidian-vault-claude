@@ -11,11 +11,12 @@ Built by **Claude Opus 5** (`claude-opus-5`) and **Claude Opus 5.5** (`claude-op
 
 ## Requirements
 
-- Obsidian desktop on macOS or Windows.
+- Obsidian desktop on macOS or Windows, with the Bases core plugin on for the Memos table.
+- At least one of Claude Code or Codex.
 - Claude Code, installed with the [native installer](https://docs.claude.com/en/docs/claude-code/setup) and signed in (run `claude` once in a terminal and log in):
   - macOS: `curl -fsSL https://claude.ai/install.sh | bash`
   - Windows (PowerShell): `irm https://claude.ai/install.ps1 | iex`. Claude Code on Windows also needs [Git for Windows](https://git-scm.com/downloads/win). An npm install of Claude Code (`claude.cmd`) does not work with the plugin on Windows.
-- Optionally, or instead of Claude Code, the Codex CLI, signed in. The ChatGPT desktop app installs it; so do `npm install -g @openai/codex` and `brew install codex`. Run `codex` once in a terminal to sign in.
+- Codex: the Codex CLI, signed in. The ChatGPT desktop app installs it; so do `npm install -g @openai/codex` and `brew install codex`. Run `codex` once in a terminal to sign in.
 - Node.js 18 or later, only to build from source.
 
 ## Installation
@@ -103,7 +104,7 @@ Open the chat from the robot icon in the left ribbon.
 
   <img src="docs/message-list.png" width="560" alt="The bar over the chat naming the message being answered, with its list of all three messages open over the reply and the current one highlighted">
 
-- Long chats open on their last exchanges (up to ten, and about 250 messages); scroll up to draw earlier ones. A long chat opened again reads only what was added since.
+- Long chats open on their last exchanges (up to ten, and about 250 messages); scroll up to draw earlier ones. The two most recently read long chats are remembered: opening one again reads only what was added since, unless its file was rewritten meanwhile.
 - Messages sent while Claude works are queued. **send now** on a bubble delivers it at once.
 - The pencil beside Send writes your message in a draft note. Send it from the line above the input or discard it with ×.
 
@@ -125,8 +126,8 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 ### Working with notes
 
 - **Bring notes into the conversation.** Attach the open note, include selected text, or mention notes, files and folders with `@`. Add files and images through the paperclip, paste or drag and drop; hover over a chip to see what accompanies your message, and click an image's chip to see it full size.
-- **See the mail Claude reads.** When Claude searches or reads Gmail through Claude Code's Gmail connector, the messages show as cards in the reply: sender, subject, date and the start of the text, unread ones marked. Point at a card to open it in Gmail, reply with Claude (say what the reply should say; Claude writes it as a draft in the thread), quote it in your next message, make a todo from it (added to the todo note set in the settings, `Todo.md` under **Open** by default, with an optional due date), or save it as a note; an opened thread saves as one note. The threads a chat read are remembered: a line above the input lists those read by chats about the open note, and the Connections tab lists a chat's under its map, each opening in Gmail. The plugin itself asks Gmail for nothing; it reads what the connector returned.
-- **Draft an email from a note.** The command **Draft an email from this note…** opens a chat with the note mentioned and a request for a Gmail draft, to say to whom and what about. Claude writes the draft through the connector and it shows as a card in the reply, to open in Gmail; with **Mail: drafts only** (on by default) Claude cannot send it. With that setting off, a draft's card also has **Send**, which asks first, showing to whom and what, with **Send and archive** (the thread leaves the inbox once sent) or **Send**; Claude then sends the draft's text as it is (a reply goes in its thread) and deletes the draft, since the connector cannot send a draft directly.
+- **See the mail Claude reads.** When Claude reads Gmail through Claude Code's Gmail connector, the messages show as cards in the reply, to open in Gmail, reply to with Claude, quote, turn into a todo or save as a note. **Draft an email from this note…** asks Claude for a draft; with **Mail: drafts only** (on by default) Claude cannot send. The plugin itself asks Gmail for nothing.
+- **Suggest frontmatter updates.** The command proposes changes to a note's properties from its text, its neighbours in the folder and the chats about them; you review each value, edit it, and apply the ones you tick. Guidance you give is kept for the folder.
 - **Edit a selection.** Right-click text in a note to ask Claude about it or request an edit, then review the word diff before accepting.
 
   <img src="docs/edit-selection.png" width="560" alt="The Edit selection with Claude dialog after “check the grammar”: the proposed change as a word diff, with Run again, Accept and Cancel">
@@ -134,10 +135,18 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 - **Send a note as a prompt.** A note's file menu can attach it or send its contents as your next message.
 
 <details>
+<summary>Email cards and drafts</summary>
+
+- **Cards.** When Claude searches or reads Gmail through Claude Code's Gmail connector, the messages show as cards in the reply: sender, subject, date and the start of the text, unread ones marked. Point at a card to open it in Gmail, reply with Claude (say what the reply should say; Claude writes it as a draft in the thread), quote it in your next message, make a todo from it (added to the todo note set in the settings, `Todo.md` under **Open** by default, with an optional due date), or save it as a note; an opened thread saves as one note. The threads a chat read are remembered: a line above the input lists those read by chats about the open note, and the Connections tab lists a chat's under its map, each opening in Gmail. The plugin itself asks Gmail for nothing; it reads what the connector returned.
+- **Drafts.** The command **Draft an email from this note…** opens a chat with the note mentioned and a request for a Gmail draft, to say to whom and what about. Claude writes the draft through the connector and it shows as a card in the reply, to open in Gmail; with **Mail: drafts only** (on by default) Claude cannot send it. With that setting off, a draft's card also has **Send**, which asks first, showing to whom and what, with **Send and archive** (the thread leaves the inbox once sent) or **Send**; Claude then sends the draft's text as it is (a reply goes in its thread) and deletes the draft, since the connector cannot send a draft directly.
+
+</details>
+
+<details>
 <summary>Attachments and note menus</summary>
 
 - The attached-note chip above the input uses **+** to attach the open note and **×** to detach it. The note goes by its path; selected lines go as text.
-- Type `@` to mention another note, file or folder. A mentioned note sends its text and shows an approximate token count. Its **×** switches to sending only the path; click the chip to include its text again. Other files and folders go by their paths.
+- Type `@` to mention another note, file or folder. A mentioned note sends its text and shows an approximate token count. Click its chip to send only its path, and again to include its text. Other files and folders go by their paths.
 
   <img src="docs/mention.png" width="480" alt="The @ picker’s input: “Mention a note, file or folder”">
 
@@ -235,7 +244,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 - Press **Tab** in history to list chats by note. Search a note's name or folder, then add words to filter chat titles (`with:solow diagram`). ⌘↵ opens the note.
 - Status marks are grey ○ for open or in the background, and accent ● for working, waiting for input, background tasks or a new reply. No mark means closed.
-- Enable **History includes all vault sessions** to list chats started in a terminal or desktop app. They appear in italics and open as copies to avoid two programs writing to one session. History identifies the copies and offers your latest one when you return.
+- Enable **History includes all vault sessions** to list Claude Code chats started in a terminal or desktop app (Codex chats are listed only when started in the panel). They appear in italics and open as copies to avoid two programs writing to one session. History identifies the copies and offers your latest one when you return.
 - The new-chat button starts a chat; ⌘-click opens it in a new tab. Hover over a tab's icon for the chat's name.
 
   <img src="docs/tab-icons.png" width="350" alt="Two Claude panels open as tabs in the right sidebar, each with its robot icon; pointing at one shows “Claude: Demo — Solow model”">
@@ -291,7 +300,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 - Replies, thinking summaries, commands and file changes are drawn as in a Claude chat, with the changed files and their diffs under each reply.
 - The model and effort menus list Codex's models and the chosen model's reasoning efforts. The meter shows the chat's context and Codex's own usage limits, in place of Claude's plan.
-- Codex's requests to run a command or change files come as approval cards, naming the command or the files. The deny rules in the settings apply: a command they match is refused without asking.
+- Codex's requests to run a command or change files come as approval cards, naming the command or the files. The deny rules in the settings apply to these requests: a command they match is refused without asking. Commands Codex runs without asking, as its own approval settings allow, are not checked against them.
 - A project's context and included chats go with a Codex chat's messages as with Claude's.
 - The side chat beside a Codex chat runs on Codex, on a copy of the chat that Codex does not save and that only reads; it cannot be kept as a chat.
 - Small jobs (Edit selection, summaries, memo suggestions, Pick up where you left off, a project's Context, Suggest frontmatter updates) and the scratch chat can run on Codex too: **Small jobs run on** and **Scratch chat model** in the settings. With both on Codex, the plugin works without Claude Code.
@@ -338,7 +347,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 - **Conversations** are Claude Code's own session files, in `~/.claude/projects/` on your computer, outside the vault. Deleting a chat from the history deletes its file. A Codex chat's conversation is in Codex's own store (`~/.codex/`), which the plugin reads only through Codex's app-server; removing it from the history leaves it there.
 - **The plugin's data file**, `<vault>/.obsidian/plugins/vault-claude/data.json`, holds the settings; each chat's title (and, for a Codex chat, that it is one), pin, unsent text, draft note, attached note, note links, ticked checkboxes, last context reading and, when one was asked for, its summary; and the guidance last given to Suggest frontmatter updates, by folder. Deleting a chat removes its entries there, including its links to other chats, its project and its summary. Obsidian Sync copies the file if it syncs plugin settings.
-- **The diagnostic log** records process starts, stops and errors, with session ids and paths (the vault's and Claude Code's), never message text: `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
+- **The diagnostic log** records process starts, stops and errors, with session ids and paths (the vault's, Claude Code's and Codex's). It does not record your messages or the replies, but errors can include what Claude Code or Codex reported, such as a refused command's text or stderr output; read it before sharing it. It is at `~/Library/Logs/vault-claude.log` on macOS, `%LOCALAPPDATA%\vault-claude\vault-claude.log` on Windows, `~/.local/state/vault-claude/vault-claude.log` on Linux.
 - Nothing is sent anywhere but through Claude Code or Codex themselves.
 
 ## Settings
@@ -363,7 +372,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 | Scratch chat model | A Claude Code or Codex model for the scratch chat (default: as small jobs run) |
 | Side chat knows | The whole chat it was opened from (default), or only what you ask it |
 | Offer bypass permissions | Adds Bypass to the mode menus |
-| Deny rules | Actions refused in every mode, one rule per line; Codex's commands too |
+| Deny rules | Actions refused in every mode, one rule per line; for Codex, the commands it asks to run |
 | Gmail features | Cards for mail and drafts, Make a todo, Draft an email from this note and mail read by chats, for Claude Code's Gmail connector; turn off without Gmail (default on) |
 | Mail: drafts only | With Claude Code's Gmail connector, Claude reads mail and writes drafts but cannot send, reply or forward (default on) |
 | Todo note | Where Make a todo on an email card adds its line, and the section (default `Todo.md`, Open) |
