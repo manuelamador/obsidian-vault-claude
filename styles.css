@@ -3376,7 +3376,7 @@ body:has(.vc-pick-up) .popover.hover-popover {
 
 .vc-email-subject {
   margin-top: 2px;
-  font-weight: var(--font-medium);
+  font-weight: var(--font-bold);
   color: var(--text-normal);
 }
 
@@ -3402,6 +3402,8 @@ body:has(.vc-pick-up) .popover.hover-popover {
   -webkit-line-clamp: unset;
   overflow: visible;
   white-space: pre-wrap;
+  /* A long link breaks rather than runs out of the card. */
+  overflow-wrap: anywhere;
   user-select: text;
   color: var(--text-normal);
 }
@@ -3445,17 +3447,15 @@ body:has(.vc-pick-up) .popover.hover-popover {
   align-items: baseline;
   gap: 6px;
   padding: 0 var(--size-4-1);
-  font-size: var(--font-ui-small);
-  font-weight: var(--font-semibold);
+  font-weight: var(--font-bold);
   color: var(--text-normal);
 }
 
+/* The subject in full, on as many lines as it needs. */
 .vc-email-thread-subject {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* "Save the thread as a note", at the end of an opened thread's heading. */
