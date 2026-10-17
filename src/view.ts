@@ -334,6 +334,8 @@ interface BackgroundChat {
   currentModel: string | null;
   currentEffort: EffortLevel | null;
   fastMode: boolean;
+  /** A Codex chat's model and effort (see startCodexChat); absent for a Claude chat. */
+  codex?: { model: string | undefined; effort: string | undefined };
   notice: Notice | null;
   /** Set while the chat is on the phone; such a chat is kept running when idle. */
   remoteUrl: string | null;
@@ -1293,11 +1295,12 @@ export class ChatView extends ItemView {
     this.leaveDraft();
     // A new chat is Claude's unless New Codex chat makes it Codex's (see startCodexChat).
     const wasCodex = this.engine === 'codex';
+    // A chat that is still working keeps running in the background instead of being stopped; a
+    // Codex chat's engine goes with it, so it comes back as Codex's.
+    this.detachToBackground();
     this.engine = 'claude';
     this.codexModel = undefined;
     this.codexEffort = undefined;
-    // A chat that is still working keeps running in the background instead of being stopped.
-    this.detachToBackground();
     this.unseen = null;
     this.lastSent = null;
     this.findBar.close();
@@ -2038,6 +2041,7 @@ export class ChatView extends ItemView {
       currentModel: this.currentModel,
       currentEffort: this.currentEffort,
       fastMode: this.fastMode,
+      ...(this.engine === 'codex' ? { codex: { model: this.codexModel, effort: this.codexEffort } } : {}),
       notice: null,
       tasks: this.tasks,
       settleTimer: null,
@@ -2352,6 +2356,12 @@ export class ChatView extends ItemView {
     this.effortOverride = entry.effortOverride;
     this.fastMode = entry.fastMode;
     this.fastState = null;
+    if (entry.codex || this.plugin.isCodexChat(entry.chatId ?? '')) {
+      this.engine = 'codex';
+      this.codexModel = entry.codex?.model;
+      this.codexEffort = entry.codex?.effort;
+      this.applyEngine();
+    }
     this.populateModeSelect();
     this.populateModelSelect();
     const working = entry.busy || entry.approvals.length > 0;
@@ -4240,6 +4250,15 @@ export class ChatView extends ItemView {
   }
 
   private ensureSession(): ChatSession | null {
+    // A Codex chat shown without its engine set goes on in Codex all the same, never in a Claude process.
+    if (this.engine !== 'codex' && this.plugin.isCodexChat(this.chatId ?? this.resumeId ?? '')) {
+      if (this.session && !this.busy) {
+        this.closeSession(this.session);
+        this.session = null;
+      }
+      this.engine = 'codex';
+      this.applyEngine();
+    }
     if (this.engine === 'codex') return this.ensureCodexSession();
     // After a failed sign-in, a fresh process, which reads the sign-in again (see accountErrorText).
     if (this.session && this.restartSession && !this.busy) {
@@ -5672,7 +5691,7 @@ export class ChatView extends ItemView {
     this.activityEl.createSpan({ cls: 'vc-spinner' });
     this.activityLabel = this.activityEl.createSpan({ cls: 'vc-activity-label' });
     this.activityTime = this.activityEl.createSpan({ cls: 'vc-activity-time' });
-    this.inputEl.placeholder = 'Claude is working. A message sent now is queued; Esc stops.';
+    this.inputEl.placeholder = 'Working… A message sent now is queued; Esc stops.';
     this.updateStopButton();
     this.tickStatus();
     this.statusTimer = window.setInterval(() => this.tickStatus(), 1000);
