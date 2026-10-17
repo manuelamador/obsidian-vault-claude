@@ -20,8 +20,17 @@ export interface EmailMessage {
   count?: number;
   /** Gmail's id for its thread: how an opened thread finds its card in a search shown before it. */
   threadId?: string;
+  /** Where Gmail downloads all its attachments as one zip, when it has more than one. */
+  attachmentsZip?: string;
   /** Its attachments, by name and type, when the tool gave them (a thread or a message read whole); the files themselves are in Gmail. */
   attachments?: { name: string; type: string; url?: string }[];
+}
+
+/** Where Gmail downloads all of message `id`'s attachments as one zip (its Download all), for the account `viewUrl` names. */
+export function attachmentsZipUrl(viewUrl: string, id: string): string | undefined {
+  const account = /[?&]authuser=([^&#]+)/.exec(viewUrl)?.[1];
+  if (!account || !/^[0-9a-f]+$/i.test(id)) return undefined;
+  return `https://mail.google.com/mail/?authuser=${account}&ui=2&view=att&th=${id}&attid=0&disp=zip&zw`;
 }
 
 /**
@@ -112,6 +121,7 @@ function message(raw: RawMessage, count?: number): EmailMessage {
     ...(count && count > 1 ? { count } : {}),
     ...(threadId ? { threadId } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
+    ...(attachments.length > 1 && attachmentsZipUrl(url, str(raw.id)) ? { attachmentsZip: attachmentsZipUrl(url, str(raw.id)) } : {}),
   };
 }
 

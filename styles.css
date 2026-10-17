@@ -3634,3 +3634,7 @@ a.vc-email-attachment:hover {
   width: 12px;
   height: 12px;
 }
+
+.vc-email-attachment.is-all {
+  color: var(--text-accent);
+}
