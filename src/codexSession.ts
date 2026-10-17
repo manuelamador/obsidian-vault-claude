@@ -438,58 +438,129 @@ export interface CodexModel {
   isDefault: boolean;
 }
 
-/** How long a short-lived app-server is given before it is stopped (see withAppServer). */
+/** How long a read is given before the reader is stopped, and how long an idle reader is kept (see withAppServer). */
 const APP_SERVER_TIMEOUT_MS = 20_000;
+const APP_SERVER_IDLE_MS = 60_000;
 
-/** Runs `use` against a short-lived Codex app-server, after its handshake, then stops it; given up after APP_SERVER_TIMEOUT_MS. */
-async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: string, params: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
-  const child = spawn(launch.codexPath, ['app-server'], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] });
-  child.stdout.setEncoding('utf8');
-  // Read and dropped, so that a chatty stderr never fills its pipe; writes after an exit are not thrown.
-  child.stderr.resume();
-  child.stdin.on('error', () => undefined);
-  const pending = new Map<number, (message: { result?: unknown; error?: { message?: string } }) => void>();
-  let buffer = '';
-  let next = 0;
-  child.stdout.on('data', (chunk: string) => {
-    buffer += chunk;
+/** A Codex app-server kept for reads (threads, models, limits): started once, stopped after APP_SERVER_IDLE_MS unused. */
+class CodexReader {
+  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private buffer = '';
+  private next = 0;
+  private idle: ReturnType<typeof setTimeout> | null = null;
+  private users = 0;
+  readonly ready: Promise<void>;
+  dead = false;
+
+  constructor(
+    readonly key: string,
+    launch: CodexLaunch,
+    private readonly gone: (reader: CodexReader) => void,
+  ) {
+    this.child = spawn(launch.codexPath, ['app-server'], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child.stdout.setEncoding('utf8');
+    // Read and dropped, so that a chatty stderr never fills its pipe; writes after an exit are not thrown.
+    this.child.stderr.resume();
+    this.child.stdin.on('error', () => undefined);
+    this.child.stdout.on('data', (chunk: string) => this.onData(chunk));
+    this.child.on('error', (error) => this.stop(error));
+    this.child.on('exit', (code) => this.stop(new Error(`Codex exited with code ${code}`)));
+    this.ready = this.request('initialize', { clientInfo: { name: 'vault-claude', title: 'Vault Claude', version: '1' }, capabilities: null }).then(() => {
+      this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`);
+    });
+  }
+
+  request(method: string, params: unknown): Promise<unknown> {
+    if (this.dead) return Promise.reject(new Error('Codex is not running'));
+    const id = ++this.next;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => this.stop(new Error('Codex did not answer in time')), APP_SERVER_TIMEOUT_MS);
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    });
+  }
+
+  /** In use: not stopped meanwhile. */
+  hold(): void {
+    this.users += 1;
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
+  }
+
+  /** No longer in use: stopped once idle for APP_SERVER_IDLE_MS. */
+  release(): void {
+    this.users -= 1;
+    if (this.users > 0 || this.dead) return;
+    this.idle = setTimeout(() => this.stop(), APP_SERVER_IDLE_MS);
+  }
+
+  stop(error?: Error): void {
+    if (this.dead) return;
+    this.dead = true;
+    if (this.idle) clearTimeout(this.idle);
+    for (const { reject } of this.pending.values()) reject(error ?? new Error('Codex was stopped'));
+    this.pending.clear();
+    this.child.kill();
+    this.gone(this);
+  }
+
+  private onData(chunk: string): void {
+    this.buffer += chunk;
     let at: number;
-    while ((at = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, at).trim();
-      buffer = buffer.slice(at + 1);
+    while ((at = this.buffer.indexOf('\n')) >= 0) {
+      const line = this.buffer.slice(0, at).trim();
+      this.buffer = this.buffer.slice(at + 1);
       if (!line) continue;
       try {
         const message = JSON.parse(line) as { id?: number; method?: string; result?: unknown; error?: { message?: string } };
-        if (typeof message.id === 'number' && !message.method) pending.get(message.id)?.(message);
+        if (typeof message.id !== 'number' || message.method) continue;
+        const waiting = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        if (message.error) waiting?.reject(new Error(message.error.message ?? 'Codex refused the request'));
+        else waiting?.resolve(message.result);
       } catch {
         // Not JSON: nothing waits on it.
       }
     }
+  }
+}
+
+let reader: CodexReader | null = null;
+
+/** Stops the reader kept for reads (see CodexReader): when the plugin unloads. */
+export function stopCodexReader(): void {
+  reader?.stop();
+}
+
+/** Starts the reader kept for reads (see CodexReader) ahead of a read, so that the read does not wait for Codex to start. */
+export function warmCodexReader(launch: CodexLaunch): void {
+  void withAppServer(launch, async () => undefined).catch((error: unknown) => log('starting the codex reader failed', error));
+}
+
+/** Runs `use` against the Codex app-server kept for reads (see CodexReader), started for `launch` if need be. */
+async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: string, params: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
+  const key = JSON.stringify([launch.codexPath, launch.cwd, launch.env.PATH]);
+  if (reader && (reader.dead || reader.key !== key)) reader.stop();
+  const current = reader && !reader.dead ? reader : new CodexReader(key, launch, (gone) => {
+    if (reader === gone) reader = null;
   });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const exited = new Promise<never>((_, reject) => {
-    child.on('error', reject);
-    child.on('exit', (code) => reject(new Error(`Codex exited with code ${code}`)));
-    timer = setTimeout(() => reject(new Error('Codex did not answer in time')), APP_SERVER_TIMEOUT_MS);
-  });
-  // Rejected after `use` is done (the stop below): nobody waits on it then.
-  exited.catch(() => undefined);
-  const request = (method: string, params: unknown) =>
-    Promise.race([
-      new Promise<unknown>((resolve, reject) => {
-        const id = ++next;
-        pending.set(id, (message) => (message.error ? reject(new Error(message.error.message ?? 'Codex refused the request')) : resolve(message.result)));
-        child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-      }),
-      exited,
-    ]);
+  reader = current;
+  current.hold();
   try {
-    await request('initialize', { clientInfo: { name: 'vault-claude', title: 'Vault Claude', version: '1' }, capabilities: null });
-    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`);
-    return await use(request);
+    await current.ready;
+    return await use((method, params) => current.request(method, params));
   } finally {
-    clearTimeout(timer);
-    child.kill();
+    current.release();
   }
 }
 

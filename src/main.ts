@@ -10,7 +10,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
-import { findCodex, listCodexModels, readCodexLimits, readCodexThread, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
+import { findCodex, listCodexModels, readCodexLimits, readCodexThread, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -724,6 +724,11 @@ export default class VaultClaudePlugin extends Plugin {
    * listing at a time, which a second request shares.
    */
   listChats(): Promise<HistoryItem[]> {
+    // A Codex chat picked from the listing opens without waiting for Codex to start (see warmCodexReader).
+    if (this.chats.some((chat) => chat.engine === 'codex')) {
+      const launch = this.codexLaunch();
+      if (typeof launch !== 'string') warmCodexReader(launch);
+    }
     const dir = this.vaultRoot();
     if (!dir) return Promise.resolve([]);
     this.listing ??= (async () => {
@@ -840,6 +845,8 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   onunload(): void {
+    // The Codex app-server kept for reads (see CodexReader).
+    stopCodexReader();
     if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
     this.remote.stop();
     void this.flushSave();
