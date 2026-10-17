@@ -1385,7 +1385,7 @@ export class ChatView extends ItemView {
       this.plugin.setChatDraft(key, draft);
       return;
     }
-    if (draft.text?.trim() || draft.note) this.localDrafts.set(key, draft);
+    if (draft.text?.trim() || draft.note || draft.composing) this.localDrafts.set(key, draft);
     else this.localDrafts.delete(key);
   }
 
@@ -1393,7 +1393,7 @@ export class ChatView extends ItemView {
   private saveDraft(): void {
     if (this.draftSaveTimer !== null) window.clearTimeout(this.draftSaveTimer);
     this.draftSaveTimer = null;
-    this.writeDraft(this.draftKey(), { text: this.inputEl.value, note: this.attachedNote ?? undefined });
+    this.writeDraft(this.draftKey(), { text: this.inputEl.value, note: this.attachedNote ?? undefined, composing: this.draftPath ?? undefined });
   }
 
   /** Typing is saved a second after it stops, so a restart finds it; a switch saves at once. */
@@ -1419,6 +1419,10 @@ export class ChatView extends ItemView {
     this.growInput();
     const fresh = draft === undefined && isLocalDraft(key);
     this.attachedNote = draft?.note ?? (fresh && this.plugin.settings.attachActiveNote ? (this.activeNote()?.file.path ?? null) : null);
+    // The note its next message is being written in, if it is still there.
+    const composing = draft?.composing;
+    this.draftPath = composing && this.app.vault.getAbstractFileByPath(composing) instanceof TFile ? composing : null;
+    this.updateDraftLine();
     this.projectLocal = {};
     this.updateContextChip();
   }
@@ -2338,8 +2342,22 @@ export class ChatView extends ItemView {
   }
 
   private async showBackground(entry: BackgroundChat): Promise<void> {
+    // What arrives while its saved messages are read goes on in the background, and is kept, to be
+    // drawn after them when it is not among them.
+    const background = this.backgroundHandlers(entry);
+    const arrived: SDKMessage[] = [];
+    entry.session.setHandlers({
+      ...background,
+      onMessage: (message) => {
+        arrived.push(message);
+        background.onMessage(message);
+      },
+    });
     const read = await this.readForOpening(entry.chatId);
-    if (!read) return;
+    if (!read) {
+      if (this.background.has(entry)) entry.session.setHandlers(background);
+      return;
+    }
     // Its session goes on whether or not its saved messages could be read.
     const chat = read.chat ?? { transcript: [], edits: new Map() };
     if (!this.background.has(entry)) {
@@ -2383,6 +2401,14 @@ export class ChatView extends ItemView {
     this.sessionToken = token;
     this.session = entry.session;
     entry.session.setHandlers(this.foregroundHandlers(token));
+    // What arrived during the read and is not in what was read: drawn now. A reply's pieces as they
+    // streamed are left out; the reply itself follows whole.
+    const drawn = new Set(chat.transcript.map((message) => message.uuid).filter(Boolean));
+    for (const message of arrived) {
+      const uuid = (message as { uuid?: string }).uuid;
+      if (message.type === 'stream_event' || (uuid && drawn.has(uuid))) continue;
+      this.onMessage(message);
+    }
     // Its process still runs: a fresh reading.
     void this.refreshMeters();
     this.remoteUrl = entry.remoteUrl;
@@ -3635,6 +3661,8 @@ export class ChatView extends ItemView {
   /** This chat's id, title, today's date and transcript, for saving it; null (with a notice) when there is none. */
   private async chatForSaving(): Promise<{ id: string; title: string; date: string; transcript: SessionMessage[] } | null> {
     const id = this.chatId ?? this.resumeId;
+    // Its name taken with its id, before the read: another chat may be on screen by the time it is done.
+    const title = this.chatName ?? 'Untitled chat';
     const root = this.plugin.vaultRoot();
     if (!id || !root) {
       new Notice('Nothing to save yet.');
@@ -3642,7 +3670,7 @@ export class ChatView extends ItemView {
     }
     try {
       const { transcript } = await this.plugin.loadAnyChat(id, root);
-      return { id, title: this.chatName ?? 'Untitled chat', date: formatDate(Date.now()).slice(0, 10), transcript };
+      return { id, title, date: formatDate(Date.now()).slice(0, 10), transcript };
     } catch (error) {
       log('loading transcript failed', error);
       new Notice('Could not read this chat.');
@@ -4046,6 +4074,8 @@ export class ChatView extends ItemView {
 
   /** Images dropped on the side chat go with its next question; it takes no other files. */
   private async dropOnSideChat(vaultFiles: TFile[], external: File[]): Promise<void> {
+    // The side chat's conversation dropped on: read as it starts over, they are not the new one's.
+    const conversation = this.sideChat.conversation();
     const images: ImageAttachment[] = [];
     const others: string[] = [];
     for (const file of vaultFiles) {
@@ -4058,7 +4088,7 @@ export class ChatView extends ItemView {
       if (image) images.push(image);
       else others.push(file.name);
     }
-    this.sideChat.attach(images);
+    this.sideChat.attach(images, conversation);
     if (others.length > 0) new Notice(`The side chat takes images only; left out: ${others.join(', ')}.`);
   }
 
@@ -5022,6 +5052,8 @@ export class ChatView extends ItemView {
 
   private async changeMode(mode: PermissionMode): Promise<void> {
     const previous = this.mode;
+    // A later change wins: this one, failing after it, does not put back what it replaced.
+    const change = ++this.modeChanges;
     // What an approved plan returns to (see renderApprovalCard).
     if (mode === 'plan' && previous !== 'plan') this.modeBeforePlan = previous;
     this.mode = mode;
@@ -5038,6 +5070,7 @@ export class ChatView extends ItemView {
       this.renderModeLine(previous, mode);
     } catch (error) {
       log('setPermissionMode failed', error);
+      if (change !== this.modeChanges) return;
       // In the background meanwhile: its entry keeps the mode that runs.
       if (session !== this.session) {
         const entry = this.entryOf(session);
@@ -5053,6 +5086,9 @@ export class ChatView extends ItemView {
       this.showMode();
     }
   }
+
+  /** Changes of permission mode asked for (see changeMode): only the latest may undo itself. */
+  private modeChanges = 0;
 
   /**
    * The mode Claude Code reports for the chat (a status message), which changes without the panel
@@ -5821,7 +5857,7 @@ export class ChatView extends ItemView {
           this.finishText(text);
         }
       } else {
-        this.renderNotice(`Claude Code ended the turn (${result.subtype})${result.errors.length ? `: ${result.errors.join('; ')}` : ''}`);
+        this.renderNotice(`Claude Code ended the turn (${result.subtype})${result.errors?.length ? `: ${result.errors.join('; ')}` : ''}`);
       }
     }
     this.draw.turn = null;
@@ -6363,9 +6399,13 @@ export class ChatView extends ItemView {
     /** The plan as edited in its note (null when it has none, or was not changed), and the note gone. */
     const takeNote = async (): Promise<string | null> => {
       const file = noteFile();
-      approval.notePath = null;
-      if (!file) return null;
+      if (!file) {
+        approval.notePath = null;
+        return null;
+      }
+      // Let go of only once read: a read that fails keeps the note, so that trying again sends its edits, not Claude's plan.
       const text = (await this.app.vault.read(file)).trim();
+      approval.notePath = null;
       await this.discardNote(file);
       return text && text !== plan.trim() ? text : null;
     };
@@ -6708,13 +6748,24 @@ export class ChatView extends ItemView {
       return;
     }
     try {
+      // The chat it is for and what was typed in it, taken before anything is awaited.
+      const owner = this.draftKey();
+      const typed = this.inputEl.value;
       const title = this.chatName ?? 'New chat';
       const path = await this.savedNotePath(formatDate(Date.now()).slice(0, 10), title, '', 'Drafts');
-      const file = await this.app.vault.create(path, this.inputEl.value);
+      const file = await this.app.vault.create(path, typed);
+      if (this.draftKey() !== owner) {
+        // Another chat was opened meanwhile: the note is its own chat's draft, and this chat's input is left alone.
+        this.writeDraft(owner, { ...this.readDraft(owner), text: '', composing: file.path });
+        new Notice(`The draft went to its own chat, “${title}”.`);
+        return;
+      }
       this.draftPath = file.path;
       this.inputEl.value = '';
       this.growInput();
       this.updateDraftLine();
+      // Kept with the chat, so that it is its draft again when the chat comes back.
+      this.saveDraft();
       await this.app.workspace.getLeaf('tab').openFile(file);
       new Notice('Write your message there, then send the draft.');
     } catch (error) {
@@ -6749,6 +6800,7 @@ export class ChatView extends ItemView {
     this.draftPath = null;
     this.updateDraftLine();
     if (!text) {
+      this.saveDraft();
       await this.discardNote(file);
       new Notice('The draft was empty: nothing was sent, and the note is gone.');
       return;
@@ -6763,6 +6815,7 @@ export class ChatView extends ItemView {
         }
         this.draftPath = file.path;
         this.updateDraftLine();
+        this.saveDraft();
       }
       return;
     }
@@ -6822,6 +6875,7 @@ export class ChatView extends ItemView {
     const file = this.draftFile();
     this.draftPath = null;
     this.updateDraftLine();
+    this.saveDraft();
     if (!file) return;
     await this.discardNote(file);
     new Notice(`Draft “${file.basename}” thrown away.`);

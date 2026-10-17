@@ -23,6 +23,9 @@ export interface FieldSuggestion {
   key: string;
   value: unknown;
   reason: string;
+  /** The property as it was when proposed: whether the note had it, and its value. What the review shows as Now, and what Apply checks it still is. */
+  had: boolean;
+  was: unknown;
 }
 
 /** The instructions for proposing a note's properties. */
@@ -77,7 +80,7 @@ export function readFrontmatterSuggestions(reply: string, current: Record<string
     if (typeof key !== 'string' || !key.trim() || NOT_PROPOSED.has(key) || seen.has(key) || value === undefined) return [];
     if (JSON.stringify(value) === JSON.stringify(current[key])) return [];
     seen.add(key);
-    return [{ key, value, reason: typeof reason === 'string' ? reason.trim() : '' }];
+    return [{ key, value, reason: typeof reason === 'string' ? reason.trim() : '', had: key in current, was: current[key] }];
   });
 }
 

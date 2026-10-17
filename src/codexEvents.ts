@@ -159,6 +159,8 @@ export function codexTurnResult(sessionId: string, turn: { status: string; error
     subtype: failed ? 'error_during_execution' : 'success',
     is_error: failed,
     result: failed ? (turn.error?.message ?? 'Codex stopped with an error.') : '',
+    // An error result carries its errors, as Claude Code's does.
+    ...(failed ? { errors: [turn.error?.message ?? 'Codex stopped with an error.'] } : {}),
     duration_ms: duration,
     duration_api_ms: duration,
     num_turns: 1,
@@ -189,8 +191,16 @@ export function codexTranscript(sessionId: string, turns: { items?: CodexItem[] 
       if (item.type === 'userMessage') {
         const content = (item as { content?: { type?: string; text?: string }[] }).content ?? [];
         // The context the panel sent before the message (a project's, included chats': see CodexSession.addContext) is not yours to show.
-        const text = content.flatMap((part) => (part.type === 'text' && part.text && !/^\s*<(project_context|linked_chats)>/.test(part.text) ? [part.text] : [])).join('\n\n');
-        if (text.trim()) transcript.push({ type: 'user', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, message: { role: 'user', content: text } });
+        const parts = content as { type?: string; text?: string; url?: string }[];
+        const text = parts.flatMap((part) => (part.type === 'text' && part.text && !/^\s*<(project_context|linked_chats)>/.test(part.text) ? [part.text] : [])).join('\n\n');
+        // Images sent as data URLs, as the chat draws a message's images (see codexInput); others by a note of them.
+        const images = parts.flatMap((part): Record<string, unknown>[] => {
+          const data = part.type === 'image' && part.url ? /^data:([^;]+);base64,(.*)$/s.exec(part.url) : null;
+          return data ? [{ type: 'image', source: { type: 'base64', media_type: data[1], data: data[2] } }] : part.type === 'image' || part.type === 'localImage' ? [{ type: 'text', text: '[image]' }] : [];
+        });
+        if (!text.trim() && images.length === 0) continue;
+        const shown = images.length === 0 ? text : [...images, ...(text.trim() ? [{ type: 'text', text }] : [])];
+        transcript.push({ type: 'user', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, message: { role: 'user', content: shown } });
         continue;
       }
       for (const message of [...codexItemStarted(sessionId, item, cwd), ...codexItemCompleted(sessionId, item)]) {

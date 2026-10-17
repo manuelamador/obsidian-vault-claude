@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { lineTarget, locateLine, type EditLine } from '../src/editDiff';
+import { editDiff, lineTarget, locateLine, type EditLine } from '../src/editDiff';
 
 const lines: EditLine[] = [
   { kind: 'same', text: 'intro', no: 4 },
@@ -39,4 +39,10 @@ test('text no longer in the file, or blank, falls back to the recorded number, w
   assert.equal(locateLine(file, 'gone', 2), 2);
   assert.equal(locateLine(file, '', 9), 3);
   assert.equal(locateLine(file, 'gone'), null);
+});
+
+test('a very long patch is read without running out of stack', () => {
+  const lines = Array.from({ length: 150_000 }, (_, i) => `+line ${i}`);
+  const diff = editDiff('Write', { file_path: '/v/big.md' }, { type: 'update', structuredPatch: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines }] });
+  assert.ok(diff && diff.lines.length >= 150_000);
 });

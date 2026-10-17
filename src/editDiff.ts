@@ -149,7 +149,8 @@ export function editDiff(name: string, input: Record<string, unknown>, structure
   };
 
   if (patch.length > 0) {
-    lines.push(...patchLines(patch));
+    // One at a time: a spread of a very long patch would exceed the call stack's arguments.
+    for (const line of patchLines(patch)) lines.push(line);
   } else if (name === 'Write') {
     // An update with no patch changed nothing, or was too large to diff.
     if (result.type === 'update') return null;
@@ -189,7 +190,7 @@ function messageDiffs(messages: { type?: string; content?: unknown }[], structur
         calls.set(block.id, { name: block.name, input: (block.input ?? {}) as Record<string, unknown> });
       } else if (type === 'user' && block.type === 'tool_result' && block.tool_use_id && block.is_error !== true) {
         const call = calls.get(block.tool_use_id);
-        if (call) diffs.push(...toolDiffs(call.name, call.input, structured(block.tool_use_id)));
+        if (call) for (const diff of toolDiffs(call.name, call.input, structured(block.tool_use_id))) diffs.push(diff);
       }
     }
   }
@@ -402,7 +403,7 @@ class ChangedFile {
     const lines: EditLine[] = [];
     for (const diff of this.diffs) {
       if (lines.length > 0) lines.push({ kind: 'gap', text: '' });
-      lines.push(...diff.lines);
+      for (const line of diff.lines) lines.push(line);
     }
     const { vaultPath, openLine } = this;
     renderDiffLines(this.diffEl, lines, vaultPath && openLine ? (text, hint, evt) => openLine(vaultPath, text, hint, evt) : undefined);

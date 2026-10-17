@@ -64,3 +64,21 @@ test('a saved Codex thread is drawn as its messages, with its file changes kept 
   assert.equal(((transcript[2].message as { content: { input: { file_path: string } }[] }).content)[0].input.file_path, '/v/a.md');
   assert.ok(edits.has('f:0'));
 });
+
+test('a failed Codex turn ends with its error, as an error result carries it', () => {
+  const result = codexTurnResult('t', { status: 'failed', error: { message: 'rate limited' } }, null, []);
+  assert.equal(result.subtype, 'error_during_execution');
+  assert.deepEqual(result.errors, ['rate limited']);
+});
+
+test('a saved Codex message keeps its images, an image-only one included', () => {
+  const turns = [{ items: [
+    { type: 'userMessage', id: 'u1', content: [{ type: 'image', url: 'data:image/png;base64,AAA' }] },
+    { type: 'userMessage', id: 'u2', content: [{ type: 'text', text: 'see' }, { type: 'image', url: 'data:image/jpeg;base64,BBB' }] },
+  ] }];
+  const { transcript } = codexTranscript('t', turns as never);
+  assert.deepEqual(transcript.map((message) => (message.message as { content: unknown }).content), [
+    [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } }],
+    [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'BBB' } }, { type: 'text', text: 'see' }],
+  ]);
+});

@@ -10,13 +10,11 @@ export interface FrontmatterHost {
   name: string;
   neighbours: number;
   chats: number;
-  /** The note's properties now. */
-  current: Record<string, unknown>;
   /** The guidance last given for notes in this folder, kept for next time. */
   guidance: string;
   suggest(guidance: string, signal: AbortSignal): Promise<FieldSuggestion[]>;
-  /** Writes the values accepted (and stamps `updated` when the note has it). */
-  apply(values: Record<string, unknown>): Promise<void>;
+  /** Writes the values accepted, each only if its property is still as proposed against (and stamps `updated` when the note has it). */
+  apply(accepted: { key: string; value: unknown; had: boolean; was: unknown }[]): Promise<void>;
 }
 
 export class FrontmatterModal extends Modal {
@@ -79,13 +77,13 @@ export class FrontmatterModal extends Modal {
       const box = top.createEl('input', { type: 'checkbox' });
       box.checked = true;
       top.createSpan({ cls: 'vc-project-kind', text: field.key });
-      const isNew = !(field.key in host.current);
+      const isNew = !field.had;
       if (isNew) top.createSpan({ cls: 'vc-project-size', text: 'new property' });
       const count = top.createSpan({ cls: 'vc-project-size vc-frontmatter-count' });
       if (!isNew) {
         const was = row.createDiv({ cls: 'vc-frontmatter-was' });
         was.createSpan({ cls: 'vc-project-kind', text: 'Now: ' });
-        was.appendText(valueText(host.current[field.key]) || '(empty)');
+        was.appendText(valueText(field.was) || '(empty)');
       }
       const text = row.createEl('textarea', { cls: 'vc-project-text' });
       text.value = valueText(field.value);
@@ -112,9 +110,9 @@ export class FrontmatterModal extends Modal {
     update();
     apply.addEventListener('click', async () => {
       apply.disabled = true;
-      const values = Object.fromEntries(rows.filter((row) => row.box.checked).map((row) => [row.field.key, readEdited(row.text.value, row.field.value)]));
+      const accepted = rows.filter((row) => row.box.checked).map(({ field, text }) => ({ key: field.key, value: readEdited(text.value, field.value), had: field.had, was: field.was }));
       try {
-        await host.apply(values);
+        await host.apply(accepted);
         this.close();
       } catch (error) {
         // Not written: the dialog stays, to try again.

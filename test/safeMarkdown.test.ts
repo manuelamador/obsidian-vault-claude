@@ -90,3 +90,16 @@ test('a code fence in a quote keeps what it shows', () => {
   const text = '> ```ts\n> const a: Array<T> = [];\n> ```';
   assert.equal(neutralizeRemoteMedia(text), text);
 });
+
+test('a fence opened in a quote ends with the quote: an image after it is filtered', () => {
+  const out = neutralizeRemoteMedia('> ```\n> example\n\n![outside](https://example.invalid/image.png)');
+  assert.ok(out.endsWith('[outside](https://example.invalid/image.png)'), out);
+});
+
+test('many unclosed image openings are filtered in linear time', () => {
+  const text = '![x'.repeat(20000);
+  const started = performance.now();
+  neutralizeRemoteMedia(text);
+  neutralizeRemoteMedia('![['.repeat(20000));
+  assert.ok(performance.now() - started < 500, `took ${Math.round(performance.now() - started)} ms`);
+});

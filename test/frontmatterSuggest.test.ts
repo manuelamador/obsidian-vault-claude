@@ -6,8 +6,8 @@ test('proposals: one per key, with reasons; none for updated or for a value unch
   const current = { status: 'old', groups: ['A', 'B'], updated: '2026-01-01' };
   const reply = 'Sure:\n{"fields": [{"key": "status", "value": "new", "reason": "The thread says so."}, {"key": "status", "value": "again"}, {"key": "updated", "value": "2026-10-07"}, {"key": "groups", "value": ["A", "B"]}, {"key": "next", "value": "Write it up"}]}';
   assert.deepEqual(readFrontmatterSuggestions(reply, current), [
-    { key: 'status', value: 'new', reason: 'The thread says so.' },
-    { key: 'next', value: 'Write it up', reason: '' },
+    { key: 'status', value: 'new', reason: 'The thread says so.', had: true, was: 'old' },
+    { key: 'next', value: 'Write it up', reason: '', had: false, was: undefined },
   ]);
   assert.equal(readFrontmatterSuggestions('no', current), null);
 });

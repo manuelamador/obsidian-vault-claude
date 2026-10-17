@@ -30,21 +30,24 @@ const LOADING_ATTRIBUTES = /(?<=[\s/"'])(?:style|background|poster|srcset|src|da
 const LOADING_STYLE = /url\s*\(|image-set|image\s*\(|@import|\\/i;
 const MEDIA_SELECTOR = 'img, video, audio, source, track, iframe, frame, object, embed, picture, input';
 
-/** Index of the bracket or parenthesis closing the one at `open`, honouring nesting and escapes; -1 if none. */
-function closing(text: string, open: number, opener: string, closer: string): number {
-  let depth = 0;
-  for (let i = open; i < text.length; i += 1) {
+/**
+ * For each bracket or parenthesis in `text` that opens, the index of the one closing it, honouring
+ * nesting and escapes (brackets and parentheses each counted on their own); one never closed is
+ * absent. Worked out in one pass, so that many unclosed `![` cost no more than one.
+ */
+function closers(text: string): Map<number, number> {
+  const found = new Map<number, number>();
+  const open: Record<string, number[]> = { '[': [], '(': [] };
+  for (let i = 0; i < text.length; i += 1) {
     const char = text[i];
-    if (char === '\\') {
-      i += 1;
-    } else if (char === opener) {
-      depth += 1;
-    } else if (char === closer) {
-      depth -= 1;
-      if (depth === 0) return i;
+    if (char === '\\') i += 1;
+    else if (char === '[' || char === '(') open[char].push(i);
+    else if (char === ']' || char === ')') {
+      const start = open[char === ']' ? '[' : '('].pop();
+      if (start !== undefined) found.set(start, i);
     }
   }
-  return -1;
+  return found;
 }
 
 /**
@@ -56,9 +59,14 @@ function closing(text: string, open: number, opener: string, closer: string): nu
 function rewriteImages(text: string): string {
   let out = '';
   let from = 0;
+  let matched: Map<number, number> | null = null;
+  const closing = (open: number) => (matched ??= closers(text)).get(open) ?? -1;
+  // Once no `]]` is left, none is looked for again.
+  let embedsClose = true;
   for (let start = text.indexOf('![', from); start !== -1; start = text.indexOf('![', from)) {
     if (text[start + 2] === '[') {
-      const end = text.indexOf(']]', start + 3);
+      const end = embedsClose ? text.indexOf(']]', start + 3) : -1;
+      if (end === -1) embedsClose = false;
       const stop = end === -1 ? start + 3 : end + 2;
       const target = end === -1 ? '' : text.slice(start + 3, end).split(/[|#^]/)[0].trim();
       // A media file of the vault, as it is; anything else as a link to it.
@@ -66,7 +74,7 @@ function rewriteImages(text: string): string {
       from = stop;
       continue;
     }
-    const altEnd = closing(text, start + 1, '[', ']');
+    const altEnd = closing(start + 1);
     if (altEnd === -1) {
       out += text.slice(from, start + 2);
       from = start + 2;
@@ -75,7 +83,7 @@ function rewriteImages(text: string): string {
     const alt = text.slice(start + 2, altEnd);
     const label = alt.trim() || 'image';
     if (text[altEnd + 1] === '(') {
-      const targetEnd = closing(text, altEnd + 1, '(', ')');
+      const targetEnd = closing(altEnd + 1);
       if (targetEnd === -1) {
         out += text.slice(from, altEnd + 1);
         from = altEnd + 1;
@@ -128,8 +136,9 @@ function escapeHtml(text: string): string {
 function angleTargets(text: string, mask: (target: string) => string): string {
   let out = '';
   let from = 0;
+  const matched = closers(text);
   for (let open = text.indexOf('[', from); open !== -1; open = text.indexOf('[', from)) {
-    const close = closing(text, open, '[', ']');
+    const close = matched.get(open) ?? -1;
     if (close === -1) break;
     if (text.startsWith('(<', close + 1)) {
       const end = text.indexOf('>', close + 3);
@@ -186,12 +195,16 @@ export function neutralizeRemoteMedia(markdown: string): string {
   };
   // An indented fence (in a list item) ends with its item: at the first line indented less than it.
   let indent = 0;
+  // A fence in a quote ends with its quote: at the first line with fewer `>` marks than it opened with.
+  let quotes = 0;
   for (const line of markdown.split('\n')) {
     // A fence in a quote is one too: its `>` marks are not part of it.
-    const bare = line.replace(/^(?: {0,3}>[ \t]?)+/, '');
+    const marks = /^(?: {0,3}>[ \t]?)+/.exec(line)?.[0] ?? '';
+    const bare = line.slice(marks.length);
+    const depth = marks.split('>').length - 1;
     const opening = fenceMarker(bare);
     if (fence) {
-      const ended = line.trim() !== '' && line.length - line.trimStart().length < indent;
+      const ended = depth < quotes || (line.trim() !== '' && line.length - line.trimStart().length < indent);
       if (!ended) {
         out.push(line);
         if (closesFence(bare, fence)) fence = null;
@@ -203,6 +216,7 @@ export function neutralizeRemoteMedia(markdown: string): string {
       flush();
       fence = opening;
       indent = line.length - line.trimStart().length;
+      quotes = depth;
       out.push(line);
       continue;
     }

@@ -1380,6 +1380,26 @@ async function main(): Promise<void> {
       const editedResult = await edited.answered;
       const editedSaid = decided();
       const noteGone = notePath !== undefined && !notesOnDisk.has(notePath) && trashed.includes(notePath);
+      // A note that cannot be read at the first Approve is still the plan when Approve is tried again.
+      const retried = propose();
+      retried.button('Edit in a note').click();
+      await settle();
+      const retryPath = [...notesOnDisk.keys()].find((path) => path.includes('/Plans/'));
+      if (retryPath) notesOnDisk.set(retryPath, `${plan}\n3. Say MANGO.`);
+      const planVault = app.vault as unknown as { read: (file: unknown) => Promise<string> };
+      const planReadWas = planVault.read;
+      planVault.read = async () => {
+        throw new Error('busy');
+      };
+      retried.button('Approve').click();
+      await settle();
+      planVault.read = planReadWas;
+      retried.button('Approve').click();
+      const retriedResult = await retried.answered;
+      decided();
+      const retryOk = JSON.stringify(retriedResult).includes('MANGO');
+      console.log(`plan approved again after a failed read sends its edits: ${retryOk}`);
+      if (!retryOk) process.exitCode = 1;
       // The first answer holds: Approve then at once Reject approves, with the edits; and a note that is
       // renamed while edited is still the plan.
       const raced = propose();
@@ -2407,6 +2427,17 @@ async function main(): Promise<void> {
     const notSentElsewhere = !sentElsewhere && !trashed.includes('Drafts/unsent.md');
     console.log(`draft kept when not sent ${keptUnsent}; not sent to a chat opened meanwhile ${notSentElsewhere}`);
     if (!keptUnsent || !notSentElsewhere) process.exitCode = 1;
+    // The draft note stays the chat's when the chat is left and shown again.
+    const draftKeep = view as unknown as { saveDraft(): void; restoreDraft(): void };
+    notesOnDisk.set('Drafts/kept.md', 'kept for later');
+    draftView.draftPath = 'Drafts/kept.md';
+    draftKeep.saveDraft();
+    draftView.draftPath = null;
+    draftKeep.restoreDraft();
+    const keptLink = draftView.holdsDraft('Drafts/kept.md');
+    console.log(`draft note still the chat's after it is shown again: ${keptLink}`);
+    if (!keptLink) process.exitCode = 1;
+    notesOnDisk.delete('Drafts/kept.md');
     draftView.draftPath = null;
     draftView.updateDraftLine();
     // The × throws a draft away unsent.
@@ -4433,6 +4464,27 @@ async function main(): Promise<void> {
       const failOk = restored.input === 'see @[[New.md]]' && JSON.stringify(restored.attachments) === '["paper.pdf"]' && restored.bubbles === 0 && restored.sent === 0 && strayed === 0;
       console.log(`unsent message: ${JSON.stringify(restored)}; image for another chat attached ${strayed} -> ${failOk}`);
       if (!failOk) process.exitCode = 1;
+    }
+
+    {
+      // A change of mode that fails after a later one succeeded does not undo the later one.
+      const modeView = view as unknown as { session: unknown; mode: string; changeMode(mode: string): Promise<void> };
+      view.newChat();
+      let failPlan: (error: Error) => void = () => undefined;
+      modeView.session = {
+        setPermissionMode: (mode: string) => (mode === 'plan' ? new Promise((_, reject) => (failPlan = reject)) : Promise.resolve()),
+        setHandlers() {},
+        close() {},
+      };
+      const planning = modeView.changeMode('plan');
+      await modeView.changeMode('acceptEdits');
+      failPlan(new Error('refused'));
+      await planning;
+      const modeOk = modeView.mode === 'acceptEdits';
+      modeView.session = null;
+      view.newChat();
+      console.log(`a failed earlier mode change leaves the later one: ${modeView.mode === 'acceptEdits' || modeOk} -> ${modeOk}`);
+      if (!modeOk) process.exitCode = 1;
     }
 
     {

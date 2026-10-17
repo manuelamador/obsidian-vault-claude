@@ -114,9 +114,11 @@ export class SideChat {
       const files = pastedFiles(evt.clipboardData).filter((file) => file.type.startsWith('image/'));
       if (files.length === 0) return;
       evt.preventDefault();
-      void Promise.all(files.map((file) => imageFromBlob(file, file.name || 'Pasted image'))).then((images) =>
-        this.attach(images.filter((image): image is ImageAttachment => image !== null)),
-      );
+      // The conversation pasted into: one started over meanwhile is not given them.
+      const ends = this.ends;
+      void Promise.all(files.map((file) => imageFromBlob(file, file.name || 'Pasted image'))).then((images) => {
+        if (ends === this.ends) this.attach(images.filter((image): image is ImageAttachment => image !== null));
+      });
     });
     this.component.load();
   }
@@ -183,8 +185,14 @@ export class SideChat {
    * Adds `images` to go with the next question: pasted into its input, or dropped on it (see
    * ChatView.onDrop). None once it is closed: images read as it closed were for the chat it showed.
    */
-  attach(images: ImageAttachment[]): void {
-    if (images.length === 0 || !this.isOpen()) return;
+  /** Which conversation the side chat holds: changes when it starts over or closes (see attach). */
+  conversation(): number {
+    return this.ends;
+  }
+
+  /** `conversation`: the one they were given to (see conversation()); none when it has moved on since. */
+  attach(images: ImageAttachment[], conversation = this.ends): void {
+    if (images.length === 0 || !this.isOpen() || conversation !== this.ends) return;
     this.setImages([...this.images, ...images]);
     this.input.focus();
   }

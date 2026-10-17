@@ -69,6 +69,8 @@ export interface ChatDraft {
   text?: string;
   /** Vault path of the note that goes with each message. */
   note?: string;
+  /** Vault path of the note the next message is being written in (see ChatView.editDraft). */
+  composing?: string;
   /** When it was last saved (ms); a draft of a chat outside the panel's list is dropped after DRAFT_DAYS. */
   at?: number;
 }
@@ -1236,9 +1238,10 @@ export default class VaultClaudePlugin extends Plugin {
     const next: ChatDraft = {};
     if (draft.text?.trim()) next.text = draft.text;
     if (draft.note) next.note = draft.note;
+    if (draft.composing) next.composing = draft.composing;
     const before = this.drafts[id] ?? {};
-    if (before.text === next.text && before.note === next.note) return;
-    if (next.text !== undefined || next.note !== undefined) this.drafts[id] = { ...next, at: Date.now() };
+    if (before.text === next.text && before.note === next.note && before.composing === next.composing) return;
+    if (next.text !== undefined || next.note !== undefined || next.composing !== undefined) this.drafts[id] = { ...next, at: Date.now() };
     else delete this.drafts[id];
     void this.saveSettings();
   }
@@ -1413,8 +1416,11 @@ export default class VaultClaudePlugin extends Plugin {
     this.chats.unshift({ id, title, ...(copyOf ? { copyOf } : {}), ...(engine ? { engine, at: Date.now() } : {}) });
     const original = copyOf ? this.lastListing?.find((item) => item.id === copyOf) : undefined;
     if (original) (original.copies ??= []).unshift({ id, title, updatedAt: Date.now(), fromPanel: true, copied: true });
-    for (const dropped of this.chats.slice(MAX_CHAT_RECORDS)) this.forgetChatData(dropped.id);
-    this.chats = this.chats.slice(0, MAX_CHAT_RECORDS);
+    // Past MAX_CHAT_RECORDS, the oldest Claude chats' records go: only the record, which their session
+    // files outlive (they are still listed from them); what else the chat has (its draft, pin, plan
+    // note) stays. A Codex chat's record is its only listing, and is never dropped.
+    let claude = 0;
+    this.chats = this.chats.filter((chat) => chat.engine === 'codex' || (claude += 1) <= MAX_CHAT_RECORDS);
     void this.saveSettings();
   }
 
@@ -1757,15 +1763,30 @@ export default class VaultClaudePlugin extends Plugin {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return null;
     this.projectHashes.set(path, null);
+    // Only the latest read of a path is kept: one begun before the note changed (and its entry was dropped) is not.
+    const read = {};
+    this.projectHashReads.set(path, read);
+    const current = () => this.projectHashReads.get(path) === read;
     void this.projectParts(file).then(
       (parts) => {
+        if (!current()) return;
+        this.projectHashReads.delete(path);
         this.projectHashes.set(path, { all: contextHash(parts), instructions: contextHash({ context: '', instructions: parts.instructions }) });
         this.projectsChanged();
       },
-      (error: unknown) => log('reading a project failed', error),
+      (error: unknown) => {
+        log('reading a project failed', error);
+        // Not left as being read: the next call tries again.
+        if (!current()) return;
+        this.projectHashReads.delete(path);
+        this.projectHashes.delete(path);
+      },
     );
     return null;
   }
+
+  /** The read under way for each project's fingerprint (see projectHashNow). */
+  private readonly projectHashReads = new Map<string, object>();
 
   /** Records that chat `from` linked to chats `to` in a message sent (see ChatView.send): shown on its map, and their projects offered. */
   linkChats(from: string, to: string[]): void {
@@ -2288,6 +2309,21 @@ export default class VaultClaudePlugin extends Plugin {
    * which its notes do not give it one. A chat has at most one project.
    */
   async setHomeProject(id: string, file: TFile | null): Promise<void> {
+    // One at a time for a chat: two at once would each read the other's project as not yet listing it, and leave it in both.
+    const before = this.homeChanges.get(id) ?? Promise.resolve();
+    const change = before.catch(() => undefined).then(() => this.setHomeProjectNow(id, file));
+    this.homeChanges.set(id, change);
+    try {
+      await change;
+    } finally {
+      if (this.homeChanges.get(id) === change) this.homeChanges.delete(id);
+    }
+  }
+
+  /** Changes of chats' projects under way, by chat (see setHomeProject). */
+  private readonly homeChanges = new Map<string, Promise<void>>();
+
+  private async setHomeProjectNow(id: string, file: TFile | null): Promise<void> {
     for (const project of this.projectNotes()) {
       const isHome = project === file;
       const listed = this.projectAdded(project).includes(id);
@@ -2740,7 +2776,6 @@ export default class VaultClaudePlugin extends Plugin {
       name: file.basename,
       neighbours: neighbours.length,
       chats: chats.length,
-      current: current(),
       guidance: this.frontmatterGuidance[folder] ?? '',
       suggest: async (guidance, signal) => {
         if (guidance.trim()) this.frontmatterGuidance[folder] = guidance.trim();
@@ -2754,13 +2789,23 @@ export default class VaultClaudePlugin extends Plugin {
         if (!fields) throw new Error('Claude did not reply in the form asked for');
         return fields;
       },
-      apply: async (values) => {
+      apply: async (accepted) => {
+        // A property changed since it was proposed against (edited by hand meanwhile) is left as it is now.
+        const written: string[] = [];
+        const changed: string[] = [];
         await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
-          Object.assign(front, values);
-          if ('updated' in front) front.updated = today();
+          for (const { key, value, had, was } of accepted) {
+            if (key in front !== had || JSON.stringify(front[key]) !== JSON.stringify(was)) changed.push(key);
+            else {
+              front[key] = value;
+              written.push(key);
+            }
+          }
+          if (written.length > 0 && 'updated' in front) front.updated = today();
         });
-        const n = Object.keys(values).length;
-        new Notice(`${n} propert${n === 1 ? 'y' : 'ies'} of “${file.basename}” updated.`);
+        const n = written.length;
+        const kept = changed.length > 0 ? ` ${changed.join(', ')} changed since the suggestion, and ${changed.length === 1 ? 'was' : 'were'} left as ${changed.length === 1 ? 'it is' : 'they are'}.` : '';
+        new Notice(`${n} propert${n === 1 ? 'y' : 'ies'} of “${file.basename}” updated.${kept}`);
       },
     }).open();
   }
