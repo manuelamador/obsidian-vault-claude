@@ -606,38 +606,110 @@ function rowMessage(row: SessionRow, id: string): SessionMessage | null {
   } as unknown as SessionMessage;
 }
 
+/** The rows readSession draws from: messages, a compaction's mark, a queued message taken up. Others it skips unparsed. */
+const DRAWN_ROWS = new Set(['user', 'assistant', 'system', 'attachment']);
+
+/**
+ * Whether row `line` can matter to readSession. Claude Code writes its own bookkeeping rows (the API
+ * requests it made, the title, the mode…) with `type` first: such a row is skipped without parsing,
+ * which on a long chat is most of the file.
+ */
+function drawnRow(line: string): boolean {
+  const type = /^\{"type":"([^"]+)"/.exec(line.slice(0, 48))?.[1];
+  return type === undefined || DRAWN_ROWS.has(type);
+}
+
+/** A session file read so far (see readSession): the rows up to `size` bytes, and the bytes around its start and end that tell it is still the same file, only grown. */
+interface ReadSoFar {
+  size: number;
+  head: Buffer;
+  tail: Buffer;
+  messages: SessionMessage[];
+  edits: Map<string, unknown>;
+  queued: Map<SessionMessage, string | undefined>;
+  own: Set<string>;
+}
+
+/** Session files this big are remembered as read (see READ_KEPT), so that opening one again reads only what was added. */
+const KEEP_READ_BYTES = 4 * 1024 * 1024;
+/** How many such files are remembered, the most recently read kept. */
+const READ_KEPT = 2;
+/** How many bytes at each end of what was read must be unchanged for it to be reused. */
+const CHECK_BYTES = 1024;
+const readSoFar = new Map<string, ReadSoFar>();
+
+/** `length` bytes of the file open as `handle`, from `position`. */
+async function readBytes(handle: fs.FileHandle, position: number, length: number): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await handle.read(buffer, 0, length, position);
+  return buffer.subarray(0, bytesRead);
+}
+
 async function readSession(id: string, dir: string, withEdits: boolean): Promise<LoadedChat> {
   // Not passed on to the SDK's reader either, which would read it as a path.
   if (!isChatId(id)) throw new Error(`not a chat id: ${id}`);
-  let text: string;
+  const file = sessionFile(id, dir);
+  let handle: fs.FileHandle;
   try {
-    text = await fs.readFile(sessionFile(id, dir), 'utf8');
+    handle = await fs.open(file, 'r');
   } catch {
     return { transcript: await getSessionMessages(id, { dir }), edits: new Map() };
   }
-  const messages: SessionMessage[] = [];
-  const edits = new Map<string, unknown>();
-  // Queued messages taken up mid-turn (see rowMessage), with the uuid they were sent with, and the uuids of the messages of their own.
-  const queued = new Map<SessionMessage, string | undefined>();
-  const own = new Set<string>();
-  for (const line of text.split('\n')) {
-    const row = line ? parseRow(line) : null;
-    if (!row) continue;
-    const edit = withEdits ? rowToolResult(row, true) : null;
-    if (edit) edits.set(...edit);
-    const message = rowMessage(row, id);
-    if (!message) continue;
-    messages.push(message);
-    if (row.type === 'attachment') queued.set(message, row.attachment?.source_uuid);
-    else if (message.uuid) own.add(message.uuid);
+  const key = `${file}\n${withEdits}`;
+  let read: ReadSoFar;
+  let last: Pick<ReadSoFar, 'messages' | 'edits' | 'queued' | 'own'>;
+  try {
+    const { size } = await handle.stat();
+    // Read before: reused when the file has only grown since, with its first and last bytes read unchanged.
+    const kept = readSoFar.get(key);
+    const same =
+      kept !== undefined &&
+      size >= kept.size &&
+      (await readBytes(handle, 0, kept.head.length)).equals(kept.head) &&
+      (await readBytes(handle, kept.size - kept.tail.length, kept.tail.length)).equals(kept.tail);
+    read = same && kept ? kept : { size: 0, head: Buffer.alloc(0), tail: Buffer.alloc(0), messages: [], edits: new Map(), queued: new Map(), own: new Set() };
+    const bytes = await readBytes(handle, read.size, size - read.size);
+    const take = (line: string, into: Pick<ReadSoFar, 'messages' | 'edits' | 'queued' | 'own'>) => {
+      if (!line || !drawnRow(line)) return;
+      const row = parseRow(line);
+      if (!row) return;
+      const edit = withEdits ? rowToolResult(row, true) : null;
+      if (edit) into.edits.set(...edit);
+      const message = rowMessage(row, id);
+      if (!message) return;
+      into.messages.push(message);
+      // Queued messages taken up mid-turn (see rowMessage), with the uuid they were sent with, and the uuids of the messages of their own.
+      if (row.type === 'attachment') into.queued.set(message, row.attachment?.source_uuid);
+      else if (message.uuid) into.own.add(message.uuid);
+    };
+    // Whole rows are kept as read; cut at a newline, never inside a character.
+    const end = bytes.lastIndexOf(0x0a) + 1;
+    for (const line of bytes.toString('utf8', 0, end).split('\n')) take(line, read);
+    read.size += end;
+    // A last row with no newline after it (still being written, or the file's end) is drawn when whole, and read again next time.
+    last = { messages: [], edits: new Map(), queued: new Map(), own: new Set() };
+    if (end < bytes.length) take(bytes.toString('utf8', end), last);
+    if (read.size >= KEEP_READ_BYTES) {
+      read.head = await readBytes(handle, 0, Math.min(CHECK_BYTES, read.size));
+      read.tail = await readBytes(handle, Math.max(0, read.size - CHECK_BYTES), Math.min(CHECK_BYTES, read.size));
+      readSoFar.delete(key);
+      readSoFar.set(key, read);
+      for (const old of [...readSoFar.keys()].slice(0, Math.max(0, readSoFar.size - READ_KEPT))) readSoFar.delete(old);
+    } else {
+      readSoFar.delete(key);
+    }
+  } finally {
+    await handle.close();
   }
   // A queued message that also became a message of its own is drawn once, as that message.
-  const once = messages.filter((message) => {
-    const source = queued.get(message);
+  const own = last.own.size > 0 ? new Set([...read.own, ...last.own]) : read.own;
+  const once = [...read.messages, ...last.messages].filter((message) => {
+    const source = read.queued.get(message) ?? last.queued.get(message);
     return source === undefined || !own.has(source);
   });
   const transcript = once.some((message) => message.type !== 'system') ? once : await getSessionMessages(id, { dir });
-  return { transcript, edits };
+  // A copy of the edits: what is remembered stays as read.
+  return { transcript, edits: new Map([...read.edits, ...last.edits]) };
 }
 
 /** The end of a session file lastMessages reads first; each further read, further back, is twice the last. */
