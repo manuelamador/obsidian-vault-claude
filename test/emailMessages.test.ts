@@ -73,6 +73,9 @@ test("a message's attachments are kept by name and type; a message without any h
   ] });
   const [withFiles, without] = emailMessages('mcp__claude_ai_Gmail__get_thread', text) ?? [];
   assert.deepEqual(withFiles.attachments, [{ name: 'report.pdf', type: 'application/pdf' }, { name: 'logo.png', type: 'image/png' }]);
+  // With the message's id, the account and the part: a link to the attachment itself.
+  const linked = emailMessages('mcp__claude_ai_Gmail__get_message', JSON.stringify({ id: '1a145af88756fee5', sender: 'a@b.c', subject: 'S', viewUrl: 'https://mail.google.com/mail/?authuser=me@example.com#all/thread-f:1|msg-f:1', attachments: [{ filename: 'draft.pdf', mimeType: 'application/pdf', partId: '2' }] })) ?? [];
+  assert.equal(linked[0].attachments?.[0].url, 'https://mail.google.com/mail/?authuser=me@example.com&ui=2&view=att&th=1a145af88756fee5&attid=0.2&disp=safe');
   assert.equal(without.attachments, undefined);
   assert.deepEqual(['application/pdf', 'image/jpeg', 'text/calendar', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'].map(attachmentKind), ['PDF', 'image', 'calendar', 'Word', 'zip']);
 });

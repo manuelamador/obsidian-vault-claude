@@ -34,7 +34,7 @@ export function emailDate(message: EmailMessage): string {
 /** `message` as Markdown, to quote or save: who, when and what, its attachments by name (the files stay in Gmail), then its text. */
 export function emailMarkdown(message: EmailMessage): string {
   const head = [`**${message.subject || '(no subject)'}**`, `From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`];
-  if (message.attachments) head.push(`Attachments: ${message.attachments.map((each) => `${each.name} (${attachmentKind(each.type)})`).join(', ')}`);
+  if (message.attachments) head.push(`Attachments: ${message.attachments.map((each) => `${each.url ? `[${each.name}](${each.url})` : each.name} (${attachmentKind(each.type)})`).join(', ')}`);
   if (message.url) head.push(`[Open in Gmail](${message.url})`);
   return [...head, '', ...(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
 }
@@ -62,7 +62,9 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
     const files = message.attachments.filter((each) => !each.type.startsWith('image/'));
     const images = message.attachments.length - files.length;
     for (const file of files) {
-      const chip = message.url ? line.createEl('a', { cls: 'vc-email-attachment', href: message.url, attr: { 'aria-label': 'Open the message in Gmail, with its attachments' } }) : line.createSpan({ cls: 'vc-email-attachment' });
+      // The file itself in Gmail where its address is known, else the message holding it.
+      const href = file.url ?? message.url;
+      const chip = href ? line.createEl('a', { cls: 'vc-email-attachment', href, attr: { 'aria-label': file.url ? 'Open this attachment in Gmail' : 'Open the message in Gmail, with its attachments' } }) : line.createSpan({ cls: 'vc-email-attachment' });
       setIcon(chip.createSpan({ cls: 'vc-email-attachment-icon' }), 'paperclip');
       chip.createSpan({ text: file.name });
       chip.createSpan({ cls: 'vc-email-attachment-kind', text: attachmentKind(file.type) });

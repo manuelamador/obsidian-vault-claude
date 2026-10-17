@@ -21,7 +21,17 @@ export interface EmailMessage {
   /** Gmail's id for its thread: how an opened thread finds its card in a search shown before it. */
   threadId?: string;
   /** Its attachments, by name and type, when the tool gave them (a thread or a message read whole); the files themselves are in Gmail. */
-  attachments?: { name: string; type: string }[];
+  attachments?: { name: string; type: string; url?: string }[];
+}
+
+/**
+ * Where Gmail opens attachment `part` of message `id` itself (its `view=att` address), for the account
+ * message link `viewUrl` names (its `authuser`); undefined when any of them is missing.
+ */
+export function attachmentUrl(viewUrl: string, id: string, part: string): string | undefined {
+  const account = /[?&]authuser=([^&#]+)/.exec(viewUrl)?.[1];
+  if (!account || !/^[0-9a-f]+$/i.test(id) || !/^[0-9.]+$/.test(part)) return undefined;
+  return `https://mail.google.com/mail/?authuser=${account}&ui=2&view=att&th=${id}&attid=0.${part}&disp=safe`;
 }
 
 /** A file type as a card names it: `PDF`, `Word`, `image`, or the type's last part. */
@@ -49,6 +59,7 @@ export function readsThread(name: string): boolean {
 }
 
 interface RawMessage {
+  id?: unknown;
   sender?: unknown;
   toRecipients?: unknown;
   subject?: unknown;
@@ -82,9 +93,11 @@ function message(raw: RawMessage, count?: number): EmailMessage {
   const body = decodeEntities(full);
   const url = str(raw.viewUrl);
   const threadId = str(raw.threadId);
-  const attachments = (Array.isArray(raw.attachments) ? raw.attachments : []).flatMap((each: { filename?: unknown; mimeType?: unknown }) =>
-    each && typeof each.filename === 'string' && each.filename ? [{ name: decodeEntities(each.filename), type: str(each.mimeType) }] : [],
-  );
+  const attachments = (Array.isArray(raw.attachments) ? raw.attachments : []).flatMap((each: { filename?: unknown; mimeType?: unknown; partId?: unknown }) => {
+    if (!each || typeof each.filename !== 'string' || !each.filename) return [];
+    const link = attachmentUrl(url, str(raw.id), str(each.partId));
+    return [{ name: decodeEntities(each.filename), type: str(each.mimeType), ...(link ? { url: link } : {}) }];
+  });
   return {
     sender: decodeEntities(str(raw.sender)) || 'Unknown sender',
     to: Array.isArray(raw.toRecipients) ? raw.toRecipients.filter((each): each is string => typeof each === 'string') : [],
