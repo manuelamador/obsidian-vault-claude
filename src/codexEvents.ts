@@ -78,9 +78,9 @@ export function diffHunks(diff: string, kind: string): PatchHunk[] {
     }
   }
   if (hunks.length > 0 || !diff.trim()) return hunks;
-  const whole = lines.filter((line) => !/^(\+\+\+|---) /.test(line));
+  // No hunks: for a file added or deleted whole, Codex gives its content itself, each line as it is.
   const removed = kind === 'delete';
-  return [{ oldStart: removed ? 1 : 0, oldLines: removed ? whole.length : 0, newStart: removed ? 0 : 1, newLines: removed ? 0 : whole.length, lines: whole.map((line) => `${removed ? '-' : '+'}${line.replace(/^[+-]/, '')}`) }];
+  return [{ oldStart: removed ? 1 : 0, oldLines: removed ? lines.length : 0, newStart: removed ? 0 : 1, newLines: removed ? 0 : lines.length, lines: lines.map((line) => `${removed ? '-' : '+'}${line}`) }];
 }
 
 /** The session's start, as Claude Code's init message gives it: its id and model. */
@@ -135,16 +135,11 @@ export function codexItemCompleted(sessionId: string, item: CodexItem): DrawnMes
   }
 }
 
-/** Item `item` as a tool call the panel draws: a command as Bash, a file change as Write, Edit or a delete, an MCP tool by its name; null for the rest. */
+/** Item `item` as a tool call the panel draws: a command as Bash, an MCP tool by its name, a web search; null for the rest (a file change is drawn per file: see codexItemStarted). */
 export function codexToolUse(item: CodexItem): Record<string, unknown> | null {
   switch (item.type) {
     case 'commandExecution':
       return { type: 'tool_use', id: item.id, name: 'Bash', input: { command: item.command ?? '' } };
-    case 'fileChange': {
-      const first = item.changes?.[0];
-      const name = first?.kind.type === 'add' ? 'Write' : 'Edit';
-      return { type: 'tool_use', id: item.id, name, input: { file_path: first?.path ?? '', changes: (item.changes ?? []).map((change) => change.path) } };
-    }
     case 'mcpToolCall':
       return { type: 'tool_use', id: item.id, name: `mcp__${item.server ?? 'codex'}__${item.tool ?? 'tool'}`, input: (item.arguments as Record<string, unknown> | null) ?? {} };
     case 'webSearch':
@@ -192,7 +187,8 @@ export function codexTranscript(sessionId: string, turns: { items?: CodexItem[] 
     for (const item of turn.items ?? []) {
       if (item.type === 'userMessage') {
         const content = (item as { content?: { type?: string; text?: string }[] }).content ?? [];
-        const text = content.flatMap((part) => (part.type === 'text' && part.text ? [part.text] : [])).join('\n\n');
+        // The context the panel sent before the message (a project's, included chats': see CodexSession.addContext) is not yours to show.
+        const text = content.flatMap((part) => (part.type === 'text' && part.text && !/^\s*<(project_context|linked_chats)>/.test(part.text) ? [part.text] : [])).join('\n\n');
         if (text.trim()) transcript.push({ type: 'user', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, message: { role: 'user', content: text } });
         continue;
       }

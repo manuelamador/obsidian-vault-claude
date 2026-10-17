@@ -373,7 +373,7 @@ export class HistoryModal extends SuggestModal<Match> {
       if (item.scratch) {
         new ConfirmModal(this.app, 'Clear scratch chat', 'The scratch chat starts over: its conversation is deleted from this computer. This cannot be undone.', 'Clear', removed).open();
       } else {
-        confirmDelete(this.app, item.title, item.fromPanel, removed);
+        confirmDelete(this.app, item.title, item.fromPanel, removed, item.engine === 'codex');
       }
     });
   }
@@ -539,8 +539,12 @@ function rowsKey(items: HistoryItem[]): string {
   );
 }
 
-/** Asks before chat `title` is deleted; `fromPanel`: started in the panel, not in Claude Code elsewhere. */
-export function confirmDelete(app: App, title: string, fromPanel: boolean, onConfirm: () => void): void {
+/** Asks before chat `title` is deleted; `fromPanel`: started in the panel, not in Claude Code elsewhere; `codex`: a Codex chat, whose conversation Codex keeps. */
+export function confirmDelete(app: App, title: string, fromPanel: boolean, onConfirm: () => void, codex = false): void {
+  if (codex) {
+    new ConfirmModal(app, 'Remove chat', `“${title}” is removed from the panel's history. Codex keeps its conversation, in Codex's own history.`, 'Remove', onConfirm).open();
+    return;
+  }
   const outside = fromPanel ? '' : ' It was started outside the panel, so it also disappears from Claude Code there.';
   new ConfirmModal(app, 'Delete chat', `“${title}” and its saved conversation will be deleted from this computer.${outside} This cannot be undone.`, 'Delete', onConfirm).open();
 }

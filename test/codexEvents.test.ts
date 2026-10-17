@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { codexItemCompleted, codexItemStarted, codexTranscript, codexTurnResult, diffHunks } from '../src/codexEvents';
-import { codexInput } from '../src/codexSession';
+import { codexInput, deniedCommand } from '../src/codexSession';
 
 test('a Codex command is drawn as a Bash call and its output as the result', () => {
   const started = codexItemStarted('t', { type: 'commandExecution', id: 'c1', command: 'ls' });
@@ -37,6 +37,17 @@ test('a Codex file change is drawn as an edit per file, with its hunks for the c
   assert.deepEqual((done[0].tool_use_result as { structuredPatch: unknown }).structuredPatch, [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' line', '-old', '+new'] }]);
   assert.deepEqual((done[1].tool_use_result as { structuredPatch: { lines: string[] }[] }).structuredPatch[0].lines, ['+hello', '+world']);
   assert.deepEqual(diffHunks('', 'update'), []);
+  // A new note's own lines, frontmatter fences and bullets included, kept as they are.
+  assert.deepEqual(diffHunks('---\ntags: [a]\n---\n- item\n+ plus\n', 'add')[0].lines, ['+---', '+tags: [a]', '+---', '+- item', '++ plus']);
+});
+
+test("Codex commands refused by the panel's deny rules", () => {
+  const rules = ['Bash(git checkout:*)', 'Bash(rm -rf:*)', 'mcp__claude_ai_Gmail__send_message'];
+  assert.equal(deniedCommand(rules, 'git checkout -- Note.md'), true);
+  assert.equal(deniedCommand(rules, "/bin/zsh -lc 'cd x && git checkout main'"), true);
+  assert.equal(deniedCommand(rules, 'rm -rf tmp'), true);
+  assert.equal(deniedCommand(rules, 'git status'), false);
+  assert.equal(deniedCommand(rules, 'git checkoutx'), false);
 });
 
 test('a saved Codex thread is drawn as its messages, with its file changes kept for the cards', () => {

@@ -147,6 +147,9 @@ async function main(): Promise<void> {
     loadCodexLimits: () => undefined,
     chatContext: {},
     setChatContext: () => undefined,
+    setCodexLimits: () => undefined,
+    codexLaunch: () => 'Codex is not set up in the panel test.',
+    loadAnyChat: async (id: string, root: string) => (await import('../src/history')).loadChat(id, root),
     mailOfChats: (): unknown[] => [],
     setHomeProject: async () => undefined,
     projectParts: async () => ({ context: '', instructions: '' }),
@@ -1771,7 +1774,7 @@ async function main(): Promise<void> {
       sideChat: { el: HTMLElement; isOpen(): boolean };
       startSideSession(handlers: unknown, id: string, own: boolean): unknown;
       deleteSideSession(id: string): void;
-      keepSideChat(id: string, unsent: string): void;
+      keepSideChat(id: string, unsent: string): boolean;
       openKeptSideChat(id: string): Promise<void>;
       chatName: string | null;
       closing: boolean;
@@ -1912,6 +1915,7 @@ async function main(): Promise<void> {
     sideView.keepSideChat = (id, unsent) => {
       sideKept.push(id);
       sideUnsent.push(unsent);
+      return true;
     };
     sideView.openKeptSideChat = async (id) => void sideOpened.push(id);
     const side = sideView.sideChat.el;

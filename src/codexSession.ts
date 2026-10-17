@@ -9,18 +9,44 @@ import * as path from 'path';
 import { codexInit, codexItemCompleted, codexItemStarted, codexTurnResult, type CodexItem, type CodexUsage } from './codexEvents';
 import type { SDKControlGetContextUsageResponse } from '@anthropic-ai/claude-agent-sdk';
 import { log } from './log';
+import { contextBlock, type ContextPart } from './projects';
 import type { SessionHandlers, UserContent } from './session';
 
-export interface CodexSessionConfig {
+/** How to run Codex: the executable, the vault folder, and the environment (PATH fixed as for Claude Code; see claudeEnv). */
+export interface CodexLaunch {
   cwd: string;
   codexPath: string;
+  env: Record<string, string | undefined>;
+}
+
+export interface CodexSessionConfig extends CodexLaunch {
   /** A Codex thread to carry on (see thread/resume); none starts a new one. */
   resume?: string;
+  /** A Codex thread to start from, as a copy Codex does not save (see thread/fork): a side chat's. */
+  fork?: string;
+  /** Codex only reads (a read-only sandbox, never asking), and the thread is not saved: a side chat's. */
+  readOnly?: boolean;
   /** Instructions added to Codex's own (as the panel's system prompt addition is for Claude). */
   developerInstructions?: string;
   /** The model and reasoning effort to run; none uses Codex's own settings. */
   model?: string;
   effort?: string;
+  /** The panel's deny rules (see sessionDenyRules): a command they match is refused without asking. */
+  denyRules?: string[];
+}
+
+/**
+ * Whether command `command` is refused by `rules`: a `Bash(prefix:*)` rule matches the prefix at the
+ * start of any part of it (after `&&`, `;`, `|`, a subshell, or a shell's `-c '…'`), as Claude Code's
+ * rules do for its Bash tool.
+ */
+export function deniedCommand(rules: string[], command: string): boolean {
+  return rules.some((rule) => {
+    const prefix = /^Bash\((.+?)(?::\*)?\)$/.exec(rule.trim())?.[1]?.trim();
+    if (!prefix) return false;
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    return new RegExp(`(^|[;&|('"\\s])${escaped}(\\s|$|['"])`).test(command);
+  });
 }
 
 /** Where the ChatGPT app installs the Codex CLI, besides PATH and Homebrew. */
@@ -58,6 +84,16 @@ export class CodexSession {
   /** The thread's context as Codex last reported it: what the last request held, and the model's window. */
   private context: { used: number; window: number } | null = null;
   private model: string | null = null;
+  /** Why the session ended, when it failed: shown once Codex has exited (see fail). */
+  private failure: Error | null = null;
+  /** Sends one after the other, so that a message sent while a turn starts steers it rather than starting another. */
+  private sending: Promise<void> = Promise.resolve();
+  /** The approval cards shown, withdrawn when the turn or the session ends. */
+  private readonly approvals = new Set<AbortController>();
+  /** Context given to go with the next message (see addContext): a project's notes, included chats. */
+  private pendingContext: { parts: ContextPart[]; delivered: (sessionId: string | null, keys: string[]) => void }[] = [];
+  /** The files each change in this turn touches, by item: what its approval card names. */
+  private readonly changes = new Map<string, string[]>();
 
   constructor(
     private readonly config: CodexSessionConfig,
@@ -72,20 +108,40 @@ export class CodexSession {
 
   /** Sends a message of yours: a new turn, or, while one runs, added to it (Codex's steering). */
   send(content: UserContent, _priority?: unknown, uuid?: string): void {
-    if (this.closed) return;
-    void this.start()
+    if (this.closed) {
+      // Ended already (it failed to start, say): the turn the panel began is ended with the reason.
+      this.handlers.onEnd(this.failure ?? new Error('The Codex session has ended.'), this.stderrLines.join('\n'));
+      return;
+    }
+    this.sending = this.sending
+      .then(() => this.start())
       .then(async () => {
-        const input = codexInput(content);
+        // The context waiting goes before the message, as Claude Code's hook adds it (see ClaudeSession.addContext).
+        const context = this.pendingContext.splice(0);
+        const block = contextBlock(context.flatMap((each) => each.parts));
+        const input = [...(block.text ? codexInput(block.text) : []), ...codexInput(content)];
+        const went = new Set(block.keys);
+        const delivered = () => {
+          for (const each of context) each.delivered(this.sessionId, each.parts.map((part) => part.key).filter((key) => went.has(key)));
+        };
         if (this.turnId) {
-          await this.request('turn/steer', { threadId: this.sessionId, expectedTurnId: this.turnId, input });
-          if (uuid) this.turnMessages.push(uuid);
-          return;
+          try {
+            await this.request('turn/steer', { threadId: this.sessionId, expectedTurnId: this.turnId, input });
+            if (uuid) this.turnMessages.push(uuid);
+            delivered();
+            return;
+          } catch (error) {
+            // The turn ended as the message went: it starts the next one instead.
+            log('steering codex failed; starting a turn', error);
+            this.turnId = null;
+          }
         }
         if (uuid) this.turnMessages = [uuid];
         // The model and effort chosen in the panel, when any; thinking summaries asked for, to be shown.
         const choice = { ...(this.config.model ? { model: this.config.model } : {}), ...(this.config.effort ? { effort: this.config.effort } : {}), summary: 'auto' };
         const started = (await this.request('turn/start', { threadId: this.sessionId, input, ...choice })) as { turn?: { id?: string } };
         this.turnId ??= started.turn?.id ?? null;
+        delivered();
       })
       .catch((error: unknown) => this.fail(error));
   }
@@ -95,6 +151,8 @@ export class CodexSession {
   }
 
   async interrupt(): Promise<void> {
+    // A turn still starting is stopped once Codex has said which it is.
+    await this.sending;
     if (!this.turnId || !this.sessionId) return;
     await this.request('turn/interrupt', { threadId: this.sessionId, turnId: this.turnId }).catch((error: unknown) => log('interrupting codex failed', error));
   }
@@ -102,18 +160,39 @@ export class CodexSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.withdrawApprovals();
     for (const { reject } of this.pending.values()) reject(new Error('the Codex session was closed'));
     this.pending.clear();
     if (this.child) this.child.kill();
     else this.markEnded();
   }
 
-  // What Claude Code offers and Codex does not, or not yet here: nothing to do, or nothing to read.
-  addContext(): void {}
-  waitingContext(): Set<string> {
-    return new Set();
+  /** The usage limits of the account, read through this session's own app-server (see readCodexLimits). */
+  async readLimits(): Promise<CodexLimits | null> {
+    if (this.closed || !this.child) return null;
+    return limitsOf(await this.request('account/rateLimits/read', {}));
   }
-  withdrawContext(): void {}
+
+  private withdrawApprovals(): void {
+    for (const controller of this.approvals) controller.abort();
+    this.approvals.clear();
+  }
+
+  /** Context to go with the next message: given with it to Codex, then marked delivered. */
+  addContext(parts: ContextPart[], delivered: (sessionId: string | null, keys: string[]) => void): void {
+    if (parts.length > 0) this.pendingContext.push({ parts, delivered });
+  }
+
+  /** What context is waiting to go (see addContext). */
+  waitingContext(): Set<string> {
+    return new Set(this.pendingContext.flatMap((each) => each.parts.map((part) => part.key)));
+  }
+
+  withdrawContext(unwanted: (key: string) => boolean): void {
+    for (const each of this.pendingContext) each.parts = each.parts.filter((part) => !unwanted(part.key));
+  }
+
+  // What Claude Code offers and Codex does not, or not yet here: nothing to do, or nothing to read.
   async stopTask(): Promise<void> {}
   /** The context meter's reading, in the shape Claude Code's gives it (see contextFigures); null before Codex reports one. */
   contextUsage(): SDKControlGetContextUsageResponse | null {
@@ -148,8 +227,10 @@ export class CodexSession {
   private start(): Promise<void> {
     this.starting ??= (async () => {
       log('starting codex', { cwd: this.config.cwd, codexPath: this.config.codexPath, resume: this.config.resume ?? null });
-      const child = spawn(this.config.codexPath, ['app-server'], { cwd: this.config.cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(this.config.codexPath, ['app-server'], { cwd: this.config.cwd, env: this.config.env, stdio: ['pipe', 'pipe', 'pipe'] });
       this.child = child;
+      // A write to a Codex that has just exited: reported by the exit, not thrown.
+      child.stdin.on('error', (error) => log('writing to codex failed', error));
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => this.onData(chunk));
@@ -157,20 +238,43 @@ export class CodexSession {
         this.stderrLines.push(...chunk.split('\n').filter(Boolean));
         if (this.stderrLines.length > 40) this.stderrLines = this.stderrLines.slice(-40);
       });
-      child.on('error', (error) => this.fail(error));
+      let exited = false;
+      const ended = (error: Error | undefined) => {
+        if (exited) return;
+        exited = true;
+        this.child = null;
+        this.withdrawApprovals();
+        this.markEnded();
+        for (const { reject } of this.pending.values()) reject(error ?? new Error('Codex exited'));
+        this.pending.clear();
+        this.handlers.onEnd(error, this.stderrLines.join('\n'));
+      };
+      child.on('error', (error) => {
+        this.failure ??= error;
+        this.closed = true;
+        // Not started at all (not found, not executable): no exit follows.
+        if (child.pid === undefined) ended(error);
+        else child.kill();
+      });
       child.on('exit', (code, signal) => {
         log('codex exited', { code, signal });
-        this.child = null;
-        this.markEnded();
-        for (const { reject } of this.pending.values()) reject(new Error('Codex exited'));
-        this.pending.clear();
-        this.handlers.onEnd(this.closed || code === 0 ? undefined : new Error(`Codex exited with code ${code ?? signal}`), this.stderrLines.join('\n'));
+        // Closed by the panel: no error; failed: why; else an exit nobody asked for.
+        ended(this.failure ?? (this.closed || code === 0 ? undefined : new Error(`Codex exited with code ${code ?? signal}`)));
       });
       await this.request('initialize', { clientInfo: { name: 'vault-claude', title: 'Vault Claude', version: '1' }, capabilities: null });
       this.notify('initialized');
-      const params = { cwd: this.config.cwd, ...(this.config.developerInstructions ? { developerInstructions: this.config.developerInstructions } : {}) };
-      const opened = (await this.request(this.config.resume ? 'thread/resume' : 'thread/start', this.config.resume ? { ...params, threadId: this.config.resume } : params)) as { thread?: { id?: string }; model?: string };
-      this.sessionId = opened.thread?.id ?? this.config.resume ?? null;
+      const params = {
+        cwd: this.config.cwd,
+        ...(this.config.developerInstructions ? { developerInstructions: this.config.developerInstructions } : {}),
+        ...(this.config.readOnly ? { sandbox: 'read-only', approvalPolicy: 'never', ephemeral: true } : {}),
+      };
+      const { resume, fork } = this.config;
+      const opened = (await (resume
+        ? this.request('thread/resume', { ...params, threadId: resume })
+        : fork
+          ? this.request('thread/fork', { ...params, threadId: fork, excludeTurns: true })
+          : this.request('thread/start', params))) as { thread?: { id?: string }; model?: string };
+      this.sessionId = opened.thread?.id ?? resume ?? null;
       this.model = opened.model ?? null;
       if (!this.sessionId) throw new Error('Codex started no thread');
       log('codex session started', { sessionId: this.sessionId });
@@ -228,9 +332,12 @@ export class CodexSession {
       case 'turn/started':
         this.turnId = (params.turn as { id?: string } | undefined)?.id ?? this.turnId;
         break;
-      case 'item/started':
-        for (const message of codexItemStarted(id, params.item as CodexItem, this.config.cwd)) this.handlers.onMessage(message as never);
+      case 'item/started': {
+        const item = params.item as CodexItem;
+        if (item.type === 'fileChange') this.changes.set(item.id, (item.changes ?? []).map((change) => change.path));
+        for (const message of codexItemStarted(id, item, this.config.cwd)) this.handlers.onMessage(message as never);
         break;
+      }
       case 'item/completed':
         for (const message of codexItemCompleted(id, params.item as CodexItem)) this.handlers.onMessage(message as never);
         break;
@@ -244,6 +351,8 @@ export class CodexSession {
       case 'turn/completed': {
         const turn = (params.turn ?? {}) as { status: string; error?: { message?: string } | null; durationMs?: number | null };
         this.turnId = null;
+        this.withdrawApprovals();
+        this.changes.clear();
         const sent = this.turnMessages;
         this.turnMessages = [];
         log('codex turn ended', { status: turn.status });
@@ -265,27 +374,48 @@ export class CodexSession {
       this.child?.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: requestId, error: { code: -32601, message: `${method} is not supported by this client` } })}\n`);
       return;
     }
-    const controller = new AbortController();
+    // The older requests take the older answers.
+    const legacy = method === 'execCommandApproval' || method === 'applyPatchApproval';
+    const decision = (allow: boolean) => (legacy ? (allow ? 'approved' : 'denied') : allow ? 'accept' : 'decline');
     const reason = typeof params.reason === 'string' ? params.reason : undefined;
-    const input: Record<string, unknown> = command ? { command: typeof params.command === 'string' ? params.command : Array.isArray(params.command) ? params.command.join(' ') : '', ...(reason ? { description: reason } : {}) } : { file_path: typeof params.grantRoot === 'string' ? params.grantRoot : '', ...(reason ? { description: reason } : {}) };
+    const commandText = typeof params.command === 'string' ? params.command : Array.isArray(params.command) ? params.command.join(' ') : '';
+    // Refused by the panel's deny rules, as Claude Code refuses them: not offered at all.
+    if (command && deniedCommand(this.config.denyRules ?? [], commandText)) {
+      log('codex command refused by a deny rule', commandText.slice(0, 200));
+      this.respond(requestId, { decision: decision(false) });
+      return;
+    }
+    const changed = this.changes.get(typeof params.itemId === 'string' ? params.itemId : '') ?? [];
+    const absolute = (file: string) => (/^([/\\]|[A-Za-z]:)/.test(file) ? file : path.join(this.config.cwd, file));
+    const input: Record<string, unknown> = command
+      ? { command: commandText, ...(reason ? { description: reason } : {}) }
+      : { file_path: changed[0] ? absolute(changed[0]) : typeof params.grantRoot === 'string' ? params.grantRoot : '', ...(changed.length > 1 ? { changes: changed } : {}), ...(reason ? { description: reason } : {}) };
+    const controller = new AbortController();
+    this.approvals.add(controller);
     try {
-      const answer = await this.handlers.onPermission({ toolName: command ? 'Bash' : 'Edit', input, signal: controller.signal, title: command ? 'Codex wants to run a command' : 'Codex wants to change files', decisionReason: reason });
-      this.respond(requestId, { decision: answer.behavior === 'allow' ? 'accept' : 'decline' });
+      const answer = await this.handlers.onPermission({ toolName: command ? 'Bash' : 'Edit', input, signal: controller.signal, title: command ? 'Codex wants to run a command' : changed.length > 1 ? `Codex wants to change ${changed.length} files` : 'Codex wants to change a file', decisionReason: reason });
+      if (!controller.signal.aborted) this.respond(requestId, { decision: decision(answer.behavior === 'allow') });
     } catch (error) {
       log('answering codex failed', error);
-      this.respond(requestId, { decision: 'decline' });
+      if (!controller.signal.aborted) this.respond(requestId, { decision: decision(false) });
+    } finally {
+      this.approvals.delete(controller);
     }
   }
 
+  /** The session cannot go on: Codex is stopped, and the panel told why once it has exited. */
   private fail(error: unknown): void {
     log('codex failed', error);
     if (this.closed) return;
+    this.failure = error instanceof Error ? error : new Error(String(error));
     this.closed = true;
-    this.child?.kill();
-    if (!this.child) {
-      this.markEnded();
-      this.handlers.onEnd(error instanceof Error ? error : new Error(String(error)), this.stderrLines.join('\n'));
+    if (this.child) {
+      this.child.kill();
+      return;
     }
+    this.withdrawApprovals();
+    this.markEnded();
+    this.handlers.onEnd(this.failure, this.stderrLines.join('\n'));
   }
 }
 
@@ -308,10 +438,16 @@ export interface CodexModel {
   isDefault: boolean;
 }
 
-/** Runs `use` against a short-lived Codex app-server, after its handshake, then stops it. */
-async function withAppServer<T>(codexPath: string, cwd: string, use: (request: (method: string, params: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
-  const child = spawn(codexPath, ['app-server'], { cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+/** How long a short-lived app-server is given before it is stopped (see withAppServer). */
+const APP_SERVER_TIMEOUT_MS = 20_000;
+
+/** Runs `use` against a short-lived Codex app-server, after its handshake, then stops it; given up after APP_SERVER_TIMEOUT_MS. */
+async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: string, params: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
+  const child = spawn(launch.codexPath, ['app-server'], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdout.setEncoding('utf8');
+  // Read and dropped, so that a chatty stderr never fills its pipe; writes after an exit are not thrown.
+  child.stderr.resume();
+  child.stdin.on('error', () => undefined);
   const pending = new Map<number, (message: { result?: unknown; error?: { message?: string } }) => void>();
   let buffer = '';
   let next = 0;
@@ -330,10 +466,14 @@ async function withAppServer<T>(codexPath: string, cwd: string, use: (request: (
       }
     }
   });
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const exited = new Promise<never>((_, reject) => {
     child.on('error', reject);
     child.on('exit', (code) => reject(new Error(`Codex exited with code ${code}`)));
+    timer = setTimeout(() => reject(new Error('Codex did not answer in time')), APP_SERVER_TIMEOUT_MS);
   });
+  // Rejected after `use` is done (the stop below): nobody waits on it then.
+  exited.catch(() => undefined);
   const request = (method: string, params: unknown) =>
     Promise.race([
       new Promise<unknown>((resolve, reject) => {
@@ -348,13 +488,14 @@ async function withAppServer<T>(codexPath: string, cwd: string, use: (request: (
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`);
     return await use(request);
   } finally {
+    clearTimeout(timer);
     child.kill();
   }
 }
 
 /** The models Codex offers (`model/list`), as the model menu lists them. */
-export async function listCodexModels(codexPath: string, cwd: string): Promise<CodexModel[]> {
-  return withAppServer(codexPath, cwd, async (request) => {
+export async function listCodexModels(launch: CodexLaunch): Promise<CodexModel[]> {
+  return withAppServer(launch, async (request) => {
     const listed = (await request('model/list', {})) as { data?: { id: string; model?: string; displayName?: string; hidden?: boolean; supportedReasoningEfforts?: { reasoningEffort: string; description?: string }[]; defaultReasoningEffort?: string; isDefault?: boolean }[] };
     return (listed.data ?? [])
       .filter((model) => !model.hidden)
@@ -375,26 +516,28 @@ export interface CodexLimits {
 }
 
 /** The usage limits of the account Codex is signed in with, read through a short-lived app-server. */
-export async function readCodexLimits(codexPath: string, cwd: string): Promise<CodexLimits | null> {
-  return withAppServer(codexPath, cwd, async (request) => {
-    type Window = { usedPercent?: number; windowDurationMins?: number | null; resetsAt?: number | null } | null | undefined;
-    const read = (await request('account/rateLimits/read', {})) as { rateLimits?: { planType?: string | null; primary?: Window; secondary?: Window } | null };
-    const limits = read.rateLimits;
-    if (!limits) return null;
-    const windows = [limits.primary, limits.secondary].flatMap((window) =>
-      window && typeof window.usedPercent === 'number' ? [{ usedPercent: window.usedPercent, windowDurationMins: window.windowDurationMins ?? null, resetsAt: window.resetsAt ?? null }] : [],
-    );
-    return { planType: limits.planType ?? null, windows };
-  });
+export async function readCodexLimits(launch: CodexLaunch): Promise<CodexLimits | null> {
+  return withAppServer(launch, async (request) => limitsOf(await request('account/rateLimits/read', {})));
+}
+
+/** The limits in an `account/rateLimits/read` answer. */
+function limitsOf(answer: unknown): CodexLimits | null {
+  type Window = { usedPercent?: number; windowDurationMins?: number | null; resetsAt?: number | null } | null | undefined;
+  const limits = (answer as { rateLimits?: { planType?: string | null; primary?: Window; secondary?: Window } | null } | null)?.rateLimits;
+  if (!limits) return null;
+  const windows = [limits.primary, limits.secondary].flatMap((window) =>
+    window && typeof window.usedPercent === 'number' ? [{ usedPercent: window.usedPercent, windowDurationMins: window.windowDurationMins ?? null, resetsAt: window.resetsAt ?? null }] : [],
+  );
+  return { planType: limits.planType ?? null, windows };
 }
 
 /**
- * A saved Codex thread's turns and name, read through a short-lived app-server (`thread/read`): how
- * a Codex chat is drawn when opened from the history. The plugin reads no Codex file itself.
+ * A saved Codex thread's turns, read through a short-lived app-server (`thread/read`): how a Codex
+ * chat is drawn when opened from the history. The plugin reads no Codex file itself.
  */
-export async function readCodexThread(codexPath: string, threadId: string, cwd: string): Promise<{ turns: { items?: unknown[] }[]; name: string | null }> {
-  return withAppServer(codexPath, cwd, async (request) => {
-    const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: { items?: unknown[] }[]; name?: string | null } };
-    return { turns: read.thread?.turns ?? [], name: read.thread?.name ?? null };
+export async function readCodexThread(launch: CodexLaunch, threadId: string): Promise<{ items?: unknown[] }[]> {
+  return withAppServer(launch, async (request) => {
+    const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: { items?: unknown[] }[] } };
+    return read.thread?.turns ?? [];
   });
 }

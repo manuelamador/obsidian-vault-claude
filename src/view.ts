@@ -29,7 +29,7 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, sessionStamp, deleteSessionIfAny, entryBefore, formatDate, lastMessages, loadChat, messageDates, loadTranscript, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, sessionStamp, deleteSessionIfAny, entryBefore, formatDate, lastMessages, messageDates, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts } from './earlierTurns';
 import {
   filePathOf,
@@ -72,8 +72,7 @@ import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
-import { CodexSession, findCodex, readCodexThread } from './codexSession';
-import { codexTranscript, type CodexItem } from './codexEvents';
+import { CodexSession } from './codexSession';
 
 /** A chat's session: Claude Code's, or Codex's (see CodexSession), which has the same shape. */
 type ChatSession = ClaudeSession | CodexSession;
@@ -1034,8 +1033,9 @@ export class ChatView extends ItemView {
       attr: { rows: '3', placeholder: this.placeholderText() },
     });
     // The panel's own `/plan` (see send) beside Claude Code's commands, which leave it out.
+    // None in a Codex chat: Claude Code's commands would reach Codex as plain text.
     this.suggest = new CommandSuggest(footer, this.inputEl, () =>
-      this.plugin.commands.some((command) => command.name === 'plan') ? this.plugin.commands : [...this.plugin.commands, PLAN_COMMAND],
+      this.engine === 'codex' ? [] : this.plugin.commands.some((command) => command.name === 'plan') ? this.plugin.commands : [...this.plugin.commands, PLAN_COMMAND],
     );
     this.registerDomEvent(this.inputEl, 'keydown', (evt) => this.onInputKeydown(evt));
     this.registerDomEvent(this.inputEl, 'input', () => this.inputEdited());
@@ -2100,7 +2100,7 @@ export class ChatView extends ItemView {
         }
         if (message.type === 'system' && message.subtype === 'init' && entry.chatId !== message.session_id) {
           entry.chatId = message.session_id;
-          this.plugin.recordChat(message.session_id, entry.title ?? 'Untitled chat');
+          this.plugin.recordChat(message.session_id, entry.title ?? 'Untitled chat', undefined, entry.session instanceof CodexSession ? 'codex' : undefined);
           if (entry.start) this.adoptStart(message.session_id, entry.start);
           entry.start = null;
         } else if (message.type === 'stream_event') {
@@ -2369,8 +2369,6 @@ export class ChatView extends ItemView {
     const working = entry.busy || entry.approvals.length > 0;
     this.renderHistory(chat, working, read.readMs);
     this.showKnownContext(entry.chatId);
-    // Its process still runs: a fresh reading.
-    void this.refreshMeters();
     // The turn in progress, as drawn from the saved messages: the reply goes on in it.
     const unfinished = working ? this.unfinishedTurn : null;
     const drawnTools = new Map(this.tools);
@@ -2380,6 +2378,8 @@ export class ChatView extends ItemView {
     this.sessionToken = token;
     this.session = entry.session;
     entry.session.setHandlers(this.foregroundHandlers(token));
+    // Its process still runs: a fresh reading.
+    void this.refreshMeters();
     this.remoteUrl = entry.remoteUrl;
     this.updatePhoneButton();
     // Ids still waiting after a turn already passed them over are running as their own turn.
@@ -2482,12 +2482,13 @@ export class ChatView extends ItemView {
       this.newChat();
       this.closeBackgroundChat(id);
       void this.plugin.deleteChat(id);
-    });
+    }, this.engine === 'codex');
   }
 
   /** What the empty input says: the scratch chat's text warns that it does not keep. */
   private placeholderText(): string {
     if (this.scratch) return 'Ask something quick — this chat clears itself…';
+    if (this.engine === 'codex') return 'Ask Codex about this vault…';
     return this.mode === 'plan' ? 'Describe what to plan…' : 'Ask Claude about this vault…';
   }
 
@@ -2831,24 +2832,12 @@ export class ChatView extends ItemView {
     let chat: LoadedChat | null = null;
     if (id && root) {
       try {
-        chat = this.plugin.isCodexChat(id) ? await this.readCodexChat(id, root) : await loadChat(id, root);
+        chat = await this.plugin.loadAnyChat(id, root);
       } catch (error) {
         log('loading transcript failed', error);
       }
     }
     return this.chatGeneration === generation ? { chat, readMs: Math.round(performance.now() - started) } : null;
-  }
-
-  /** Codex chat `id`, read through Codex (see readCodexThread) and turned into the messages the panel draws. */
-  private async readCodexChat(id: string, root: string): Promise<LoadedChat | null> {
-    const codexPath = findCodex(this.plugin.settings.codexPath);
-    if (!codexPath) {
-      new Notice('Codex was not found: set its path under Settings → Vault Claude → Codex executable.');
-      return null;
-    }
-    const { turns } = await readCodexThread(codexPath, id, root);
-    const { transcript, edits } = codexTranscript(id, turns as { items?: CodexItem[] }[], root);
-    return { transcript: transcript as unknown as LoadedChat['transcript'], edits };
   }
 
   /**
@@ -3485,6 +3474,10 @@ export class ChatView extends ItemView {
   private async branch(upTo: string | undefined, newTab: boolean, start?: string, open = true, whole = false): Promise<string | null> {
     const source = this.chatId ?? this.resumeId;
     const root = this.plugin.vaultRoot();
+    if (this.engine === 'codex') {
+      new Notice('A Codex chat cannot be branched yet.');
+      return null;
+    }
     if (!source || !root) {
       new Notice('Nothing to branch yet.');
       return null;
@@ -3570,7 +3563,7 @@ export class ChatView extends ItemView {
   /** Links the notes chat `id`'s saved edits changed to it, as edits made now (see renderEdit). */
   private async linkChangedNotes(id: string, root: string): Promise<void> {
     try {
-      const { transcript, edits } = await loadChat(id, root);
+      const { transcript, edits } = await this.plugin.loadAnyChat(id, root);
       for (const file of savedChangedFiles(transcript, edits)) {
         const path = vaultRelative(file, root);
         if (path) this.plugin.linkNoteChat(path, id);
@@ -3636,7 +3629,7 @@ export class ChatView extends ItemView {
       return null;
     }
     try {
-      const transcript = await loadTranscript(id, root);
+      const { transcript } = await this.plugin.loadAnyChat(id, root);
       return { id, title: this.chatName ?? 'Untitled chat', date: formatDate(Date.now()).slice(0, 10), transcript };
     } catch (error) {
       log('loading transcript failed', error);
@@ -4063,7 +4056,7 @@ export class ChatView extends ItemView {
     // `/plan`, as in a terminal: the chat goes into Plan mode, and what follows is the message. Claude
     // Code takes the command only in a terminal, and answers "/plan isn't available in this environment".
     const typed = this.inputEl.value.trim();
-    const plan = /^\/plan(?=\s|$)/i.exec(typed);
+    const plan = this.engine === 'codex' ? null : /^\/plan(?=\s|$)/i.exec(typed);
     if (plan) {
       // Switching now would change the reply that is running, not only this message: it waits.
       if (this.busy) {
@@ -4304,15 +4297,17 @@ export class ChatView extends ItemView {
   /** The Codex session of a Codex chat (see CodexSession), started when needed; null, with a notice, without Codex or a vault folder. */
   private ensureCodexSession(): ChatSession | null {
     if (this.session) return this.session;
-    const codexPath = findCodex(this.plugin.settings.codexPath);
-    const cwd = this.plugin.vaultRoot();
-    if (!codexPath || !cwd) {
-      new Notice(codexPath ? 'Codex chats need the vault to be a folder on this computer.' : 'Codex was not found: set its path under Settings → Vault Claude → Codex executable.');
+    const launch = this.plugin.codexLaunch();
+    if (typeof launch === 'string') {
+      new Notice(launch);
       return null;
     }
     const token = {};
     this.sessionToken = token;
-    this.session = new CodexSession({ cwd, codexPath, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort }, this.foregroundHandlers(token));
+    this.session = new CodexSession(
+      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, denyRules: sessionDenyRules(this.plugin.settings) },
+      this.foregroundHandlers(token),
+    );
     return this.session;
   }
 
@@ -4339,10 +4334,14 @@ export class ChatView extends ItemView {
     } else if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);
     else this.planText.empty();
     for (const el of [this.modeMenu.el, this.fastButton, this.phoneButton]) if (codex) el.hide();
+    this.updatePlanCue();
     if (!codex) {
       this.modeMenu.el.show();
       this.phoneButton.show();
+      // Hidden in a Codex chat whose model has no efforts listed.
+      this.effortMenu.el.show();
       this.updateFastButton();
+      this.populateModelSelect();
       this.populateEffortSelect();
       return;
     }
@@ -5008,7 +5007,8 @@ export class ChatView extends ItemView {
   /** In Plan mode: a line above the input saying so, with a way back that approves nothing, a tinted input and its own placeholder. */
   private updatePlanCue(): void {
     if (!this.planEl) return;
-    const planning = this.mode === 'plan';
+    // Plan mode is Claude Code's: a Codex chat runs with Codex's own approvals.
+    const planning = this.mode === 'plan' && this.engine !== 'codex';
     this.inputEl.toggleClass('is-plan-mode', planning);
     if (!this.busy) this.inputEl.placeholder = this.placeholderText();
     this.planEl.toggle(planning);
@@ -5644,8 +5644,13 @@ export class ChatView extends ItemView {
         break;
       case 'result': {
         if (this.engine === 'codex' && this.chatId) this.plugin.touchCodexChat(this.chatId);
-        // Codex's limits read again after each of its replies, as Claude's plan usage is.
-        if (this.engine === 'codex') this.plugin.loadCodexLimits(true);
+        // Codex's limits read again after each of its replies, as Claude's plan usage is, by its own app-server.
+        if (this.session instanceof CodexSession) {
+          void this.session.readLimits().then(
+            (limits) => this.plugin.setCodexLimits(limits),
+            (error: unknown) => log('reading codex limits failed', error),
+          );
+        }
         this.setFastState(message.fast_mode_state, message.fast_mode_disabled_reason);
         for (const id of message.user_message_uuids ?? []) this.markDelivered(id);
         const turn = this.draw.turn;
@@ -7123,7 +7128,20 @@ export class ChatView extends ItemView {
    * reply is in progress has nothing to fork. The id is held until the session is deleted or kept, so
    * one left open when Obsidian quits is deleted at the next start.
    */
-  private async startSideSession(handlers: SessionHandlers, id: string, own: boolean): Promise<ClaudeSession | null> {
+  private async startSideSession(handlers: SessionHandlers, id: string, own: boolean): Promise<ChatSession | null> {
+    // Beside a Codex chat, Codex: a copy of the chat it does not save, which only reads.
+    if (this.engine === 'codex') {
+      const codex = this.plugin.codexLaunch();
+      if (typeof codex === 'string') {
+        new Notice(codex);
+        return null;
+      }
+      const chat = this.plugin.settings.sideChatContext === 'chat' ? (this.chatId ?? this.resumeId) : null;
+      return new CodexSession(
+        { ...codex, ...(chat ? { fork: chat } : {}), readOnly: true, developerInstructions: APPEND_SYSTEM_PROMPT + sideChatPrompt(chat !== null), model: this.codexModel, effort: this.codexEffort, denyRules: sessionDenyRules(this.plugin.settings) },
+        handlers,
+      );
+    }
     const launch = this.plugin.launchOrNotice();
     if (!launch) return null;
     const { settings } = this.plugin;
@@ -7168,12 +7186,15 @@ export class ChatView extends ItemView {
    * input, and no longer deleted at the next start. Until its process has ended, a panel opening it
    * from the history waits (see openKeptSideChat).
    */
-  private keepSideChat(id: string, unsent: string): void {
+  private keepSideChat(id: string, unsent: string): boolean {
+    // Codex does not save a side chat's thread (see startSideSession).
+    if (this.engine === 'codex') return false;
     this.sideForks.delete(id);
     this.plugin.releaseSideSession(id);
     this.plugin.recordChat(id, `Side chat: ${this.chatName ?? 'Untitled chat'}`);
     this.plugin.setChatDraft(id, { text: unsent });
     this.keptEnding.set(id, this.plugin.sessionEnding(id));
+    return true;
   }
 
   /**

@@ -4,12 +4,13 @@ import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { ModelInfo, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
-import { deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, loadTranscript, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem } from './history';
+import { deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
+import { codexTranscript, type CodexItem } from './codexEvents';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
-import { findCodex, listCodexModels, readCodexLimits, type CodexLimits, type CodexModel } from './codexSession';
+import { findCodex, listCodexModels, readCodexLimits, readCodexThread, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -30,7 +31,7 @@ import { chatMap, hubNotes, projectMap, withoutHubs } from './connections';
 import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type ProjectMapHost } from './connectionsView';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
-import { configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
+import { claudeEnv, configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
 import { summaryPrompt, summarySystem } from './chatSummary';
 import { prettyModel } from './usageDisplay';
 import { InlineEditModal } from './inlineEdit';
@@ -776,10 +777,12 @@ export default class VaultClaudePlugin extends Plugin {
   private async readSearchText(id: string): Promise<string> {
     const dir = this.vaultRoot();
     if (!dir) return '';
-    const stamp = await sessionStamp(id, dir);
+    // A Codex chat has no session file here: it changes when it was last active.
+    const codexAt = this.isCodexChat(id) ? this.chats.find((chat) => chat.id === id)?.at : undefined;
+    const stamp = codexAt !== undefined ? `codex:${codexAt}` : await sessionStamp(id, dir);
     const kept = this.searchTexts.get(id);
     if (stamp && kept?.stamp === stamp) return kept.text;
-    const text = (await loadTranscript(id, dir)).map(messageSearchText).filter(Boolean).join('\n');
+    const text = (await this.loadAnyChat(id, dir)).transcript.map(messageSearchText).filter(Boolean).join('\n');
     if (stamp) this.searchTexts.set(id, { stamp, text });
     else this.searchTexts.delete(id);
     return text;
@@ -1286,12 +1289,24 @@ export default class VaultClaudePlugin extends Plugin {
   private codexModelsLoading: Promise<void> | null = null;
 
   /** Reads Codex's models once (a short-lived app-server), then redraws the panels' menus. */
-  loadCodexModels(): void {
-    if (this.codexModels.length > 0 || this.codexModelsLoading) return;
+  /** How to run Codex (see CodexLaunch), with PATH fixed as for Claude Code; else why it cannot run. */
+  codexLaunch(): CodexLaunch | string {
     const codexPath = findCodex(this.settings.codexPath);
+    if (!codexPath) return 'Codex was not found: set its path under Settings → Vault Claude → Codex executable.';
     const cwd = this.vaultRoot();
-    if (!codexPath || !cwd) return;
-    this.codexModelsLoading = listCodexModels(codexPath, cwd)
+    if (!cwd) return 'Codex chats need the vault to be a folder on this computer.';
+    return { codexPath, cwd, env: claudeEnv(codexPath, extraPathEntries(this.settings.extraPath)) };
+  }
+
+  /** When the Codex models were last asked for: a failed listing is not asked again at once. */
+  private codexModelsTriedAt = 0;
+
+  loadCodexModels(): void {
+    if (this.codexModels.length > 0 || this.codexModelsLoading || Date.now() - this.codexModelsTriedAt < PLAN_CACHE_MS) return;
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return;
+    this.codexModelsTriedAt = Date.now();
+    this.codexModelsLoading = listCodexModels(launch)
       .then((models) => {
         this.codexModels = models;
         for (const view of this.chatViews()) view.codexModelsChanged();
@@ -1305,19 +1320,35 @@ export default class VaultClaudePlugin extends Plugin {
   codexLimitsFetchedAt = 0;
   private codexLimitsLoading: Promise<void> | null = null;
 
-  loadCodexLimits(force = false): void {
-    if (this.codexLimitsLoading || (!force && Date.now() - this.codexLimitsFetchedAt < PLAN_CACHE_MS)) return;
-    const codexPath = findCodex(this.settings.codexPath);
-    const cwd = this.vaultRoot();
-    if (!codexPath || !cwd) return;
-    this.codexLimitsLoading = readCodexLimits(codexPath, cwd)
-      .then((limits) => {
-        this.codexLimits = limits;
-        this.codexLimitsFetchedAt = Date.now();
-        for (const view of this.chatViews()) view.codexLimitsChanged();
-      })
+  /** When Codex's limits were last asked for, read or not: asked again at most every PLAN_CACHE_MS. */
+  private codexLimitsTriedAt = 0;
+
+  /** Codex's limits read again when stale, by a short-lived app-server (a chat's own reads them after each reply: see setCodexLimits). */
+  loadCodexLimits(): void {
+    if (this.codexLimitsLoading || Date.now() - this.codexLimitsTriedAt < PLAN_CACHE_MS) return;
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return;
+    this.codexLimitsTriedAt = Date.now();
+    this.codexLimitsLoading = readCodexLimits(launch)
+      .then((limits) => this.setCodexLimits(limits))
       .catch((error: unknown) => log('reading codex limits failed', error))
       .finally(() => (this.codexLimitsLoading = null));
+  }
+
+  setCodexLimits(limits: CodexLimits | null): void {
+    if (!limits) return;
+    this.codexLimits = limits;
+    this.codexLimitsFetchedAt = this.codexLimitsTriedAt = Date.now();
+    for (const view of this.chatViews()) view.codexLimitsChanged();
+  }
+
+  /** Chat `id`'s saved messages: from its session file, or, for a Codex chat, read through Codex (see readCodexThread). */
+  async loadAnyChat(id: string, root: string): Promise<LoadedChat> {
+    if (!this.isCodexChat(id)) return loadChat(id, root);
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') throw new Error(launch);
+    const { transcript, edits } = codexTranscript(id, (await readCodexThread(launch, id)) as { items?: CodexItem[] }[], launch.cwd);
+    return { transcript: transcript as unknown as LoadedChat['transcript'], edits };
   }
 
   /** Whether chat `id` is run by Codex (see CodexSession). */
@@ -1330,6 +1361,8 @@ export default class VaultClaudePlugin extends Plugin {
     const chat = this.chats.find((record) => record.id === id && record.engine === 'codex');
     if (!chat) return;
     chat.at = Date.now();
+    // To the front: the records kept past MAX_CHAT_RECORDS are the newest, and a Codex chat has no other record.
+    this.chats = [chat, ...this.chats.filter((record) => record !== chat)];
     this.listedAt = 0;
     this.saveSoon();
   }
@@ -1768,7 +1801,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (typeof launch === 'string') throw new Error(launch);
     if (!dir) throw new Error('the vault is not a folder on this computer');
     // More of it than a digest keeps: the summary is what is kept short.
-    const transcript = chatDigest(await loadTranscript(id, dir), SUMMARY_SOURCE_CHARS);
+    const transcript = chatDigest((await this.loadAnyChat(id, dir)).transcript, SUMMARY_SOURCE_CHARS);
     const text = await runOneShot(launch, { system: LINKED_SUMMARY_SYSTEM, prompt: `Conversation “${this.chatTitleOf(id)}”:\n\n${transcript}`, model: this.smallJobModel(), effort: 'low' }, () => undefined, signal);
     if (signal.aborted || !text.trim()) return;
     this.chatSummaries[id] = { text: text.trim(), at: Date.now() };
@@ -1855,7 +1888,7 @@ export default class VaultClaudePlugin extends Plugin {
       const found = new Map<string, { changed: string[]; sent: string[]; mentioned: string[] }>();
       await eachInParallel(items, async (item) => {
         try {
-          const { transcript, edits } = await loadChat(item.id, root);
+          const { transcript, edits } = await this.loadAnyChat(item.id, root);
           found.set(item.id, { changed: savedChangedFiles(transcript, edits), ...transcriptNotes(transcript) });
         } catch (error) {
           log('reading a chat for its connections failed', item.id, error);
@@ -1905,7 +1938,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (!root || changed.length === 0) return [];
     let still: Set<string>;
     try {
-      const { transcript, edits } = await loadChat(id, root);
+      const { transcript, edits } = await this.loadAnyChat(id, root);
       still = new Set(this.linkedPaths({ changed: savedChangedFiles(transcript, edits), sent: [], mentioned: [] }, root)[0].filter((path): path is string => path !== null));
     } catch (error) {
       log('reading a chat for its connections failed', id, error);
@@ -2864,7 +2897,7 @@ export default class VaultClaudePlugin extends Plugin {
     const id = params.chat;
     if (!id || !isChatId(id)) return;
     const dir = this.vaultRoot();
-    if (dir && (await sessionStamp(id, dir)) === null) {
+    if (dir && !this.isCodexChat(id) && (await sessionStamp(id, dir)) === null) {
       new Notice('Source chat not found on this computer: deleted, or saved on another computer or with the vault in another folder. The passage stays readable in the memo.');
       return;
     }
@@ -3063,8 +3096,9 @@ export default class VaultClaudePlugin extends Plugin {
       return false;
     }
     try {
-      // A Codex chat goes from the panel's records; its session stays in Codex's own store.
-      if (!this.isCodexChat(id)) await this.deleteWhenEnded(id);
+      // A Codex chat goes from the panel's records and listings; its session stays in Codex's own store.
+      if (this.isCodexChat(id)) this.unlist(id);
+      else await this.deleteWhenEnded(id);
     } catch (error) {
       log('deleting a chat failed', error);
       new Notice(`Could not delete the chat: ${errorText(error)}`);

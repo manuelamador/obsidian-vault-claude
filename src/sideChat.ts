@@ -8,7 +8,11 @@ import { imageFromBlob, pastedFiles, toImageBlock, type ImageAttachment } from '
 import { textBlocks, withQuote } from './chatText';
 import { hintAbove } from './hint';
 import { chipFor, renderChip } from './chip';
+import type { CodexSession } from './codexSession';
 import type { ClaudeSession, PermissionRequest, SessionHandlers, UserContent } from './session';
+
+/** A side chat's session: Claude Code's, or, beside a Codex chat, Codex's. */
+type SideSession = ClaudeSession | CodexSession;
 
 /** What a side chat needs from the panel. */
 export interface SideChatHost {
@@ -16,13 +20,13 @@ export interface SideChatHost {
    * Starts the side chat's session `id`, with these handlers: a new one, or with `own` that session
    * again (after its process failed); null when it cannot (no Claude Code, say).
    */
-  startSession(handlers: SessionHandlers, id: string, own: boolean): Promise<ClaudeSession | null>;
+  startSession(handlers: SessionHandlers, id: string, own: boolean): Promise<SideSession | null>;
   /** Draws reply Markdown into `el`, as the chat draws its replies, its components owned by `component`. */
   renderMarkdown(markdown: string, el: HTMLElement, component: Component): void;
   /** Deletes the side chat's own session, a copy made for it, when it is closed or started over. */
   deleteSession(id: string): void;
-  /** Keeps the side chat's session as a chat of its own: in the history at once, with `unsent` in its input. */
-  keep(id: string, unsent: string): void;
+  /** Keeps the side chat's session as a chat of its own: in the history at once, with `unsent` in its input; false when it cannot be kept. */
+  keep(id: string, unsent: string): boolean;
   /** Opens a kept session in a new tab, once its process has ended. */
   openKept(id: string): void;
   /** Whether ⌘↩ (Ctrl+Enter) sends rather than ↩, as in the chat's input. */
@@ -34,7 +38,7 @@ const READ_ONLY = 'A side chat only reads: it does not change the vault or the c
 
 /** One session of a side chat, from its start until it ends. */
 interface Run {
-  session: ClaudeSession | null;
+  session: SideSession | null;
   /** Its session id, chosen before it starts, so it can be deleted even if closed at once. */
   id: string;
   /** Claude Code has started it under that id, so its file exists and it can be kept or resumed. */
@@ -210,7 +214,10 @@ export class SideChat {
       return;
     }
     // What was typed and not sent goes with the conversation, to the kept chat's input; images do not.
-    this.host.keep(this.run.id, this.input.value);
+    if (!this.host.keep(this.run.id, this.input.value)) {
+      this.showStatus('A side chat beside a Codex chat cannot be kept: Codex does not save it.');
+      return;
+    }
     this.end('keep');
     this.clear();
     this.input.value = '';
@@ -299,7 +306,7 @@ export class SideChat {
    * what a failed one may have left is deleted. Null when it cannot start, or when the side chat
    * was closed or started over meanwhile.
    */
-  private async startRun(): Promise<ClaudeSession | null> {
+  private async startRun(): Promise<SideSession | null> {
     const last = this.run;
     const own = last?.started === true;
     const run: Run = { session: null, id: own && last ? last.id : randomUUID(), started: own, then: null };
