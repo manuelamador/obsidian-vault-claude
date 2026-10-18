@@ -603,6 +603,9 @@ export async function revertCodexThread(launch: CodexLaunch, threadId: string, m
     const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };
     const turn = codexTurnHolding(read.thread?.turns ?? [], messageId);
     if (!turn?.id) throw new Error('that message was not found in the Codex conversation');
+    // Codex removes whole turns: a message sent while it worked shares its turn with the one before.
+    const first = (turn.items ?? []).find((item) => item.type === 'userMessage');
+    if (first && first.id !== messageId && first.clientId !== messageId) throw new Error('this message was sent while Codex worked, in the same turn as the one before it. Remove from that one instead');
     // Codex reverts only a thread loaded in its process, and keeps it loaded until let go of.
     await request('thread/resume', { threadId, cwd: launch.cwd, excludeTurns: true });
     try {
@@ -628,6 +631,8 @@ export async function forkCodexThread(launch: CodexLaunch, threadId: string, upT
     const forked = (await request('thread/fork', { threadId, cwd: launch.cwd, excludeTurns: true, ...(lastTurnId ? { lastTurnId } : {}) })) as { thread?: { id?: string } };
     const id = forked.thread?.id;
     if (!id) throw new Error('Codex made no copy');
+    // Loaded here by the fork; the chat that opens it loads it in its own process.
+    await request('thread/unsubscribe', { threadId: id }).catch(() => undefined);
     return id;
   });
 }
