@@ -3443,6 +3443,11 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   renameChat(id: string, title: string): void {
+    // The listing kept, which the welcome's recent chats and chat titles read, until the next.
+    for (const item of this.lastListing ?? []) {
+      if (item.id === id) item.title = title;
+      for (const copy of item.copies ?? []) if (copy.id === id) copy.title = title;
+    }
     const chat = this.chats.find((record) => record.id === id);
     if (!chat || chat.title === title) return;
     chat.title = title;

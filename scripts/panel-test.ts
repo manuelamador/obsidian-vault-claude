@@ -4554,6 +4554,33 @@ async function main(): Promise<void> {
     }
 
     {
+      // A chat renamed: its row among the welcome's recent chats takes the new name, the scratch chat never listed.
+      const listing = [
+        { id: 'r1', title: 'read EKSimplex draft', updatedAt: 2, fromPanel: true },
+        { id: 's-listed', title: 'Meeting with Carlos Bolivar', updatedAt: 3, fromPanel: true },
+      ];
+      const stubPlugin = plugin as unknown as { listedChats: () => unknown; scratch: { id: string; usedAt: number } | null; renameChat(id: string, title: string): void };
+      const realListed = stubPlugin.listedChats;
+      const realRename = stubPlugin.renameChat;
+      stubPlugin.listedChats = () => listing;
+      stubPlugin.scratch = { id: 's-listed', usedAt: Date.now() };
+      stubPlugin.renameChat = (id: string, title: string) => {
+        for (const item of listing) if (item.id === id) item.title = title;
+      };
+      view.newChat();
+      stubPlugin.renameChat('r1', 'EKSimplex draft analysis');
+      view.onChatRenamed('r1', 'EKSimplex draft analysis');
+      const rows = [...root.querySelectorAll('.vc-welcome-recent-title')].map((el) => el.textContent).join(' | ');
+      stubPlugin.listedChats = realListed;
+      stubPlugin.renameChat = realRename;
+      stubPlugin.scratch = null;
+      view.newChat();
+      const renameOk = rows === 'EKSimplex draft analysis';
+      console.log(`welcome's recent chats after a rename: ${rows} -> ${renameOk}`);
+      if (!renameOk) process.exitCode = 1;
+    }
+
+    {
       // A report come back from a chat run in a new chat: a card at the end of the chat it reports to, to add to the message.
       const reportView = view as unknown as { chatId: string | null; reportsChanged(id: string): void; inputEl: HTMLTextAreaElement };
       view.newChat();

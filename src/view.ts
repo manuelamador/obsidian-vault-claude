@@ -2657,6 +2657,8 @@ export class ChatView extends ItemView {
     for (const entry of this.background) {
       if (entry.chatId === id) entry.title = title;
     }
+    // Its row among the recent chats, when the welcome is shown.
+    this.refreshWelcome();
   }
 
   /**
