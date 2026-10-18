@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { log } from './log';
 import { isChatId } from './memos';
+import type { CodexChoices } from './codexAccess';
 
 /** A chat started from the panel, kept in the plugin's data.json. */
 export interface ChatRecord {
@@ -16,6 +17,8 @@ export interface ChatRecord {
   engine?: 'codex';
   /** For a Codex chat, when it was last active (ms): Codex keeps its sessions in its own store, which the listing does not read. */
   at?: number;
+  /** For a Codex chat, its model, effort and permissions as chosen in the panel (see setCodexChoices). */
+  codex?: CodexChoices;
 }
 
 export interface HistoryItem {

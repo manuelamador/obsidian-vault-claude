@@ -150,6 +150,8 @@ async function main(): Promise<void> {
     codexLimitsFetchedAt: 0,
     loadCodexLimits: () => undefined,
     loadCodexModels: async () => undefined,
+    codexChoices: (): undefined => undefined,
+    setCodexChoices: () => undefined,
     codexModels: [],
     chatContext: {},
     setChatContext: () => undefined,

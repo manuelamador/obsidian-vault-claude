@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
-import { codexAccessModes, codexTurnAccess } from '../src/codexAccess';
+import { codexAccessModes, codexTurnAccess, readCodexChoices } from '../src/codexAccess';
 import { CodexSession, runCodexOneShot, stopCodexReader } from '../src/codexSession';
 
 import { launchIn } from './fakeCodex';
@@ -83,4 +83,10 @@ test('Codex permissions: each choice as Codex takes it, and Full access only whe
   assert.deepEqual(codexTurnAccess('full'), { sandboxPolicy: { type: 'dangerFullAccess' }, approvalPolicy: 'never', approvalsReviewer: 'user' });
   assert.deepEqual(Object.keys(codexAccessModes(false)), ['readOnly', 'ask', 'default', 'autoReview']);
   assert.equal('full' in codexAccessModes(true), true);
+});
+
+test("a Codex chat's choices are read back as kept, what is not one left out", () => {
+  assert.deepEqual(readCodexChoices({ model: 'gpt-5.5', effort: 'high', access: 'ask' }), { model: 'gpt-5.5', effort: 'high', access: 'ask' });
+  assert.deepEqual(readCodexChoices({ model: '', effort: 3, access: 'everything' }), {});
+  assert.equal(readCodexChoices(null), undefined);
 });

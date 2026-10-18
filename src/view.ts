@@ -2205,6 +2205,7 @@ export class ChatView extends ItemView {
           // The scratch chat, gone to the background before it started: still the scratch chat.
           if (entry.scratch) this.plugin.setScratch(message.session_id, engine);
           else this.plugin.recordChat(message.session_id, entry.title ?? 'Untitled chat', undefined, engine);
+          if (entry.codex) this.plugin.setCodexChoices(message.session_id, entry.codex);
           if (entry.reportTo) this.plugin.expectReport(message.session_id, entry.reportTo);
           entry.reportTo = undefined;
           if (entry.start) this.adoptStart(message.session_id, entry.start);
@@ -2909,6 +2910,11 @@ export class ChatView extends ItemView {
     // A Codex chat goes on in Codex (see ensureCodexSession).
     if (this.plugin.isCodexChat(item.id)) {
       this.engine = 'codex';
+      // As it was left: the model, effort and permissions chosen for it.
+      const choices = this.plugin.codexChoices(item.id);
+      this.codexModel = choices?.model;
+      this.codexEffort = choices?.effort;
+      this.codexAccess = choices?.access ?? this.plugin.settings.codexAccess;
       this.applyEngine();
     }
     this.messagesEl.empty();
@@ -5461,7 +5467,13 @@ export class ChatView extends ItemView {
     this.codexAccess = access;
     this.showMode();
     if (this.session instanceof CodexSession) this.session.setAccess(access);
+    this.saveCodexChoices();
     if (previous !== access) this.renderSettingLine(`Codex permissions: ${codexAccessLabel(access)} · ${codexAccessDetail(access)}${this.busy ? ', from the next message' : ''}`);
+  }
+
+  /** A Codex chat's model, effort and permissions, kept with its record to reopen it with (see setCodexChoices). */
+  private saveCodexChoices(): void {
+    if (this.engine === 'codex' && this.chatId) this.plugin.setCodexChoices(this.chatId, { model: this.codexModel, effort: this.codexEffort, access: this.codexAccess });
   }
 
   /** Changes of permission mode asked for (see changeMode): only the latest may undo itself. */
@@ -5751,6 +5763,7 @@ export class ChatView extends ItemView {
   private async changeEffort(value: string): Promise<void> {
     if (this.engine === 'codex') {
       this.codexEffort = value || undefined;
+      this.saveCodexChoices();
       await this.session?.setEffort((this.codexEffort ?? null) as never);
       return this.applyEngine();
     }
@@ -5783,6 +5796,7 @@ export class ChatView extends ItemView {
       // An effort the new model does not offer goes back to its default.
       const model = this.plugin.codexModels.find((each) => each.id === this.codexModel);
       if (this.codexEffort && model && !model.efforts.some((effort) => effort.value === this.codexEffort)) this.codexEffort = undefined;
+      this.saveCodexChoices();
       await this.session?.setModel(this.codexModel);
       await this.session?.setEffort((this.codexEffort ?? null) as never);
       return this.applyEngine();
@@ -6084,9 +6098,13 @@ export class ChatView extends ItemView {
             const started = this.chatId === null;
             const start: ChatStart = started ? this.startOf() : { state: { ...this.projectStateNow() }, chats: [], notes: [] };
             this.chatId = message.session_id;
-            if (this.scratch) this.plugin.setScratch(message.session_id, this.engine === 'codex' ? 'codex' : undefined);
+            if (this.scratch) {
+              this.plugin.setScratch(message.session_id, this.engine === 'codex' ? 'codex' : undefined);
+              this.saveCodexChoices();
+            }
             else {
               this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf, this.engine === 'codex' ? 'codex' : undefined);
+              this.saveCodexChoices();
               if (this.reportTo) this.plugin.expectReport(message.session_id, this.reportTo);
               this.reportTo = null;
               this.plugin.adoptProjectState(message.session_id, start.state);
@@ -7218,6 +7236,7 @@ export class ChatView extends ItemView {
       const title = first ? chatTitle(first) : 'Untitled chat';
       this.setChatTitle(title);
       this.plugin.recordChat(id, title, undefined, this.engine === 'codex' ? 'codex' : undefined);
+      this.saveCodexChoices();
       this.titleFromClaude = false;
       void this.refreshTitle();
     }

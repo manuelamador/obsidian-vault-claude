@@ -14,6 +14,20 @@ const ACCESS: Record<CodexAccess, { label: string; short: string; detail: string
   full: { label: 'Full access', short: 'Full', detail: 'Codex runs anything, anywhere, without asking' },
 };
 
+/** A Codex chat's model, effort and permissions as chosen in the panel, kept with its record to reopen it with; none, the settings' defaults. */
+export interface CodexChoices {
+  model?: string;
+  effort?: string;
+  access?: CodexAccess;
+}
+
+/** `value` as CodexChoices, what is not one left out (a hand-edited data.json). */
+export function readCodexChoices(value: unknown): CodexChoices | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { model, effort, access } = value as Record<string, unknown>;
+  return { ...(typeof model === 'string' && model ? { model } : {}), ...(typeof effort === 'string' && effort ? { effort } : {}), ...(isCodexAccess(access) ? { access } : {}) };
+}
+
 export function isCodexAccess(value: unknown): value is CodexAccess {
   return typeof value === 'string' && value in ACCESS;
 }
