@@ -4275,11 +4275,30 @@ export class ChatView extends ItemView {
   private renderUserBubble(text: string, chips: Chip[], parent: HTMLElement = this.draw.parent, uuid?: string): HTMLElement {
     const bubble = parent.createDiv({ cls: 'vc-user' });
     if (uuid) bubble.dataset.uuid = uuid;
+    // Left of it, shown when you point at it.
+    const actions = bubble.createDiv({ cls: 'vc-user-actions' });
     // Copy, move and remove from here on cut Claude Code's session file: not for a Codex chat.
     if (uuid && this.engine !== 'codex') {
-      const copy = bubble.createEl('button', { cls: 'clickable-icon vc-user-action', attr: { 'aria-label': 'Copy, move or remove from here on' } });
-      setIcon(copy, 'arrow-down-from-line');
-      copy.addEventListener('click', (evt) => this.onMessageMenu(evt, uuid, text));
+      const menu = actions.createEl('button', { cls: 'clickable-icon vc-user-action', attr: { 'aria-label': 'Copy, move or remove from here on' } });
+      setIcon(menu, 'arrow-down-from-line');
+      menu.addEventListener('click', (evt) => this.onMessageMenu(evt, uuid, text));
+    }
+    // The message as sent, all of it however folded, without its attachments.
+    if (text) {
+      const copy = actions.createEl('button', { cls: 'clickable-icon vc-user-action vc-user-copy', attr: { 'aria-label': 'Copy message' } });
+      setIcon(copy, 'copy');
+      copy.addEventListener('click', () => {
+        navigator.clipboard.writeText(text).then(
+          () => {
+            setIcon(copy, 'check');
+            window.setTimeout(() => setIcon(copy, 'copy'), 1500);
+          },
+          (error: unknown) => {
+            log('copying the message failed', error);
+            new Notice('Could not copy the message.');
+          },
+        );
+      });
     }
     if (text) {
       bubble.createDiv({ cls: 'vc-user-text', text });

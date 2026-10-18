@@ -2770,7 +2770,7 @@ async function main(): Promise<void> {
       const copiedPrompts = (await loadTranscript(fromId, '/tmp')).filter((m) => m.type === 'user' && typeof (m.message as { content?: unknown }).content === 'string').map((m) => (m.message as { content: string }).content);
       const fromLinks = plugin.noteLinks.slice(linksBefore).filter((link) => !link.endsWith('(kept back)'));
       const copiedFrom =
-        bubbleButtons.join() === 'Copy, move or remove from here on,Copy, move or remove from here on' &&
+        bubbleButtons.join() === 'Copy, move or remove from here on,Copy message,Copy, move or remove from here on,Copy message' &&
         messageMenu.join('|') === 'Copy from here on to a new chat|Move from here on to a new chat|Send this message to another chat…|Remove from here on' &&
         JSON.stringify(recordedChats) === JSON.stringify([`${fromId}:Something else entirely`]) &&
         JSON.stringify(copiedPrompts) === JSON.stringify(['Something else entirely']) &&

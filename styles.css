@@ -777,16 +777,22 @@
   white-space: pre-wrap;
 }
 
-/* Left of a message of yours, shown when you point at it: copy the chat from it on to a new chat. */
+/* Left of a message of yours, shown when you point at it: its menu (copy, move or remove from here on), and Copy message. */
 .vc-user {
   position: relative;
 }
 
-.vc-user .vc-user-action {
+.vc-user-actions {
   position: absolute;
   top: 0;
   right: 100%;
   margin-right: var(--size-2-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vc-user .vc-user-action {
   padding: 2px;
   opacity: 0;
   transition: opacity 100ms ease;
