@@ -79,12 +79,15 @@ export function accountErrorText(error: unknown): string | null {
   }
 }
 
+/** A `/compact` with no instructions, which shows no bubble (see promptBubble). */
+export const COMPACT_ONLY = /^\/compact\s*$/;
+
 export const COMPACTION_DETAIL = 'From here on, Claude works from a summary of the earlier conversation.';
 
 /**
  * What a prompt shows in the chat: its bubble's text and chips (images, selections, mentions);
  * 'stopped' for an interruption, which shows as a notice; null when it shows nothing (a background-
- * task notice on its own, command output, a caveat). Its task notices are drawn apart from this.
+ * task notice on its own, command output, a caveat, a plain `/compact`). Its task notices are drawn apart from this.
  */
 export function promptBubble(raw: string, images: Chip[]): { text: string; chips: Chip[] } | 'stopped' | null {
   if (raw.includes('<task-notification>')) {
@@ -95,6 +98,8 @@ export function promptBubble(raw: string, images: Chip[]): { text: string; chips
   const chips = [...images, ...attachments];
   if (chips.length > 0) return { text, chips };
   if (!text || /^<(local-command-stdout|local-command-stderr|system-reminder)>/.test(text) || text.startsWith('Caveat:')) return null;
+  // A plain `/compact`: the divider the compaction leaves says it (see compactionText).
+  if (COMPACT_ONLY.test(text)) return null;
   return text.startsWith('[Request interrupted') ? 'stopped' : { text, chips };
 }
 

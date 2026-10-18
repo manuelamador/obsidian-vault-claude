@@ -9,6 +9,9 @@ test('a message shows a bubble unless it is a tool result, command output, an in
   assert.equal(bubbleOf(message('user', [{ type: 'tool_result', tool_use_id: 't', content: 'x' }])), null);
   assert.equal(bubbleOf(prompt('<local-command-stdout>ok</local-command-stdout>')), null);
   assert.equal(bubbleOf(prompt('[Request interrupted by user]')), null);
+  // A plain `/compact`, as Claude Code saves it, shows only as the compaction's divider; with instructions it shows.
+  assert.equal(bubbleOf(prompt('<command-name>/compact</command-name>\n  <command-message>compact</command-message>\n  <command-args></command-args>')), null);
+  assert.deepEqual(bubbleOf(prompt('<command-name>/compact</command-name><command-args>keep the plan</command-args>')), { text: '/compact keep the plan', chips: [] });
   const notice = '<task-notification><task-id>1</task-id><status>completed</status><summary>done</summary></task-notification>';
   assert.equal(bubbleOf(prompt(notice)), null);
   assert.deepEqual(bubbleOf(prompt(`${notice}\nand a question`)), { text: 'and a question', chips: [] });

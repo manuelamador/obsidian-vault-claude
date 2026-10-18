@@ -91,6 +91,7 @@ import {
   accountErrorText,
   compactionText,
   messagePrompt,
+  COMPACT_ONLY,
   promptBubble,
   lineRange,
   noticeHeader,
@@ -4442,6 +4443,8 @@ export class ChatView extends ItemView {
     const queued = this.busy;
     // A queued message may be saved folded into the reply rather than under its own id: no copy from it.
     const bubble = queued ? this.drawQueued(text, chips) : this.renderUserBubble(text, chips, this.messagesEl, uuid);
+    // Drawn but hidden, as it is once the chat is drawn again (see promptBubble): the divider says it.
+    if (COMPACT_ONLY.test(text)) bubble.hide();
     if (queued) {
       this.pending.set(uuid, { bubble, running: false, id: uuid, text, chips });
       this.scrollToBottom(true);
