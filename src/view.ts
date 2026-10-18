@@ -73,7 +73,7 @@ import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
 import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
-import { CodexSession } from './codexSession';
+import { CodexSession, forkCodexThread, revertCodexThread, type CodexModel } from './codexSession';
 
 /** A chat's session: Claude Code's, or Codex's (see CodexSession), which has the same shape. */
 type ChatSession = ClaudeSession | CodexSession;
@@ -2527,6 +2527,8 @@ export class ChatView extends ItemView {
       this.beginTurn(entry.turnPrompts, unfinished);
       // The turn's time so far, not from when it was shown again.
       if (entry.turnStartedAt > 0) this.turnStartedAt = entry.turnStartedAt;
+      // Shown at once, not from the timer's next tick.
+      this.activityTime?.setText(formatDuration(Date.now() - this.turnStartedAt));
       // Its calls still running go on: drawn ones are shown running again, and the rest (a
       // subagent's) are followed, so that an edit finishing now is shown and links its notes.
       for (const [id, call] of entry.toolCalls) {
@@ -3251,8 +3253,9 @@ export class ChatView extends ItemView {
    * that is a tool call (a copy ending on a call with no result is not a finished conversation).
    */
   private setBranchPoint(turn: HTMLElement, blocks: { type?: string }[], uuid: string): void {
-    // Branching copies Claude Code's session file: a Codex chat has none to copy.
-    if (this.engine === 'codex' || blocks.some((block) => block.type === 'tool_use')) delete turn.dataset.branchUuid;
+    // Codex copies whole turns (see forkCodexThread): any of the reply's items names its turn.
+    if (this.engine === 'codex') turn.dataset.branchUuid = uuid;
+    else if (blocks.some((block) => block.type === 'tool_use')) delete turn.dataset.branchUuid;
     else turn.dataset.branchUuid = uuid;
   }
 
@@ -3434,6 +3437,14 @@ export class ChatView extends ItemView {
   /** A message of yours, `uuid`: copy it and what follows to a new chat, move it there or to another chat, or remove it from here on. */
   private onMessageMenu(evt: MouseEvent, uuid: string, text: string): void {
     const menu = new Menu();
+    // Codex copies a conversation from its start only: no copy or move from a message on.
+    if (this.engine === 'codex') {
+      menu.addItem((item) => item.setTitle('Send this message to another chat…').setIcon('send').onClick(() => void this.sendToOtherChat(uuid, text)));
+      menu.addSeparator();
+      menu.addItem((item) => item.setTitle('Remove from here on').setIcon('trash-2').setWarning(true).onClick(() => this.confirmRemoveFrom(uuid)));
+      menu.showAtMouseEvent(evt);
+      return;
+    }
     menu.addItem((item) => item.setTitle('Copy from here on to a new chat').setIcon('copy-plus').onClick(() => void this.branch(undefined, true, uuid)));
     menu.addItem((item) => item.setTitle('Move from here on to a new chat').setIcon('square-arrow-out-up-right').onClick(() => this.moveToNewChat(uuid)));
     menu.addItem((item) => item.setTitle('Send this message to another chat…').setIcon('send').onClick(() => void this.sendToOtherChat(uuid, text)));
@@ -3503,7 +3514,8 @@ export class ChatView extends ItemView {
   private confirmRemoveFrom(uuid: string): void {
     const removal = this.removalFrom(uuid);
     if (!removal) return;
-    new ConfirmModal(this.app, 'Remove from here on', `This removes ${this.removalWords(removal)} For 10 seconds afterwards, Undo in the notice at the top right puts it back.`, 'Remove', () => void this.removeFrom(removal.id, uuid, true)).open();
+    const after = this.engine === 'codex' ? 'Codex keeps no copy of what it removes, so it cannot be put back.' : 'For 10 seconds afterwards, Undo in the notice at the top right puts it back.';
+    new ConfirmModal(this.app, 'Remove from here on', `This removes ${this.removalWords(removal)} ${after}`, 'Remove', () => void this.removeFrom(removal.id, uuid, true)).open();
   }
 
   /**
@@ -3515,6 +3527,7 @@ export class ChatView extends ItemView {
    * move's copy still refers to it, and it stays. Whether it was removed.
    */
   private async removeFrom(id: string, uuid: string, reopen: boolean, copy?: MovedCopy): Promise<boolean> {
+    if (this.engine === 'codex') return this.removeCodexFrom(id, uuid, reopen);
     const root = this.plugin.vaultRoot();
     if (!root) return false;
     // Checked again: the chat may have changed while the dialog was open, or a copy was made.
@@ -3567,6 +3580,45 @@ export class ChatView extends ItemView {
       });
     });
     new Notice(notice, REMOVAL_UNDO_MS);
+    return true;
+  }
+
+  /**
+   * removeFrom for a Codex chat: its process ends, Codex removes the turn holding message `uuid` and
+   * every later one (see revertCodexThread), and the chat is opened again (unless `reopen` is false).
+   * Nothing to undo: Codex keeps no copy of what it removed. Whether it was removed.
+   */
+  private async removeCodexFrom(id: string, uuid: string, reopen: boolean): Promise<boolean> {
+    const blocked = this.chatId === id ? this.cutBlocked(id) : 'The chat is no longer on screen.';
+    if (blocked) {
+      new Notice(`Not removed: ${blocked}`);
+      return false;
+    }
+    const launch = this.plugin.codexLaunch();
+    if (typeof launch === 'string') {
+      new Notice(`Not removed: ${launch}`);
+      return false;
+    }
+    const item: HistoryItem = { id, title: this.chatName ?? 'Untitled chat', updatedAt: Date.now(), fromPanel: true, engine: 'codex' };
+    // The notes the part removed changed, read while it is still on screen.
+    const changed = this.removalFrom(uuid)?.notes ?? [];
+    // Its process ends first: Codex would go on from the conversation it holds.
+    this.newChat();
+    await this.plugin.processesEnded(id);
+    try {
+      await revertCodexThread(launch, id, uuid);
+    } catch (error) {
+      log('removing from a message failed', error);
+      new Notice(`Could not remove it: ${errorText(error)}`);
+      await this.openChat(item);
+      return false;
+    }
+    log('removed from a message', { chat: id, from: uuid, engine: 'codex' });
+    await this.plugin.unlinkRemovedEdits(id, changed);
+    // The context a project sent may have gone with it: sent again with the next message.
+    this.plugin.contextLeft(id, { sent: true, summary: true });
+    if (reopen) await this.openChat(item);
+    new Notice(`Removed from “${item.title}”.`);
     return true;
   }
 
@@ -3651,7 +3703,7 @@ export class ChatView extends ItemView {
         };
         const removal = this.chatId ? this.removalFrom(uuid) : null;
         if (!removal) return void send(false);
-        new ChoiceModal(this.app, `Send to “${target.title}”`, `Its text goes into that chat's input. Removing it here as well takes ${this.removalWords(removal)}`, [
+        new ChoiceModal(this.app, `Send to “${target.title}”`, `Its text goes into that chat's input. Removing it here as well takes ${this.removalWords(removal)}${this.engine === 'codex' ? ' Codex cannot put it back.' : ''}`, [
           ['Remove here and send', () => void send(true)],
           ['Send, keep it here', () => void send(false)],
         ]).open();
@@ -3683,8 +3735,7 @@ export class ChatView extends ItemView {
         new Notice('The scratch chat is now a chat of its own; the next scratch chat starts afresh.');
         return source;
       }
-      new Notice('A Codex chat cannot be branched yet.');
-      return null;
+      return this.branchCodex(source, upTo, newTab, start, open, whole);
     }
     if (!source || !root) {
       new Notice('Nothing to branch yet.');
@@ -3735,6 +3786,57 @@ export class ChatView extends ItemView {
       return null;
     }
     await target.openChat({ id, title, updatedAt: Date.now(), fromPanel: true }, from);
+    return id;
+  }
+
+  /**
+   * branch for a Codex chat: Codex copies the conversation up to and including the turn holding
+   * reply `upTo`, or all of it (see forkCodexThread). It copies from the start only: not from message
+   * `start` on. The copy goes on with this chat's model, effort and permissions. Its id; null when none was made.
+   */
+  private async branchCodex(source: string | null, upTo: string | undefined, newTab: boolean, start: string | undefined, open: boolean, whole: boolean): Promise<string | null> {
+    if (start) {
+      new Notice('A Codex chat can be copied up to a reply, not from a message on.');
+      return null;
+    }
+    if (!source) {
+      new Notice('Nothing to branch yet.');
+      return null;
+    }
+    const launch = this.plugin.codexLaunch();
+    if (typeof launch === 'string') {
+      new Notice(`Could not branch this chat: ${launch}`);
+      return null;
+    }
+    // While Codex works, up to the last finished reply: the turn running is left out.
+    if (!upTo && this.busy && !whole) {
+      const finished = this.messagesEl.querySelectorAll<HTMLElement>('.vc-turn.has-branch');
+      upTo = finished[finished.length - 1]?.dataset.branchUuid;
+      if (!upTo) {
+        new Notice('Nothing to branch yet: Codex has not finished a reply in this chat.');
+        return null;
+      }
+    }
+    const from: BranchSource = { title: this.chatName ?? 'Untitled chat', mode: this.mode, modelOverride: this.modelOverride, effortOverride: this.effortOverride, scratch: false };
+    const title = branchTitle(from.title);
+    let id: string;
+    try {
+      id = await forkCodexThread(launch, source, upTo);
+    } catch (error) {
+      log('branching failed', error);
+      new Notice(`Could not branch this chat: ${errorText(error)}`);
+      return null;
+    }
+    log('branched chat', { from: source, to: id, upTo: upTo ?? null, engine: 'codex' });
+    this.plugin.recordChat(id, title, undefined, 'codex');
+    this.plugin.setCodexChoices(id, { model: this.codexModel, effort: this.codexEffort, access: this.codexAccess });
+    if (!open) return id;
+    const target = newTab ? await this.plugin.openChatTab(this.leaf) : this;
+    if (!target) {
+      new Notice('Could not open a new tab. The branch is in the chat history.');
+      return null;
+    }
+    await target.openChat({ id, title, updatedAt: Date.now(), fromPanel: true, engine: 'codex' }, from);
     return id;
   }
 
@@ -4277,9 +4379,10 @@ export class ChatView extends ItemView {
     if (uuid) bubble.dataset.uuid = uuid;
     // Left of it, shown when you point at it.
     const actions = bubble.createDiv({ cls: 'vc-user-actions' });
-    // Copy, move and remove from here on cut Claude Code's session file: not for a Codex chat.
-    if (uuid && this.engine !== 'codex') {
-      const menu = actions.createEl('button', { cls: 'clickable-icon vc-user-action', attr: { 'aria-label': 'Copy, move or remove from here on' } });
+    // Copy, move, send or remove from here on (a Codex chat's menu offers what Codex can do: see onMessageMenu).
+    if (uuid) {
+      const label = this.engine === 'codex' ? 'Send, or remove from here on' : 'Copy, move or remove from here on';
+      const menu = actions.createEl('button', { cls: 'clickable-icon vc-user-action', attr: { 'aria-label': label } });
       setIcon(menu, 'arrow-down-from-line');
       menu.addEventListener('click', (evt) => this.onMessageMenu(evt, uuid, text));
     }
@@ -4741,7 +4844,7 @@ export class ChatView extends ItemView {
     const token = {};
     this.sessionToken = token;
     this.session = new CodexSession(
-      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, denyRules: sessionDenyRules(this.plugin.settings) },
+      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, fast: this.fastMode, denyRules: sessionDenyRules(this.plugin.settings) },
       this.foregroundHandlers(token),
     );
     return this.session;
@@ -4799,13 +4902,13 @@ export class ChatView extends ItemView {
       this.plugin.loadCodexLimits();
     } else if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);
     else this.planText.empty();
-    for (const el of [this.fastButton, this.phoneButton]) if (codex) el.hide();
+    if (codex) this.phoneButton.hide();
     this.populateModeSelect();
+    this.updateFastButton();
     if (!codex) {
       this.phoneButton.show();
       // Hidden in a Codex chat whose model has no efforts listed.
       this.effortMenu.el.show();
-      this.updateFastButton();
       this.populateModelSelect();
       this.populateEffortSelect();
       return;
@@ -4829,6 +4932,12 @@ export class ChatView extends ItemView {
   }
 
   /** Codex's models were read: a Codex chat's menus list them. */
+  /** The Codex model the chat runs, as Codex lists it: the one chosen, else Codex's default; none before the models are read. */
+  private codexModelInfo(): CodexModel | undefined {
+    const models = this.plugin.codexModels;
+    return models.find((model) => model.id === this.codexModel) ?? (this.codexModel ? undefined : models.find((model) => model.isDefault));
+  }
+
   codexModelsChanged(): void {
     if (this.engine === 'codex') this.applyEngine();
   }
@@ -5836,6 +5945,11 @@ export class ChatView extends ItemView {
       // An effort the new model does not offer goes back to its default.
       const model = this.plugin.codexModels.find((each) => each.id === this.codexModel);
       if (this.codexEffort && model && !model.efforts.some((effort) => effort.value === this.codexEffort)) this.codexEffort = undefined;
+      // Fast mode, which the new model does not offer, goes off.
+      if (this.fastMode && this.codexModelInfo()?.fast === false) {
+        this.fastMode = false;
+        await this.session?.setFastMode(false);
+      }
       this.saveChatChoices();
       await this.session?.setModel(this.codexModel);
       await this.session?.setEffort((this.codexEffort ?? null) as never);
@@ -5887,7 +6001,14 @@ export class ChatView extends ItemView {
   /** The fast-mode button: shown for a model that supports fast mode (or while it is on); lit while it runs. */
   private updateFastButton(): void {
     if (!this.fastButton) return;
-    if (this.engine === 'codex') return void this.fastButton.hide();
+    if (this.engine === 'codex') {
+      // Offered where the chat's model has Codex's fast tier (see CodexModel.fast).
+      this.fastButton.toggle(this.codexModelInfo()?.fast === true || this.fastMode);
+      this.fastButton.toggleClass('is-on', this.fastMode);
+      this.fastButton.toggleClass('is-blocked', false);
+      this.fastButton.setAttr('aria-label', this.fastMode ? 'Fast mode is on (click to turn it off)' : 'Fast mode: faster output from the same model, using more of your Codex limits');
+      return;
+    }
     const chosen = this.chosenModelInfo();
     this.fastButton.toggle(chosen?.supportsFastMode === true || this.fastMode);
     const blocked = this.fastMode && this.fastState && this.fastState.state !== 'on' ? fastModeBlock(this.fastState) : null;
@@ -6056,7 +6177,7 @@ export class ChatView extends ItemView {
       plan: this.plugin.planUsage,
       planFetchedAt: this.plugin.planFetchedAt,
       ...(this.engine === 'codex' ? { codex: { limits: this.plugin.codexLimits, fetchedAt: this.plugin.codexLimitsFetchedAt } } : {}),
-      ...(this.engine === 'claude' && !this.busy && (this.chatId ?? this.resumeId) ? { compact: () => void this.compactNow() } : {}),
+      ...(!this.busy && (this.chatId ?? this.resumeId) ? { compact: () => void this.compactNow() } : {}),
     });
   }
 
@@ -6065,6 +6186,14 @@ export class ChatView extends ItemView {
     this.usageCard.hide();
     if (this.busy) {
       new Notice('Claude is working: compact once the reply has finished.');
+      return;
+    }
+    // Codex compacts on its own request, run as a turn (see CodexSession.compact).
+    if (this.engine === 'codex') {
+      const session = this.ensureSession();
+      if (!(session instanceof CodexSession)) return;
+      this.beginTurn([]);
+      session.compact();
       return;
     }
     const typed = this.inputEl.value;

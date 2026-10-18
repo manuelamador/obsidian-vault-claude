@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { codexItemCompleted, codexItemStarted, codexTranscript, codexTurnResult, diffHunks } from '../src/codexEvents';
-import { codexInput, deniedCommand } from '../src/codexSession';
+import { codexInput, codexTurnHolding, deniedCommand } from '../src/codexSession';
 
 test('a Codex command is drawn as a Bash call and its output as the result', () => {
   const started = codexItemStarted('t', { type: 'commandExecution', id: 'c1', command: 'ls' });
@@ -81,4 +81,25 @@ test('a saved Codex message keeps its images, an image-only one included', () =>
     [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } }],
     [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'BBB' } }, { type: 'text', text: 'see' }],
   ]);
+});
+
+test("a Codex message or reply finds its turn: by the message's id, the id the panel sent it with, or a call's item", () => {
+  const turns = [
+    { id: 't1', items: [{ id: 'm1', type: 'userMessage', clientId: 'panel-1' }, { id: 'a1', type: 'agentMessage' }] },
+    { id: 't2', items: [{ id: 'm2', type: 'userMessage', clientId: null }, { id: 'c2', type: 'commandExecution' }, { id: 'f2', type: 'fileChange' }] },
+  ];
+  assert.equal(codexTurnHolding(turns, 'm2')?.id, 't2');
+  assert.equal(codexTurnHolding(turns, 'panel-1')?.id, 't1');
+  assert.equal(codexTurnHolding(turns, 'c2:use')?.id, 't2');
+  assert.equal(codexTurnHolding(turns, 'f2:1')?.id, 't2');
+  assert.equal(codexTurnHolding(turns, 'gone'), undefined);
+});
+
+test('a Codex compaction is drawn as the divider Claude Code leaves, live and saved alike', () => {
+  const [live] = codexItemCompleted('s', { type: 'contextCompaction', id: 'k1' }) as unknown as { type: string; subtype: string; message: { subtype: string } }[];
+  assert.equal(live.type, 'system');
+  assert.equal(live.subtype, 'compact_boundary');
+  assert.equal(live.message.subtype, 'compact_boundary');
+  const { transcript } = codexTranscript('s', [{ items: [{ type: 'contextCompaction', id: 'k1' }] }]);
+  assert.equal((transcript[0] as unknown as { type: string }).type, 'system');
 });

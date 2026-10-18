@@ -57,7 +57,7 @@ test('a one-off request to Codex is not held up by a question Codex asks: it is 
   }
 });
 
-test('a Codex chat sends its permissions with each turn: the sandbox, when it asks, and who answers', async () => {
+test('a Codex chat sends its permissions with each turn (the sandbox, when it asks, who answers), its fast mode and its message id', async () => {
   const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
   try {
     let ended: () => void = () => undefined;
@@ -65,12 +65,16 @@ test('a Codex chat sends its permissions with each turn: the sandbox, when it as
     const handlers = { onMessage: () => undefined, onEnd: () => ended(), onPermission: async () => ({ behavior: 'deny' as const, message: '' }) };
     const session = new CodexSession({ ...launchIn(dir), access: 'readOnly' }, handlers as never);
     session.setAccess('ask');
-    session.send('hello');
+    await session.setFastMode(true);
+    session.send('hello', undefined, 'panel-uuid-1');
     await done;
     const params = JSON.parse(readFileSync(`${dir}/turn.json`, 'utf8')) as Record<string, unknown>;
     assert.deepEqual(params.sandboxPolicy, { type: 'workspaceWrite', networkAccess: false });
     assert.equal(params.approvalPolicy, 'untrusted');
     assert.equal(params.approvalsReviewer, 'user');
+    // Fast mode asks for Codex's fast tier for the turn; the message goes with the id the panel drew it under.
+    assert.equal(params.serviceTierForTurn, 'priority');
+    assert.equal(params.clientUserMessageId, 'panel-uuid-1');
     session.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

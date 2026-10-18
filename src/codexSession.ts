@@ -29,6 +29,8 @@ export interface CodexSessionConfig extends CodexLaunch {
   effort?: string;
   /** What it may do without asking (see codexAccess.ts), sent with each turn; none leaves Codex's own settings (a side chat's thread is read-only already). */
   access?: CodexAccess;
+  /** Fast mode: each turn asks for Codex's fast tier; off, the thread's own tier (Codex's settings). */
+  fast?: boolean;
   /** The panel's deny rules (see sessionDenyRules): a command they match is refused without asking. */
   denyRules?: string[];
 }
@@ -123,7 +125,7 @@ export class CodexSession {
         };
         if (this.turnId) {
           try {
-            await this.request('turn/steer', { threadId: this.sessionId, expectedTurnId: this.turnId, input });
+            await this.request('turn/steer', { threadId: this.sessionId, expectedTurnId: this.turnId, input, ...(uuid ? { clientUserMessageId: uuid } : {}) });
             if (uuid) this.turnMessages.push(uuid);
             delivered();
             return;
@@ -137,7 +139,11 @@ export class CodexSession {
         // The model and effort chosen in the panel, when any; thinking summaries asked for, to be shown.
         const choice = { ...(this.config.model ? { model: this.config.model } : {}), ...(this.config.effort ? { effort: this.config.effort } : {}), summary: 'auto' };
         const access = this.config.access ? codexTurnAccess(this.config.access) : {};
-        const started = (await this.request('turn/start', { threadId: this.sessionId, input, ...choice, ...access })) as { turn?: { id?: string } };
+        // Saved with the message (its clientId), by which the panel finds its turn again (see codexTurnHolding).
+        const client = uuid ? { clientUserMessageId: uuid } : {};
+        // For this turn only: off again, the next turn takes the thread's own tier.
+        const tier = this.config.fast ? { serviceTierForTurn: CODEX_FAST_TIER } : {};
+        const started = (await this.request('turn/start', { threadId: this.sessionId, input, ...choice, ...access, ...client, ...tier })) as { turn?: { id?: string } };
         this.turnId ??= started.turn?.id ?? null;
         delivered();
       })
@@ -217,11 +223,28 @@ export class CodexSession {
   async setEffort(effort?: string | null): Promise<void> {
     this.config.effort = effort || undefined;
   }
+  /**
+   * Compacts the conversation now (`thread/compact/start`), as Claude Code's `/compact` does: Codex
+   * runs it as a turn, whose end ends the panel's (see turn/completed).
+   */
+  compact(): void {
+    this.sending = this.sending
+      .then(() => (this.closed ? Promise.reject(new Error('the Codex session was closed')) : this.start()))
+      .then(async () => {
+        this.turnMessages = [];
+        await this.request('thread/compact/start', { threadId: this.sessionId });
+      })
+      .catch((error: unknown) => this.fail(error));
+  }
+
   /** What it may do without asking, from the next turn (a turn running keeps what it started with). */
   setAccess(access: CodexAccess): void {
     this.config.access = access;
   }
-  async setFastMode(): Promise<void> {}
+  /** Fast mode for the next turns (see CodexSessionConfig.fast). */
+  async setFastMode(on: boolean): Promise<void> {
+    this.config.fast = on;
+  }
   async setPermissionMode(): Promise<void> {}
   async enableRemoteControl(): Promise<unknown> {
     throw new Error('Codex chats cannot be put on the phone.');
@@ -392,7 +415,12 @@ export interface CodexModel {
   efforts: { value: string; description: string }[];
   defaultEffort: string;
   isDefault: boolean;
+  /** It offers Codex's fast tier (`priority`): faster output, using more of the plan (see fast mode). */
+  fast: boolean;
 }
+
+/** Codex's fast service tier, as its models list it ("Fast": faster output, more of the plan used). */
+const CODEX_FAST_TIER = 'priority';
 
 /** How long a read is given before the reader is stopped, and how long an idle reader is kept (see withAppServer). */
 const APP_SERVER_TIMEOUT_MS = 20_000;
@@ -508,7 +536,7 @@ async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: str
 /** The models Codex offers (`model/list`), as the model menu lists them. */
 export async function listCodexModels(launch: CodexLaunch): Promise<CodexModel[]> {
   return withAppServer(launch, async (request) => {
-    const listed = (await request('model/list', {})) as { data?: { id: string; model?: string; displayName?: string; hidden?: boolean; supportedReasoningEfforts?: { reasoningEffort: string; description?: string }[]; defaultReasoningEffort?: string; isDefault?: boolean }[] };
+    const listed = (await request('model/list', {})) as { data?: { id: string; model?: string; displayName?: string; hidden?: boolean; supportedReasoningEfforts?: { reasoningEffort: string; description?: string }[]; defaultReasoningEffort?: string; isDefault?: boolean; serviceTiers?: { id?: string }[] | null }[] };
     return (listed.data ?? [])
       .filter((model) => !model.hidden)
       .map((model) => ({
@@ -517,6 +545,7 @@ export async function listCodexModels(launch: CodexLaunch): Promise<CodexModel[]
         efforts: (model.supportedReasoningEfforts ?? []).map((effort) => ({ value: effort.reasoningEffort, description: effort.description ?? '' })),
         defaultEffort: model.defaultReasoningEffort ?? '',
         isDefault: model.isDefault === true,
+        fast: (model.serviceTiers ?? []).some((tier) => tier.id === CODEX_FAST_TIER),
       }));
   });
 }
@@ -546,6 +575,61 @@ function limitsOf(answer: unknown): CodexLimits | null {
 /** Archives Codex thread `threadId` (`thread/archive`): out of Codex's history, as a scratch chat let go of is. */
 export async function archiveCodexThread(launch: CodexLaunch, threadId: string): Promise<void> {
   await withAppServer(launch, (request) => request('thread/archive', { threadId }));
+}
+
+/** A thread's turn as `thread/read` gives it: its id and items. */
+interface CodexTurn {
+  id?: string;
+  items?: { id?: string; type?: string; clientId?: string | null }[];
+}
+
+/**
+ * The turn of `turns` holding item `itemId`: a message of yours by its id or by the id the panel sent
+ * it with (its clientId), else any item by its id. The panel's ids for a call and its results carry
+ * a suffix after the item's (`id:use`, `id:0`), left off here.
+ */
+export function codexTurnHolding(turns: CodexTurn[], itemId: string): CodexTurn | undefined {
+  const bare = itemId.replace(/:(use|\d+)$/, '');
+  return turns.find((turn) => (turn.items ?? []).some((item) => item.id === itemId || item.id === bare || (item.type === 'userMessage' && item.clientId === itemId)));
+}
+
+/**
+ * Removes from Codex thread `threadId` the turn holding message `messageId` of yours and every turn
+ * after it (`thread/revert`): the conversation only, not the files those turns changed. Codex keeps
+ * no copy of what it removed. The chat's own Codex process must have ended first (see removeCodexFrom).
+ */
+export async function revertCodexThread(launch: CodexLaunch, threadId: string, messageId: string): Promise<void> {
+  await withAppServer(launch, async (request) => {
+    const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };
+    const turn = codexTurnHolding(read.thread?.turns ?? [], messageId);
+    if (!turn?.id) throw new Error('that message was not found in the Codex conversation');
+    // Codex reverts only a thread loaded in its process, and keeps it loaded until let go of.
+    await request('thread/resume', { threadId, cwd: launch.cwd, excludeTurns: true });
+    try {
+      await request('thread/revert', { threadId, beforeTurnId: turn.id });
+    } finally {
+      await request('thread/unsubscribe', { threadId }).catch(() => undefined);
+    }
+  });
+}
+
+/**
+ * A copy of Codex thread `threadId` that Codex saves (`thread/fork`): up to and including the turn
+ * holding item `upTo`, or all of it. The copy's id.
+ */
+export async function forkCodexThread(launch: CodexLaunch, threadId: string, upTo?: string): Promise<string> {
+  return withAppServer(launch, async (request) => {
+    let lastTurnId: string | undefined;
+    if (upTo) {
+      const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };
+      lastTurnId = codexTurnHolding(read.thread?.turns ?? [], upTo)?.id;
+      if (!lastTurnId) throw new Error('that reply was not found in the Codex conversation');
+    }
+    const forked = (await request('thread/fork', { threadId, cwd: launch.cwd, excludeTurns: true, ...(lastTurnId ? { lastTurnId } : {}) })) as { thread?: { id?: string } };
+    const id = forked.thread?.id;
+    if (!id) throw new Error('Codex made no copy');
+    return id;
+  });
 }
 
 /**

@@ -108,6 +108,9 @@ export function codexItemStarted(sessionId: string, item: CodexItem, cwd = ''): 
 /** What the panel draws when Codex completes item `item`: a reply's text, thinking, or a tool call's result. */
 export function codexItemCompleted(sessionId: string, item: CodexItem): DrawnMessage[] {
   switch (item.type) {
+    case 'contextCompaction':
+      // The divider a compaction leaves, as Claude Code's compact_boundary draws it, live and saved alike.
+      return [{ type: 'system', subtype: 'compact_boundary', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, compact_metadata: {}, message: { subtype: 'compact_boundary' } } as unknown as DrawnMessage];
     case 'agentMessage':
       return item.text?.trim() ? [assistant(sessionId, item.id, [{ type: 'text', text: item.text }])] : [];
     case 'reasoning': {

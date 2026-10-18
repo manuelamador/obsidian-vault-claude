@@ -309,7 +309,11 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 - The side chat beside a Codex chat runs on Codex, on a copy of the chat that Codex does not save and that only reads; it cannot be kept as a chat.
 - Small jobs (Edit selection, summaries, memo suggestions, Pick up where you left off, a project's Context, Suggest frontmatter updates) and the scratch chat can run on Codex too: **Small jobs run on** and **Scratch chat model** in the settings. With both on Codex, the plugin works without Claude Code.
 - Codex chats are listed in the history and reopened by reading the conversation through Codex. Codex keeps the conversation in its own history: removing a Codex chat takes it out of the panel's history only. A Codex scratch chat that starts over is archived in Codex.
-- Claude Code's own features are not offered in a Codex chat: Plan mode and `/plan`, slash commands, fast mode, the phone, branching, and the arrow menu on your messages (copy, move or remove from here on).
+- Branching works as in a Claude chat (from a reply, or the whole chat): Codex copies the conversation up to and including that reply's turn, and the copy goes on with the chat's model, effort and permissions.
+- The arrow beside your messages offers **Send this message to another chat…** and **Remove from here on**. Codex keeps no copy of what it removes, so there is no Undo. It cannot copy a conversation from a message on, so **Copy** and **Move from here on to a new chat** are not offered.
+- **Compact now** in the usage card asks Codex to compact the conversation; the divider marks it, as in a Claude chat.
+- **Fast mode** (⚡) asks for Codex's fast tier, for models that offer it: faster output, using more of your Codex limits.
+- Claude Code's own features are not offered in a Codex chat: Plan mode and `/plan`, slash commands and the phone.
 
 </details>
 

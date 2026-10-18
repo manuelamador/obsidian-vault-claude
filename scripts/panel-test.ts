@@ -4581,6 +4581,39 @@ async function main(): Promise<void> {
     }
 
     {
+      // A Codex chat's messages: the arrow offers what Codex can do (send, remove from here on), not copy or move from a message on.
+      const codexView = view as unknown as { useEngine(engine: 'claude' | 'codex'): void; renderUserBubble(text: string, chips: unknown[], parent?: HTMLElement, uuid?: string): HTMLElement; messagesEl: HTMLElement };
+      view.newChat();
+      codexView.useEngine('codex');
+      const codexBubble = codexView.renderUserBubble('hello codex', [], codexView.messagesEl, 'codex-msg-1');
+      const codexButtons = [...codexBubble.querySelectorAll('.vc-user-action')].map((el) => el.getAttribute('aria-label')).join(',');
+      codexBubble.querySelector<HTMLElement>('.vc-user-action')?.click();
+      const codexMenu = (stub.Menu.last as unknown as { items: { title: string }[] } | null)?.items.map((item) => item.title).filter(Boolean).join('|') ?? '';
+      view.newChat();
+      const codexMenuOk = codexButtons === 'Send, or remove from here on,Copy message' && codexMenu === 'Send this message to another chat…|Remove from here on';
+      console.log(`Codex message menu: ${codexButtons}; ${codexMenu} -> ${codexMenuOk}`);
+      if (!codexMenuOk) process.exitCode = 1;
+    }
+
+    {
+      // A Codex chat offers fast mode where its model has Codex's fast tier, and not where it has none.
+      const fastView = view as unknown as { useEngine(engine: 'claude' | 'codex'): void; fastButton: HTMLElement };
+      const models = plugin as unknown as { codexModels: unknown[] };
+      models.codexModels = [{ id: 'fast-model', name: 'Fast model', efforts: [], defaultEffort: '', isDefault: true, fast: true }];
+      view.newChat();
+      fastView.useEngine('codex');
+      const offered = fastView.fastButton.style.display !== 'none';
+      models.codexModels = [{ id: 'slow-model', name: 'Slow model', efforts: [], defaultEffort: '', isDefault: true, fast: false }];
+      view.codexModelsChanged();
+      const notOffered = fastView.fastButton.style.display === 'none';
+      models.codexModels = [];
+      view.newChat();
+      const fastOk = offered && notOffered;
+      console.log(`Codex fast mode offered by model: ${offered}, not where none: ${notOffered} -> ${fastOk}`);
+      if (!fastOk) process.exitCode = 1;
+    }
+
+    {
       // A report come back from a chat run in a new chat: a card at the end of the chat it reports to, to add to the message.
       const reportView = view as unknown as { chatId: string | null; reportsChanged(id: string): void; inputEl: HTMLTextAreaElement };
       view.newChat();
