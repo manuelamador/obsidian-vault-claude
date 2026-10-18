@@ -4,6 +4,8 @@ import { FuzzySuggestModal, TFile, TFolder, setIcon, type App, type FuzzyMatch, 
 export interface PickedChat {
   id: string;
   title: string;
+  /** A Codex chat, marked as the history marks it. */
+  codex?: boolean;
 }
 
 /** The `@` picker: notes, other files and folders, then chats (`chats`), to link to. */
@@ -45,6 +47,7 @@ export class NotePicker extends FuzzySuggestModal<TAbstractFile | PickedChat> {
     const iconEl = el.createSpan({ cls: 'vc-picker-icon' });
     setIcon(iconEl, icon);
     el.prepend(iconEl);
+    if ('id' in item && item.codex) el.createSpan({ cls: 'vc-engine-badge', text: 'Codex' });
   }
 
   onChooseItem(item: TAbstractFile | PickedChat): void {

@@ -4196,7 +4196,7 @@ export class ChatView extends ItemView {
       evt.preventDefault();
       const start = this.inputEl.selectionStart;
       const end = this.inputEl.selectionEnd;
-      const chats = this.scratch ? [] : (this.plugin.listedChats() ?? []).filter((item) => !this.plugin.isScratchChat(item) && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title }));
+      const chats = this.scratch ? [] : (this.plugin.listedChats() ?? []).filter((item) => !this.plugin.isScratchChat(item) && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title, codex: this.plugin.isCodexChat(item.id) }));
       new NotePicker(this.app, chats, (item) => {
         // A chat: a link to it, which links the chats once the message is sent.
         const text = item === null ? '@' : 'id' in item ? `${this.plugin.chatMarkdownLink(item.id)} ` : `@[[${this.mentionTarget(item)}]] `;
