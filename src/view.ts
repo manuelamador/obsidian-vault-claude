@@ -4203,7 +4203,7 @@ export class ChatView extends ItemView {
         this.inputEl.setRangeText(text, start, end, 'end');
         this.inputEl.focus();
         this.inputEdited();
-      }).open();
+      }, (file) => this.plugin.isMemo(file)).open();
     }
   }
 

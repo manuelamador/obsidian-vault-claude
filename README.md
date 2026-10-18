@@ -146,7 +146,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 <summary>Attachments and note menus</summary>
 
 - The attached-note chip above the input uses **+** to attach the open note and **×** to detach it. The note goes by its path; selected lines go as text.
-- Type `@` to mention another note, file or folder. A mentioned note sends its text and shows an approximate token count. Click its chip to send only its path, and again to include its text. Other files and folders go by their paths.
+- Type `@` to mention another note, memo, file or folder, or link a chat; an icon beside each says which. A mentioned note sends its text and shows an approximate token count. Click its chip to send only its path, and again to include its text. Other files and folders go by their paths.
 
   <img src="docs/mention.png" width="480" alt="The @ picker’s input: “Mention a note, file or folder”">
 

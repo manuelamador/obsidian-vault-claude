@@ -3837,7 +3837,7 @@ a.vc-email-attachment:hover {
   font-size: var(--font-ui-smaller);
 }
 
-/* The @ picker's rows: an icon for a note, another file, a folder or a chat. */
+/* The @ picker's rows: an icon for a note, a memo, another file, a folder or a chat. */
 .vc-picker-row {
   display: flex;
   align-items: center;

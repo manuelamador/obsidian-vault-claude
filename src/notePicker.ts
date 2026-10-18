@@ -14,6 +14,8 @@ export class NotePicker extends FuzzySuggestModal<TAbstractFile | PickedChat> {
     app: App,
     private readonly chats: PickedChat[],
     private readonly onPick: (item: TAbstractFile | PickedChat | null) => void,
+    /** Whether a note is a memo, shown with the memo icon (see VaultClaudePlugin.isMemo). */
+    private readonly isMemo: (file: TFile) => boolean = () => false,
   ) {
     super(app);
     this.setPlaceholder(chats.length > 0 ? 'Mention a note, file or folder, or link a chat' : 'Mention a note, file or folder');
@@ -28,11 +30,17 @@ export class NotePicker extends FuzzySuggestModal<TAbstractFile | PickedChat> {
     return item instanceof TFolder ? `${item.path}/` : item.path;
   }
 
-  /** Each row with an icon for what it is: a note, another file, a folder or a chat. */
+  /** Each row with an icon for what it is: a note, a memo, another file, a folder or a chat. */
   renderSuggestion(match: FuzzyMatch<TAbstractFile | PickedChat>, el: HTMLElement): void {
     super.renderSuggestion(match, el);
     const item = match.item;
-    const icon = 'id' in item ? 'message-square' : item instanceof TFolder ? 'folder' : item instanceof TFile && item.extension === 'md' ? 'file-text' : 'file';
+    const icon =
+      'id' in item ? 'message-square'
+      : item instanceof TFolder ? 'folder'
+      : !(item instanceof TFile) ? 'file'
+      : item.extension !== 'md' ? 'file'
+      : this.isMemo(item) ? 'sticky-note'
+      : 'file-text';
     el.addClass('vc-picker-row');
     const iconEl = el.createSpan({ cls: 'vc-picker-icon' });
     setIcon(iconEl, icon);
