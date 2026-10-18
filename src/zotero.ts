@@ -89,7 +89,8 @@ export function zoteroCitation(item: ZoteroItem): string {
 function readItem(raw: unknown, library: ZoteroLibrary): ZoteroItem | null {
   const item = raw as { key?: string; data?: Record<string, unknown>; meta?: { creatorSummary?: string; parsedDate?: string } };
   const data = item.data ?? {};
-  const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  // Without the direction marks Zotero puts around names (\u2066–\u2069), which would go into links and citations.
+  const text = (value: unknown) => (typeof value === 'string' ? value.replace(/[\u2066-\u2069]/g, '') : '');
   if (!item.key || NOT_WORKS.has(text(data.itemType))) return null;
   return {
     key: item.key,

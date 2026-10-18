@@ -13,7 +13,7 @@ function stand(routes: Record<string, Partial<ZoteroAnswer>>): { get: ZoteroGet;
   return { get, asked };
 }
 
-const kortum = { key: 'ITEM0001', data: { itemType: 'journalArticle', title: 'Research, Patenting, and Technological Change', date: '1997-11', DOI: '10.2307/2171741', publicationTitle: 'Econometrica' }, meta: { creatorSummary: 'Kortum', parsedDate: '1997-11' } };
+const kortum = { key: 'ITEM0001', data: { itemType: 'journalArticle', title: 'Research, Patenting, and Technological Change', date: '1997-11', DOI: '10.2307/2171741', publicationTitle: 'Econometrica' }, meta: { creatorSummary: '\u2068Kortum\u2069', parsedDate: '1997-11' } };
 
 test('Zotero works are listed from every library, a page at a time, without notes or files on their own', async () => {
   const page = (start: number, count: number) => Array.from({ length: count }, (_, i) => ({ key: `K${start + i}`, data: { itemType: 'book', title: `Book ${start + i}` }, meta: { creatorSummary: 'A', parsedDate: '2001' } }));
