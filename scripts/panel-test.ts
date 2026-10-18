@@ -4624,12 +4624,17 @@ async function main(): Promise<void> {
       const rowEl = document.createElement('div');
       picker.renderSuggestion({ item: work, match: { score: 0, matches: [] } } as never, rowEl);
       const iconOk = rowEl.querySelector('.vc-picker-icon') !== null;
+      (picker as unknown as { showTab(tab: string): void }).showTab('zotero');
+      const found = picker.getSuggestions('kortum 1997').length === 1 && picker.getSuggestions('tirole').length === 0;
+      const tabs = [...picker.modalEl.querySelectorAll('.vc-picker-tab')].map((el) => el.textContent).join(',');
       const text = picker.getItemText(work);
       const down = new NotePicker((view as unknown as { app: never }).app, [], () => undefined, () => false, Promise.reject(new Error('connection refused')));
       await new Promise((resolve) => setTimeout(resolve, 0));
       const told = (down as unknown as { instructions: { purpose: string }[] }).instructions.some((line) => line.purpose.includes('not running'));
-      const zoteroOk = listed && iconOk && text === 'Zotero: Kortum (1997) — Research, Patenting, and Technological Change' && told;
-      console.log(`Zotero in the @ picker: listed ${listed}; "${text}"; not running told ${told} -> ${zoteroOk}`);
+      (down as unknown as { showTab(tab: string): void }).showTab('zotero');
+      const toldNow = (down as unknown as { instructions: { purpose: string }[] }).instructions.some((line) => line.purpose.includes('not running'));
+      const zoteroOk = listed && iconOk && found && tabs === 'Files,Zotero' && text === 'Kortum (1997) — Research, Patenting, and Technological Change' && !told && toldNow;
+      console.log(`Zotero in the @ picker: tabs ${tabs}; listed ${listed}; found by words ${found}; "${text}"; not running told on its tab only ${!told && toldNow} -> ${zoteroOk}`);
       if (!zoteroOk) process.exitCode = 1;
     }
 

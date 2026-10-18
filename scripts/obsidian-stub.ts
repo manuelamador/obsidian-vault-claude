@@ -200,7 +200,23 @@ export class SuggestModal<T> {
   }
   declare _t: T;
 }
+/** Each word of `query` in the text, case aside: a score of how early, as Obsidian's gives one. */
+export function prepareSimpleSearch(query: string): (text: string) => { score: number; matches: [number, number][] } | null {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return (text) => {
+    const lower = text.toLowerCase();
+    const at = words.map((word) => lower.indexOf(word));
+    return at.every((index) => index >= 0) ? { score: -at.reduce((a, b) => a + b, 0), matches: at.map((index, i) => [index, index + words[i].length] as [number, number]) } : null;
+  };
+}
+
 export class FuzzySuggestModal<T> extends SuggestModal<T> {
+  /** Every item whose text holds the query, as a stand-in for Obsidian's fuzzy match. */
+  getSuggestions(query: string): { item: T; match: { score: number; matches: [] } }[] {
+    const self = this as unknown as { getItems(): T[]; getItemText(item: T): string };
+    return self.getItems().filter((item) => self.getItemText(item).toLowerCase().includes(query.toLowerCase())).map((item) => ({ item, match: { score: 0, matches: [] } }));
+  }
+
   /** The row as Obsidian draws it: the item's text (highlighting left out). */
   renderSuggestion(match: { item: T }, el: HTMLElement): void {
     el.textContent = (this as unknown as { getItemText(item: T): string }).getItemText(match.item);

@@ -3854,3 +3854,33 @@ a.vc-email-attachment:hover {
   width: var(--icon-s);
   height: var(--icon-s);
 }
+
+.vc-picker-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The @ picker's tabs, over its input: Files, Chats, Zotero. */
+.vc-picker-tabs {
+  display: flex;
+  gap: var(--size-4-1);
+  padding: var(--size-4-2) var(--size-4-3) 0;
+}
+
+.vc-picker-tab {
+  padding: var(--size-2-2) var(--size-4-3);
+  border-radius: var(--radius-s);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.vc-picker-tab:hover {
+  background: var(--background-modifier-hover);
+}
+
+.vc-picker-tab.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
