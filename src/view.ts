@@ -2233,6 +2233,8 @@ export class ChatView extends ItemView {
         } else if (message.type === 'user' && typeof message.message.content !== 'string') {
           this.linkBackgroundEdits(entry, message.message.content, message.tool_use_result);
         } else if (message.type === 'result') {
+          // A Codex chat's conversation read before no longer holds (see loadAnyChat).
+          if (entry.chatId) this.plugin.forgetCodexRead(entry.chatId);
           // A chat run to report back: its answer goes to the chat it reports to (see runInNewChat).
           if (entry.chatId && this.plugin.awaitsReport(entry.chatId)) this.plugin.reportDone(entry.chatId, entry.lastText, message.is_error);
           entry.busy = false;
@@ -3614,6 +3616,7 @@ export class ChatView extends ItemView {
       return false;
     }
     log('removed from a message', { chat: id, from: uuid, engine: 'codex' });
+    this.plugin.forgetCodexRead(id);
     await this.plugin.unlinkRemovedEdits(id, changed);
     // The context a project sent may have gone with it: sent again with the next message.
     this.plugin.contextLeft(id, { sent: true, summary: true });

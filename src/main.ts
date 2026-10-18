@@ -11,7 +11,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
-import { findCodex, listCodexModels, readCodexLimits, readCodexThread, archiveCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
+import { findCodex, listCodexModels, readCodexLimits, readCodexThread, readCodexThreadStamp, archiveCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -42,6 +42,8 @@ import { DEFAULT_SETTINGS, SCRATCH_IDLE_CHOICES, VaultClaudeSettingTab, chatMode
 import { isCodexAccess, readCodexChoices, type CodexChoices } from './codexAccess';
 import { readClaudeChoices, type ClaudeChoices } from './chatChoices';
 
+/** How many Codex chats' conversations are kept as read (see loadAnyChat). */
+const CODEX_READS_KEPT = 10;
 const MAX_CHAT_RECORDS = 500;
 /** How many ended background tasks the task list keeps, and how much of each one's output it reads. */
 const FINISHED_TASKS = 20;
@@ -1434,8 +1436,31 @@ export default class VaultClaudePlugin extends Plugin {
     if (!this.isCodexChat(id)) return loadChat(id, root, opening);
     const launch = this.codexLaunch();
     if (typeof launch === 'string') throw new Error(launch);
-    const { transcript, edits } = codexTranscript(id, (await readCodexThread(launch, id)) as { items?: CodexItem[] }[], launch.cwd);
-    return { transcript: transcript as unknown as LoadedChat['transcript'], edits };
+    // Read before and not changed since, as Codex says without sending the conversation: that copy.
+    const kept = this.codexReads.get(id);
+    if (kept && (await readCodexThreadStamp(launch, id).catch(() => undefined)) === kept.updatedAt) {
+      this.codexReads.delete(id);
+      this.codexReads.set(id, kept);
+      return { transcript: [...kept.chat.transcript], edits: kept.chat.edits };
+    }
+    const read = await readCodexThread(launch, id);
+    const { transcript, edits } = codexTranscript(id, read.turns as { items?: CodexItem[] }[], launch.cwd);
+    const chat: LoadedChat = { transcript: transcript as unknown as LoadedChat['transcript'], edits };
+    this.codexReads.delete(id);
+    if (read.updatedAt !== undefined) {
+      this.codexReads.set(id, { updatedAt: read.updatedAt, chat: { transcript: [...chat.transcript], edits } });
+      // The most recently read kept.
+      for (const old of [...this.codexReads.keys()].slice(0, Math.max(0, this.codexReads.size - CODEX_READS_KEPT))) this.codexReads.delete(old);
+    }
+    return chat;
+  }
+
+  /** Codex chats read (see loadAnyChat), by id, with when their thread last changed then; the most recently read last. */
+  private readonly codexReads = new Map<string, { updatedAt: number; chat: LoadedChat }>();
+
+  /** Lets go of what was read of Codex chat `id`: it has changed (a turn ended, part was removed), read again next time. */
+  forgetCodexRead(id: string): void {
+    this.codexReads.delete(id);
   }
 
   /**
@@ -1608,6 +1633,7 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Codex chat `id` was active now: the history sorts it by this (see ChatRecord.at). */
   touchCodexChat(id: string): void {
+    this.forgetCodexRead(id);
     const chat = this.chats.find((record) => record.id === id && record.engine === 'codex');
     if (!chat) return;
     chat.at = Date.now();

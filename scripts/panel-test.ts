@@ -154,6 +154,7 @@ async function main(): Promise<void> {
     setCodexChoices: () => undefined,
     claudeChoices: (): undefined => undefined,
     setClaudeChoices: () => undefined,
+    forgetCodexRead: () => undefined,
     codexModels: [],
     chatContext: {},
     setChatContext: () => undefined,

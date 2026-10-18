@@ -424,7 +424,7 @@ const CODEX_FAST_TIER = 'priority';
 
 /** How long a read is given before the reader is stopped, and how long an idle reader is kept (see withAppServer). */
 const APP_SERVER_TIMEOUT_MS = 20_000;
-const APP_SERVER_IDLE_MS = 60_000;
+const APP_SERVER_IDLE_MS = 10 * 60_000;
 
 /** A Codex app-server kept for reads (threads, models, limits, small jobs): started once, stopped after APP_SERVER_IDLE_MS unused. */
 class CodexReader {
@@ -641,10 +641,20 @@ export async function forkCodexThread(launch: CodexLaunch, threadId: string, upT
  * A saved Codex thread's turns, read through a short-lived app-server (`thread/read`): how a Codex
  * chat is drawn when opened from the history. The plugin reads no Codex file itself.
  */
-export async function readCodexThread(launch: CodexLaunch, threadId: string): Promise<{ items?: unknown[] }[]> {
+export async function readCodexThread(launch: CodexLaunch, threadId: string): Promise<{ turns: { items?: unknown[] }[]; updatedAt?: number }> {
   return withAppServer(launch, async (request) => {
-    const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: { items?: unknown[] }[] } };
-    return read.thread?.turns ?? [];
+    const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: { items?: unknown[] }[]; updatedAt?: unknown } };
+    const updatedAt = read.thread?.updatedAt;
+    return { turns: read.thread?.turns ?? [], ...(typeof updatedAt === 'number' ? { updatedAt } : {}) };
+  });
+}
+
+/** When Codex thread `threadId` last changed, read without its turns: whether a copy read before still holds (see loadAnyChat). */
+export async function readCodexThreadStamp(launch: CodexLaunch, threadId: string): Promise<number | undefined> {
+  return withAppServer(launch, async (request) => {
+    const read = (await request('thread/read', { threadId, includeTurns: false })) as { thread?: { updatedAt?: unknown } };
+    const updatedAt = read.thread?.updatedAt;
+    return typeof updatedAt === 'number' ? updatedAt : undefined;
   });
 }
 
