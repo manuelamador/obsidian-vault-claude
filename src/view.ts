@@ -1456,14 +1456,23 @@ export class ChatView extends ItemView {
   /** Keeps the chat being left as it is, and clears the input for the next one. */
   private leaveDraft(): void {
     this.saveDraft();
+    // Its attachments too, kept in memory (images can be large): back when the chat is.
+    const key = this.draftKey();
+    if (this.attachments.length > 0) this.attachmentDrafts.set(key, [...this.attachments]);
+    else this.attachmentDrafts.delete(key);
     this.inputEl.value = '';
     this.setUndoFloor();
     this.growInput();
   }
 
-  /** Puts back the unsent text and attached note of the chat on screen; a new chat starts as the setting says. */
+  /** Attachments in the tray of chats left, by draft key (see leaveDraft), until Obsidian restarts. */
+  private readonly attachmentDrafts = new Map<string, Attachment[]>();
+
+  /** Puts back the unsent text, attachments and attached note of the chat on screen; a new chat starts as the setting says. */
   private restoreDraft(): void {
     const key = this.draftKey();
+    this.attachments = [...(this.attachmentDrafts.get(key) ?? [])];
+    this.renderTray();
     const draft = this.readDraft(key);
     this.inputEl.value = draft?.text ?? '';
     this.setUndoFloor();
@@ -4439,6 +4448,8 @@ export class ChatView extends ItemView {
     }
     // The chat it was typed in, for its draft should another chat be opened while it is prepared.
     const draftKey = this.draftKey();
+    // Its attachments went with it: none kept for its chat any more.
+    if (!slash) this.attachmentDrafts.delete(draftKey);
     // Prepared one after another: a message whose notes take longer to read never overtakes the one sent after it.
     const before = this.preparing;
     let prepared = () => undefined as void;

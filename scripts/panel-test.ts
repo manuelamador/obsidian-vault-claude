@@ -4485,6 +4485,25 @@ async function main(): Promise<void> {
     }
 
     {
+      // Attachments in the tray stay with their chat: gone while another is shown, back when it is.
+      const trayView = view as unknown as { resumeId: string | null; attachments: { name: string }[]; restoreDraft(): void };
+      view.newChat();
+      trayView.resumeId = 'chat-with-files';
+      trayView.attachments = [{ kind: 'file', name: 'paper.pdf', path: '/x/paper.pdf' } as never];
+      view.newChat();
+      const away = trayView.attachments.length;
+      trayView.resumeId = 'chat-with-files';
+      trayView.restoreDraft();
+      const back = trayView.attachments.map((each) => each.name).join(',');
+      trayView.attachments = [];
+      trayView.resumeId = null;
+      view.newChat();
+      const trayOk = away === 0 && back === 'paper.pdf';
+      console.log(`attachments kept with their chat: away ${away}, back ${back} -> ${trayOk}`);
+      if (!trayOk) process.exitCode = 1;
+    }
+
+    {
       // A report come back from a chat run in a new chat: a card at the end of the chat it reports to, to add to the message.
       const reportView = view as unknown as { chatId: string | null; reportsChanged(id: string): void; inputEl: HTMLTextAreaElement };
       view.newChat();
