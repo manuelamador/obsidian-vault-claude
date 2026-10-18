@@ -8065,7 +8065,7 @@ export class ChatView extends ItemView {
     }
     const pinned = new Set(this.plugin.pinned);
     const chats = listed
-      .filter((item) => !item.scratch && item.id !== (this.chatId ?? this.resumeId))
+      .filter((item) => !this.plugin.isScratchChat(item) && item.id !== (this.chatId ?? this.resumeId))
       .sort((a, b) => Number(pinned.has(b.id)) - Number(pinned.has(a.id)) || b.updatedAt - a.updatedAt)
       .slice(0, RECENT_CHATS);
     if (chats.length === 0) return;

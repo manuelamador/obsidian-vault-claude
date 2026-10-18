@@ -125,6 +125,9 @@ async function main(): Promise<void> {
     homeReason: (_id: string): unknown => null,
     enclosingProjects: (): unknown[] => [],
     listedChats: (): null => null,
+    isScratchChat(item: { id: string; scratch?: boolean }): boolean {
+      return item.scratch === true || item.id === (this as { scratch: { id: string } | null }).scratch?.id;
+    },
     listChats: async (): Promise<unknown[]> => [],
     chatShown: () => undefined,
     isProjectNote: () => false,

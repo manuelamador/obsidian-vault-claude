@@ -1358,6 +1358,11 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** Whether a chat was started in the panel (rather than elsewhere in the vault, which opens as a copy). */
+  /** Whether `item` is the scratch chat: marked so in the history's rows, not in the listing kept here (see listChats). */
+  isScratchChat(item: HistoryItem): boolean {
+    return item.scratch === true || item.id === this.scratch?.id;
+  }
+
   isPanelChat(id: string): boolean {
     return this.chats.some((chat) => chat.id === id);
   }
@@ -2126,7 +2131,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (!root) return null;
     const notice = new Notice('Rebuilding connections…', 0);
     try {
-      const items = (await this.listChats()).filter((item) => !item.scratch);
+      const items = (await this.listChats()).filter((item) => !this.isScratchChat(item));
       const found = new Map<string, { changed: string[]; sent: string[]; mentioned: string[] }>();
       await eachInParallel(items, async (item) => {
         try {
@@ -2273,7 +2278,7 @@ export default class VaultClaudePlugin extends Plugin {
   private async chatMapHost(view: ChatView, id: string, all = false, lookOnly = false): Promise<ChatMapHost> {
     await this.recentListing();
     const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
-    const listed = new Set((this.lastListing ?? []).filter((item) => !item.scratch).map((item) => item.id));
+    const listed = new Set((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)).map((item) => item.id));
     const weighted = new Map([...this.weightedNotes()].filter(([other]) => other === id || listed.has(other)));
     const to = (this.chatLinks[id] ?? []).filter((other) => listed.has(other));
     const from = this.linkedChats(id).filter((other) => listed.has(other) && !to.includes(other));
@@ -2318,7 +2323,7 @@ export default class VaultClaudePlugin extends Plugin {
       changeFolder: (path, changed) => {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (!(file instanceof TFile)) return;
-        const source = this.folderSource((this.lastListing ?? []).filter((item) => !item.scratch), this.chatNotes());
+        const source = this.folderSource((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)), this.chatNotes());
         new ChooseFolderModal(this.app, source, this.projectFolder(file), file.basename, (folder) => {
           void this.setProjectFolder(file, folder).then(changed);
         }).open();
@@ -2397,7 +2402,7 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** The listed chats whose home project is `file`, newest first. */
   projectMembers(file: TFile): HistoryItem[] {
-    return (this.lastListing ?? []).filter((item) => !item.scratch && this.homeProject(item.id) === file).sort((a, b) => b.updatedAt - a.updatedAt);
+    return (this.lastListing ?? []).filter((item) => !this.isScratchChat(item) && this.homeProject(item.id) === file).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   /** The projects whose folders hold project `file`'s folder, the outermost first: their Instructions go with its chats too. */
@@ -2622,7 +2627,7 @@ export default class VaultClaudePlugin extends Plugin {
   async openCreateProject(options: { folder?: string; chatId?: string | null; created?: () => void } = {}): Promise<void> {
     await this.listChats().catch(() => []);
     new CreateProjectModal(this.app, {
-      ...this.folderSource((this.lastListing ?? []).filter((item) => !item.scratch), this.chatNotes()),
+      ...this.folderSource((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)), this.chatNotes()),
       folder: options.folder,
       suggestion: options.chatId ? this.folderSuggestionFor(options.chatId) : null,
       create: async (name, folder) => {
