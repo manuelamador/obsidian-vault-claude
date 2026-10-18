@@ -4504,6 +4504,24 @@ async function main(): Promise<void> {
     }
 
     {
+      // The scratch chat opened by its id from elsewhere (a finished tab, a link) opens as the scratch chat, not as a copy.
+      const scratchView = view as unknown as { openScratch(): Promise<void>; scratch: boolean };
+      const realOpen = scratchView.openScratch;
+      let routed = 0;
+      scratchView.openScratch = async () => {
+        routed += 1;
+      };
+      const pluginScratch = plugin as unknown as { scratch: { id: string; usedAt: number } | null };
+      pluginScratch.scratch = { id: 's-by-id', usedAt: Date.now() };
+      await view.openChat({ id: 's-by-id', title: 'Meeting with Carlos Bolivar', updatedAt: 0, fromPanel: false });
+      pluginScratch.scratch = null;
+      scratchView.openScratch = realOpen;
+      const scratchByIdOk = routed === 1;
+      console.log(`scratch chat opened by id goes to the scratch chat: ${routed} -> ${scratchByIdOk}`);
+      if (!scratchByIdOk) process.exitCode = 1;
+    }
+
+    {
       // A report come back from a chat run in a new chat: a card at the end of the chat it reports to, to add to the message.
       const reportView = view as unknown as { chatId: string | null; reportsChanged(id: string): void; inputEl: HTMLTextAreaElement };
       view.newChat();

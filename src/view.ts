@@ -359,6 +359,8 @@ interface BackgroundChat {
   toolCalls: Map<string, { name: string; input: Record<string, unknown> }>;
   /** The messages its turn in progress answers (see ChatView.turnPrompts), for when it is shown again. */
   turnPrompts: string[];
+  /** When its turn in progress started (see ChatView.turnStartedAt), so that its timer goes on when it is shown again. */
+  turnStartedAt: number;
   /** The messages sent from the panel (see ChatView.sentIds), so that one is not drawn again as sent from elsewhere. */
   sentIds: Set<string>;
   /** The mode its approved plan returns to (see ChatView.modeBeforePlan). */
@@ -2142,6 +2144,7 @@ export class ChatView extends ItemView {
         ...this.agentCalls,
       ]),
       turnPrompts: this.turnPrompts,
+      turnStartedAt: this.turnStartedAt,
       sentIds: this.sentIds,
       modeBeforePlan: this.modeBeforePlan,
       start: this.chatId || this.scratch ? null : this.startOf(),
@@ -2206,6 +2209,7 @@ export class ChatView extends ItemView {
           if (!entry.busy) {
             entry.busy = true;
             entry.turnPrompts = [];
+            entry.turnStartedAt = Date.now();
             this.updateBackgroundIndicator();
           }
           // From the turn's first frame of its own that names them: a subagent's frame names none.
@@ -2513,6 +2517,8 @@ export class ChatView extends ItemView {
     this.sentIds = entry.sentIds;
     if (working) {
       this.beginTurn(entry.turnPrompts, unfinished);
+      // The turn's time so far, not from when it was shown again.
+      if (entry.turnStartedAt > 0) this.turnStartedAt = entry.turnStartedAt;
       // Its calls still running go on: drawn ones are shown running again, and the rest (a
       // subagent's) are followed, so that an edit finishing now is shown and links its notes.
       for (const [id, call] of entry.toolCalls) {
@@ -2825,6 +2831,12 @@ export class ChatView extends ItemView {
    * holding it, or gave way to a chat picked meanwhile.
    */
   async openChat(item: HistoryItem, branch?: BranchSource): Promise<boolean> {
+    // The scratch chat opened by its id (a finished tab, a note's chats, a link): opened as the scratch
+    // chat. Taken for a chat from outside the panel, it would be resumed as a copy, under Claude Code's title.
+    if (!item.scratch && !branch && item.id === this.plugin.scratch?.id && this.plugin.settings.scratchChat) {
+      await this.openScratch();
+      return this.scratch;
+    }
     const started = performance.now();
     const from = this.navPlace();
     const opened = await this.openChatHere(item, branch);
