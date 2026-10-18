@@ -3836,3 +3836,21 @@ a.vc-email-attachment:hover {
   margin-top: var(--size-4-1);
   font-size: var(--font-ui-smaller);
 }
+
+/* The @ picker's rows: an icon for a note, another file, a folder or a chat. */
+.vc-picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.vc-picker-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.vc-picker-icon svg {
+  width: var(--icon-s);
+  height: var(--icon-s);
+}

@@ -1,4 +1,4 @@
-import { FuzzySuggestModal, TFile, TFolder, type App, type TAbstractFile } from 'obsidian';
+import { FuzzySuggestModal, TFile, TFolder, setIcon, type App, type FuzzyMatch, type TAbstractFile } from 'obsidian';
 
 /** A chat offered by the `@` picker, to link to. */
 export interface PickedChat {
@@ -26,6 +26,17 @@ export class NotePicker extends FuzzySuggestModal<TAbstractFile | PickedChat> {
   getItemText(item: TAbstractFile | PickedChat): string {
     if ('id' in item) return `Chat: ${item.title}`;
     return item instanceof TFolder ? `${item.path}/` : item.path;
+  }
+
+  /** Each row with an icon for what it is: a note, another file, a folder or a chat. */
+  renderSuggestion(match: FuzzyMatch<TAbstractFile | PickedChat>, el: HTMLElement): void {
+    super.renderSuggestion(match, el);
+    const item = match.item;
+    const icon = 'id' in item ? 'message-square' : item instanceof TFolder ? 'folder' : item instanceof TFile && item.extension === 'md' ? 'file-text' : 'file';
+    el.addClass('vc-picker-row');
+    const iconEl = el.createSpan({ cls: 'vc-picker-icon' });
+    setIcon(iconEl, icon);
+    el.prepend(iconEl);
   }
 
   onChooseItem(item: TAbstractFile | PickedChat): void {
