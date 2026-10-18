@@ -77,6 +77,8 @@ export interface VaultClaudeSettings {
   scratchModel: string;
   /** Messages you send kept for ↑ in other chats (see VaultClaudePlugin.recordPrompt). */
   rememberPrompts: boolean;
+  /** Zotero's works in the `@` picker, read through Zotero's local API (see zotero.ts). */
+  zoteroMentions: boolean;
   /** What a side chat knows: the whole chat it was opened from (a fork of it), or only what is asked. */
   sideChatContext: 'chat' | 'quote';
   /** Model for inline edits, chat summaries and the scratch chat; empty for the chats' model. */
@@ -153,6 +155,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   scratchIdleHours: 24,
   scratchModel: '',
   rememberPrompts: true,
+  zoteroMentions: false,
   sideChatContext: 'chat',
   smallJobModel: 'sonnet',
   effort: '',
@@ -574,6 +577,18 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(settings.sendWithModifier).onChange(async (value) => {
           settings.sendWithModifier = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('Zotero in @')
+      .setDesc(
+        'Lists the works in your Zotero libraries (My Library and the groups) in the @ picker. A work picked goes with the message as its citation, its DOI and Zotero links, and where its PDF is on this computer, in Claude and Codex chats alike. Read through Zotero\'s local API on this computer while Zotero runs: the only requests the plugin makes itself.',
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.zoteroMentions).onChange(async (value) => {
+          settings.zoteroMentions = value;
           await this.plugin.saveSettings();
         }),
       );

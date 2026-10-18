@@ -200,7 +200,12 @@ export class SuggestModal<T> {
   }
   declare _t: T;
 }
-export class FuzzySuggestModal<T> extends SuggestModal<T> {}
+export class FuzzySuggestModal<T> extends SuggestModal<T> {
+  /** The row as Obsidian draws it: the item's text (highlighting left out). */
+  renderSuggestion(match: { item: T }, el: HTMLElement): void {
+    el.textContent = (this as unknown as { getItemText(item: T): string }).getItemText(match.item);
+  }
+}
 /** A menu item that records what it was given, so a test can read a menu back. */
 class MenuItem {
   title = '';
@@ -240,6 +245,11 @@ export class Notice {
   }
   hide(): void {}
 }
+/** No Zotero or other server in the tests: every request fails, as when nothing answers. */
+export async function requestUrl(): Promise<never> {
+  throw new Error('connection refused');
+}
+
 export const Keymap = { isModEvent: () => false };
 export class Scope {
   constructor(public parent?: unknown) {}

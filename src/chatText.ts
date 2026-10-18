@@ -192,6 +192,7 @@ function displayPrompt(raw: string): { text: string; attachments: Chip[] } {
       icon: 'text-select',
     })),
     ...[...raw.matchAll(/^Attached file: (.+)$/gm)].map((match) => ({ label: baseName(match[1]) })),
+    ...[...raw.matchAll(/<zotero_item label="([^"]*)"/g)].map((match) => ({ label: match[1], icon: 'book-open' })),
   ];
   let text = stripContext(raw).trim();
   const command = text.match(/<command-name>([^<]*)<\/command-name>/);

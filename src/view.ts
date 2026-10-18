@@ -121,6 +121,7 @@ import {
   type UsageWindow,
 } from './usageDisplay';
 import { codexAccessDetail, codexAccessLabel, codexAccessModes, codexAccessShort, type CodexAccess } from './codexAccess';
+import { shortTitle, zoteroCitation, zoteroItemByLink, zoteroLabel, zoteroLink, zoteroLinksIn, zoteroPdfPath } from './zotero';
 
 /** How long after a panel writes a memo's Send box its own write is told from someone else's edit (see setMemoBox). */
 const MEMO_BOX_SETTLE_MS = 1500;
@@ -4199,11 +4200,16 @@ export class ChatView extends ItemView {
       const chats = this.scratch ? [] : (this.plugin.listedChats() ?? []).filter((item) => !this.plugin.isScratchChat(item) && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title, codex: this.plugin.isCodexChat(item.id) }));
       new NotePicker(this.app, chats, (item) => {
         // A chat: a link to it, which links the chats once the message is sent.
-        const text = item === null ? '@' : 'id' in item ? `${this.plugin.chatMarkdownLink(item.id)} ` : `@[[${this.mentionTarget(item)}]] `;
+        const text =
+          item === null ? '@'
+          // A Zotero work: a link to it, looked up again as the message goes (see buildPrompt).
+          : 'library' in item ? `@[${`${zoteroLabel(item)} — ${shortTitle(item.title)}`.replace(/[[\]]/g, '')}](${zoteroLink(item)}) `
+          : 'id' in item ? `${this.plugin.chatMarkdownLink(item.id)} `
+          : `@[[${this.mentionTarget(item)}]] `;
         this.inputEl.setRangeText(text, start, end, 'end');
         this.inputEl.focus();
         this.inputEdited();
-      }, (file) => this.plugin.isMemo(file)).open();
+      }, (file) => this.plugin.isMemo(file), this.plugin.zoteroItems()).open();
     }
   }
 
@@ -5009,8 +5015,33 @@ export class ChatView extends ItemView {
       blocks.push(`<selection note="${selection.path}" lines="${lineRange(selection.fromLine, selection.toLine)}">\n${body}\n</selection>`);
     }
     if (files.length > 0) blocks.push(files.map((file) => `Attached file: ${file.path}`).join('\n'));
+    blocks.push(...(await this.zoteroBlocks(text)));
     if (blocks.length === 0) return { prompt: text, notes: [] };
     return { prompt: `<obsidian_context>\n${blocks.join('\n\n')}\n</obsidian_context>\n\n${text}`, notes: [...notes] };
+  }
+
+  /**
+   * The Zotero works the message links (picked with `@`, or pasted): each looked up in Zotero as it
+   * goes, as its citation, its links and where its PDF is. None with "Zotero in @" off.
+   */
+  private async zoteroBlocks(text: string): Promise<string[]> {
+    if (!this.plugin.settings.zoteroMentions) return [];
+    const blocks: string[] = [];
+    for (const link of zoteroLinksIn(text)) {
+      const item = await zoteroItemByLink(link).catch(() => undefined);
+      if (item === undefined) {
+        blocks.push(`Zotero work ${link}: not looked up, as Zotero is not running.`);
+        continue;
+      }
+      if (!item) {
+        blocks.push(`Zotero work ${link}: not found in Zotero.`);
+        continue;
+      }
+      const pdf = await zoteroPdfPath(item).catch(() => null);
+      const label = zoteroLabel(item).replace(/"/g, "'");
+      blocks.push(`<zotero_item label="${label}" link="${link}">\n${zoteroCitation(item)}\n${pdf ? `PDF: ${pdf}` : 'No PDF in Zotero.'}\n</zotero_item>`);
+    }
+    return blocks;
   }
 
   /**

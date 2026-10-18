@@ -4615,6 +4615,25 @@ async function main(): Promise<void> {
     }
 
     {
+      // The @ picker with "Zotero in @" on: Zotero's works among the rows once read, with the book icon; Zotero not running, a line saying to start it.
+      const { NotePicker } = await import('../src/notePicker');
+      const work = { key: 'ITEM0001', library: { kind: 'user' as const }, title: 'Research, Patenting, and Technological Change', creators: 'Kortum', year: '1997', venue: 'Econometrica', doi: '', url: '' };
+      const picker = new NotePicker((view as unknown as { app: never }).app, [], () => undefined, () => false, Promise.resolve([work]));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const listed = (picker as unknown as { zoteroItems: unknown[] }).zoteroItems.length === 1;
+      const rowEl = document.createElement('div');
+      picker.renderSuggestion({ item: work, match: { score: 0, matches: [] } } as never, rowEl);
+      const iconOk = rowEl.querySelector('.vc-picker-icon') !== null;
+      const text = picker.getItemText(work);
+      const down = new NotePicker((view as unknown as { app: never }).app, [], () => undefined, () => false, Promise.reject(new Error('connection refused')));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const told = (down as unknown as { instructions: { purpose: string }[] }).instructions.some((line) => line.purpose.includes('not running'));
+      const zoteroOk = listed && iconOk && text === 'Zotero: Kortum (1997) — Research, Patenting, and Technological Change' && told;
+      console.log(`Zotero in the @ picker: listed ${listed}; "${text}"; not running told ${told} -> ${zoteroOk}`);
+      if (!zoteroOk) process.exitCode = 1;
+    }
+
+    {
       // A report come back from a chat run in a new chat: a card at the end of the chat it reports to, to add to the message.
       const reportView = view as unknown as { chatId: string | null; reportsChanged(id: string): void; inputEl: HTMLTextAreaElement };
       view.newChat();

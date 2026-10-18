@@ -41,9 +41,12 @@ import { ChatView, VIEW_TYPE } from './view';
 import { DEFAULT_SETTINGS, SCRATCH_IDLE_CHOICES, VaultClaudeSettingTab, chatModel, extraPathEntries, type VaultClaudeSettings } from './settings';
 import { isCodexAccess, readCodexChoices, type CodexChoices } from './codexAccess';
 import { readClaudeChoices, type ClaudeChoices } from './chatChoices';
+import { listZoteroItems, type ZoteroItem } from './zotero';
 
 /** How many Codex chats' conversations are kept as read (see loadAnyChat). */
 const CODEX_READS_KEPT = 10;
+/** How long Zotero's works, once listed, are offered by the @ picker before they are listed again. */
+const ZOTERO_LIST_FRESH_MS = 5 * 60_000;
 const MAX_CHAT_RECORDS = 500;
 /** How many ended background tasks the task list keeps, and how much of each one's output it reads. */
 const FINISHED_TASKS = 20;
@@ -1361,6 +1364,22 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** Whether a chat was started in the panel (rather than elsewhere in the vault, which opens as a copy). */
+  /** Zotero's works as last listed for the @ picker, and when (see zoteroItems). */
+  private zoteroList: { items: ZoteroItem[]; at: number } | null = null;
+
+  /**
+   * Zotero's works for the `@` picker (see listZoteroItems), listed again after ZOTERO_LIST_FRESH_MS;
+   * null with "Zotero in @" off. Rejects when Zotero is not running.
+   */
+  zoteroItems(): Promise<ZoteroItem[]> | null {
+    if (!this.settings.zoteroMentions) return null;
+    if (this.zoteroList && Date.now() - this.zoteroList.at < ZOTERO_LIST_FRESH_MS) return Promise.resolve(this.zoteroList.items);
+    return listZoteroItems().then((items) => {
+      this.zoteroList = { items, at: Date.now() };
+      return items;
+    });
+  }
+
   /** Whether `item` is the scratch chat: marked so in the history's rows, not in the listing kept here (see listChats). */
   isScratchChat(item: HistoryItem): boolean {
     return item.scratch === true || item.id === this.scratch?.id;
