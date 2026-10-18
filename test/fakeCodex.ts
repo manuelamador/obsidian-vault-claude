@@ -2,7 +2,7 @@ import { chmodSync, writeFileSync } from 'node:fs';
 
 /**
  * A stand-in for `codex app-server` in `dir`: it notes that it started, answers the handshake and
- * the thread's start, and then as `mode` says: `exit`, asked to start a turn, answers and exits
+ * the thread's start (writing each turn's params to `turn.json`), and then as `mode` says: `exit`, asked to start a turn, answers and exits
  * without finishing it; `silent`, answers nothing after the handshake; `die`, exits as soon as the
  * thread has started; `ask`, having started a turn, asks the panel a question and finishes the turn
  * only once it is answered (or refused).
@@ -36,6 +36,7 @@ process.stdin.on('data', (chunk) => {
       reply({ thread: { id: 't1' } });
       if (mode === 'die') setTimeout(() => process.exit(3), 20);
     } else if (message.method === 'turn/start') {
+      require('fs').writeFileSync(${JSON.stringify(`${dir}/turn.json`)}, JSON.stringify(message.params));
       reply({ turn: { id: 'turn1' } });
       if (mode === 'ask') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'q1', method: 'item/tool/requestUserInput', params: { threadId: 't1' } }) + '\\n');
       else setTimeout(() => process.exit(0), 20);

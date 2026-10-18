@@ -5,6 +5,7 @@ import type VaultClaudePlugin from './main';
 import { detectClaudePath } from './session';
 import { prettyModel } from './usageDisplay';
 import { findCodex } from './codexSession';
+import { codexAccessModes, type CodexAccess } from './codexAccess';
 
 export type ToolDisplay = 'summary' | 'lines' | 'hidden';
 
@@ -62,6 +63,8 @@ export interface VaultClaudeSettings {
   /** Codex chats' model and reasoning effort to start with, and the small jobs' when run on Codex; empty for Codex's own. */
   codexModel: string;
   codexEffort: string;
+  /** What new Codex chats may do without asking (see codexAccess.ts). */
+  codexAccess: CodexAccess;
   smallJobCodexModel: string;
   model: string;
   /** Vault paths left out of the notes a chat lists, one pattern per line. */
@@ -142,6 +145,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   smallJobEngine: 'claude',
   codexModel: '',
   codexEffort: '',
+  codexAccess: 'default',
   smallJobCodexModel: '',
   model: '',
   hiddenNotePaths: '*attachments/*',
@@ -358,6 +362,21 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('Default Codex permissions')
+      .setDesc(
+        'What new Codex chats may do without asking. Default: edit in the vault, and ask to go outside it or online. Auto (reviewer): a Codex model answers those requests instead of you. The deny rules below apply only to commands Codex asks about, so not in Full access. The mode menu in the panel header changes it for the current chat.',
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(codexAccessModes(settings.allowBypass))
+          .setValue(settings.codexAccess)
+          .onChange(async (value) => {
+            settings.codexAccess = value as CodexAccess;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName('Codex model for small jobs')
       .setDesc('For small jobs run on Codex (see Small jobs run on). A smaller model answers faster and uses less of the plan.')
       .addDropdown((dropdown) =>
@@ -455,12 +474,13 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Offer bypass permissions')
       .setDesc(
-        'Adds "Bypass permissions" to the mode menus: Claude runs every tool without asking. The deny rules below still apply. Takes effect in new chats.',
+        'Adds "Bypass permissions" to the mode menus: Claude runs every tool without asking. The deny rules below still apply. Takes effect in new chats. It also adds "Full access" for Codex chats, where they do not.',
       )
       .addToggle((toggle) =>
         toggle.setValue(settings.allowBypass).onChange(async (value) => {
           settings.allowBypass = value;
           if (!value && settings.permissionMode === 'bypassPermissions') settings.permissionMode = 'default';
+          if (!value && settings.codexAccess === 'full') settings.codexAccess = 'default';
           await this.plugin.saveSettings();
           this.plugin.refreshModeMenus();
           this.display();

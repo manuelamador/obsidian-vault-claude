@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
+import { codexAccessModes, codexTurnAccess } from '../src/codexAccess';
 import { CodexSession, runCodexOneShot, stopCodexReader } from '../src/codexSession';
 
 import { launchIn } from './fakeCodex';
@@ -53,4 +54,33 @@ test('a one-off request to Codex is not held up by a question Codex asks: it is 
     stopCodexReader();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a Codex chat sends its permissions with each turn: the sandbox, when it asks, and who answers', async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  try {
+    let ended: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => (ended = resolve));
+    const handlers = { onMessage: () => undefined, onEnd: () => ended(), onPermission: async () => ({ behavior: 'deny' as const, message: '' }) };
+    const session = new CodexSession({ ...launchIn(dir), access: 'readOnly' }, handlers as never);
+    session.setAccess('ask');
+    session.send('hello');
+    await done;
+    const params = JSON.parse(readFileSync(`${dir}/turn.json`, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(params.sandboxPolicy, { type: 'workspaceWrite', networkAccess: false });
+    assert.equal(params.approvalPolicy, 'untrusted');
+    assert.equal(params.approvalsReviewer, 'user');
+    session.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Codex permissions: each choice as Codex takes it, and Full access only when bypass is offered', () => {
+  assert.deepEqual(codexTurnAccess('readOnly'), { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'on-request', approvalsReviewer: 'user' });
+  assert.equal(codexTurnAccess('default').approvalPolicy, 'on-request');
+  assert.equal(codexTurnAccess('autoReview').approvalsReviewer, 'auto_review');
+  assert.deepEqual(codexTurnAccess('full'), { sandboxPolicy: { type: 'dangerFullAccess' }, approvalPolicy: 'never', approvalsReviewer: 'user' });
+  assert.deepEqual(Object.keys(codexAccessModes(false)), ['readOnly', 'ask', 'default', 'autoReview']);
+  assert.equal('full' in codexAccessModes(true), true);
 });

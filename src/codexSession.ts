@@ -11,6 +11,7 @@ import type { SDKControlGetContextUsageResponse } from '@anthropic-ai/claude-age
 import { log } from './log';
 import { contextBlock, type ContextPart } from './projects';
 import type { SessionHandlers, UserContent } from './session';
+import { codexTurnAccess, type CodexAccess } from './codexAccess';
 
 export type { CodexLaunch } from './codexConnection';
 
@@ -26,6 +27,8 @@ export interface CodexSessionConfig extends CodexLaunch {
   /** The model and reasoning effort to run; none uses Codex's own settings. */
   model?: string;
   effort?: string;
+  /** What it may do without asking (see codexAccess.ts), sent with each turn; none leaves Codex's own settings (a side chat's thread is read-only already). */
+  access?: CodexAccess;
   /** The panel's deny rules (see sessionDenyRules): a command they match is refused without asking. */
   denyRules?: string[];
 }
@@ -133,7 +136,8 @@ export class CodexSession {
         if (uuid) this.turnMessages = [uuid];
         // The model and effort chosen in the panel, when any; thinking summaries asked for, to be shown.
         const choice = { ...(this.config.model ? { model: this.config.model } : {}), ...(this.config.effort ? { effort: this.config.effort } : {}), summary: 'auto' };
-        const started = (await this.request('turn/start', { threadId: this.sessionId, input, ...choice })) as { turn?: { id?: string } };
+        const access = this.config.access ? codexTurnAccess(this.config.access) : {};
+        const started = (await this.request('turn/start', { threadId: this.sessionId, input, ...choice, ...access })) as { turn?: { id?: string } };
         this.turnId ??= started.turn?.id ?? null;
         delivered();
       })
@@ -212,6 +216,10 @@ export class CodexSession {
   /** The reasoning effort for the next turns; none returns to the model's default. */
   async setEffort(effort?: string | null): Promise<void> {
     this.config.effort = effort || undefined;
+  }
+  /** What it may do without asking, from the next turn (a turn running keeps what it started with). */
+  setAccess(access: CodexAccess): void {
+    this.config.access = access;
   }
   async setFastMode(): Promise<void> {}
   async setPermissionMode(): Promise<void> {}

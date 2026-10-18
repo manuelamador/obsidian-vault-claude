@@ -295,14 +295,15 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
 ### Codex
 
-**Run a chat on Codex instead of Claude Code.** Choose **New Codex chat** in the New chat button's right-click menu or the command palette, or flip the switch on an empty chat (**Claude Code | Codex**) before its first message. **New chats run on** in the settings makes Codex the default. A Codex chat is marked **Codex** beside its title and in the history, and runs through Codex's own app-server with its settings (`~/.codex/config.toml`).
+**Run a chat on Codex instead of Claude Code.** Choose **New Codex chat** in the New chat button's right-click menu or the command palette, or flip the switch on an empty chat (**Claude Code | Codex**) before its first message. **New chats run on** in the settings makes Codex the default. A Codex chat is marked **Codex** beside its title and in the history, and runs through Codex's own app-server with its settings (`~/.codex/config.toml`), except for what the panel sets: model, effort and permissions.
 
 <details>
 <summary>What a Codex chat does, and what stays Claude Code's</summary>
 
 - Replies, thinking summaries, commands and file changes are drawn as in a Claude chat, with the changed files and their diffs under each reply.
 - The model and effort menus list Codex's models and the chosen model's reasoning efforts. The meter shows the chat's context and Codex's own usage limits, in place of Claude's plan.
-- Codex's requests to run a command or change files come as approval cards, naming the command or the files. The deny rules in the settings apply to these requests: a command they match is refused without asking. Commands Codex runs without asking, as its own approval settings allow, are not checked against them.
+- The mode menu sets what a Codex chat may do without asking, from its next message: **Read only** (it asks before changing anything), **Ask first** (it asks before any command not known to be safe), **Default** (it edits in the vault, and asks to go outside it or online), **Auto (reviewer)** (as Default, but a Codex reviewer model answers its requests instead of you) and, with **Offer bypass permissions** on, **Full access** (it runs anything without asking). **Default Codex permissions** in the settings sets it for new Codex chats.
+- Codex's requests to run a command or change files come as approval cards, naming the command or the files. The deny rules in the settings apply to these requests: a command they match is refused without asking. Commands Codex runs without asking, as its permissions allow, are not checked against them, nor are requests a Codex reviewer answers.
 - A project's context and included chats go with a Codex chat's messages as with Claude's.
 - The side chat beside a Codex chat runs on Codex, on a copy of the chat that Codex does not save and that only reads; it cannot be kept as a chat.
 - Small jobs (Edit selection, summaries, memo suggestions, Pick up where you left off, a project's Context, Suggest frontmatter updates) and the scratch chat can run on Codex too: **Small jobs run on** and **Scratch chat model** in the settings. With both on Codex, the plugin works without Claude Code.

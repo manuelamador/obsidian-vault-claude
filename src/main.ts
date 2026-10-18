@@ -39,6 +39,7 @@ import { InlineEditModal } from './inlineEdit';
 import { INLINE_CONTEXT_CHARS, inlineEditSystem } from './inlineEditPrompt';
 import { ChatView, VIEW_TYPE } from './view';
 import { DEFAULT_SETTINGS, SCRATCH_IDLE_CHOICES, VaultClaudeSettingTab, chatModel, extraPathEntries, type VaultClaudeSettings } from './settings';
+import { isCodexAccess } from './codexAccess';
 
 const MAX_CHAT_RECORDS = 500;
 /** How many ended background tasks the task list keeps, and how much of each one's output it reads. */
@@ -3587,6 +3588,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (this.settings.sideChatContext !== 'quote') this.settings.sideChatContext = 'chat';
     if (this.settings.newChatEngine !== 'codex') this.settings.newChatEngine = 'claude';
     if (this.settings.smallJobEngine !== 'codex') this.settings.smallJobEngine = 'claude';
+    if (!isCodexAccess(this.settings.codexAccess) || (this.settings.codexAccess === 'full' && !this.settings.allowBypass)) this.settings.codexAccess = 'default';
     for (const key of ['codexModel', 'codexEffort', 'smallJobCodexModel'] as const) if (typeof this.settings[key] !== 'string') this.settings[key] = '';
     // Up to 0.11.0 these were three settings; whichever was set becomes the one for small jobs.
     const legacy = stored as Partial<Record<'smallJobModel' | 'scratchModel' | 'summaryModel' | 'inlineEditModel', string>>;

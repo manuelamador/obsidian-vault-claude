@@ -146,6 +146,8 @@ async function main(): Promise<void> {
     codexLimits: null,
     codexLimitsFetchedAt: 0,
     loadCodexLimits: () => undefined,
+    loadCodexModels: async () => undefined,
+    codexModels: [],
     chatContext: {},
     setChatContext: () => undefined,
     setCodexLimits: () => undefined,
@@ -4519,6 +4521,29 @@ async function main(): Promise<void> {
       const scratchByIdOk = routed === 1;
       console.log(`scratch chat opened by id goes to the scratch chat: ${routed} -> ${scratchByIdOk}`);
       if (!scratchByIdOk) process.exitCode = 1;
+    }
+
+    {
+      // A Codex chat's mode menu offers Codex's permissions, and a change says what it allows; a Claude chat's, its modes again.
+      const accessView = view as unknown as {
+        useEngine(engine: 'claude' | 'codex'): void;
+        changeCodexAccess(access: string): void;
+        modeMenu: { value: string; options: { value: string }[] };
+        mode: string;
+      };
+      view.newChat();
+      accessView.useEngine('codex');
+      const offered = accessView.modeMenu.options.map((option) => option.value).join(',');
+      const startsDefault = accessView.modeMenu.value === 'default';
+      accessView.changeCodexAccess('autoReview');
+      const line = [...root.querySelectorAll('.vc-setting-line')].pop()?.textContent ?? '';
+      const chosen = accessView.modeMenu.value === 'autoReview';
+      accessView.useEngine('claude');
+      const backToClaude = accessView.modeMenu.value === accessView.mode && accessView.modeMenu.options.some((option) => option.value === 'acceptEdits');
+      view.newChat();
+      const accessOk = offered === 'readOnly,ask,default,autoReview' && startsDefault && chosen && line.startsWith('Codex permissions: Auto (reviewer)') && backToClaude;
+      console.log(`Codex permissions in the mode menu: ${offered}; default ${startsDefault}; chosen ${chosen}; line ${JSON.stringify(line.slice(0, 40))}; Claude again ${backToClaude} -> ${accessOk}`);
+      if (!accessOk) process.exitCode = 1;
     }
 
     {

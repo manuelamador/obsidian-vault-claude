@@ -120,6 +120,7 @@ import {
   codexWindows,
   type UsageWindow,
 } from './usageDisplay';
+import { codexAccessDetail, codexAccessLabel, codexAccessModes, codexAccessShort, type CodexAccess } from './codexAccess';
 
 /** How long after a panel writes a memo's Send box its own write is told from someone else's edit (see setMemoBox). */
 const MEMO_BOX_SETTLE_MS = 1500;
@@ -340,8 +341,8 @@ interface BackgroundChat {
   currentModel: string | null;
   currentEffort: EffortLevel | null;
   fastMode: boolean;
-  /** A Codex chat's model and effort (see startCodexChat); absent for a Claude chat. */
-  codex?: { model: string | undefined; effort: string | undefined };
+  /** A Codex chat's model, effort and permissions (see startCodexChat); absent for a Claude chat. */
+  codex?: { model: string | undefined; effort: string | undefined; access: CodexAccess };
   /** It is the scratch chat (see setScratch). */
   scratch?: boolean;
   /** The chat it reports back to, until its id is known (see runInNewChat). */
@@ -461,6 +462,8 @@ export class ChatView extends ItemView {
   /** A Codex chat's model and reasoning effort, chosen in its menus; none uses Codex's own settings. */
   private codexModel: string | undefined;
   private codexEffort: string | undefined;
+  /** What a Codex chat may do without asking (see codexAccess.ts): its mode menu, as `mode` is a Claude chat's. */
+  private codexAccess: CodexAccess = 'default';
   /** "Codex" beside the title of a Codex chat. */
   private engineBadge!: HTMLElement;
   private sessionToken: object | null = null;
@@ -683,6 +686,7 @@ export class ChatView extends ItemView {
   constructor(leaf: WorkspaceLeaf, private readonly plugin: VaultClaudePlugin) {
     super(leaf);
     this.mode = plugin.settings.permissionMode;
+    this.codexAccess = plugin.settings.codexAccess;
     this.modelOverride = chatModel(plugin.settings.model);
     this.effortOverride = plugin.settings.effort || undefined;
   }
@@ -1124,7 +1128,7 @@ export class ChatView extends ItemView {
     });
     this.modelMenu = new MenuButton(tools, 'Model', (value) => void this.changeModel(value));
     this.effortMenu = new MenuButton(tools, 'Effort', (value) => void this.changeEffort(value));
-    this.modeMenu = new MenuButton(tools, 'Permission mode', (value) => void this.changeMode(value as PermissionMode));
+    this.modeMenu = new MenuButton(tools, 'Permission mode', (value) => void (this.engine === 'codex' ? this.changeCodexAccess(value as CodexAccess) : this.changeMode(value as PermissionMode)));
     this.fastButton = tools.createEl('button', { cls: 'clickable-icon vc-fast' });
     setIcon(this.fastButton, 'zap');
     this.registerDomEvent(this.fastButton, 'click', () => void this.toggleFastMode());
@@ -1357,6 +1361,7 @@ export class ChatView extends ItemView {
     this.engine = 'claude';
     this.codexModel = undefined;
     this.codexEffort = undefined;
+    this.codexAccess = this.plugin.settings.codexAccess;
     this.unseen = null;
     this.lastSent = null;
     this.historyAt = null;
@@ -2131,7 +2136,7 @@ export class ChatView extends ItemView {
       currentModel: this.currentModel,
       currentEffort: this.currentEffort,
       fastMode: this.fastMode,
-      ...(this.engine === 'codex' ? { codex: { model: this.codexModel, effort: this.codexEffort } } : {}),
+      ...(this.engine === 'codex' ? { codex: { model: this.codexModel, effort: this.codexEffort, access: this.codexAccess } } : {}),
       ...(this.scratch ? { scratch: true } : {}),
       ...(this.reportTo ? { reportTo: this.reportTo } : {}),
       notice: null,
@@ -2483,6 +2488,7 @@ export class ChatView extends ItemView {
       this.engine = 'codex';
       this.codexModel = entry.codex?.model;
       this.codexEffort = entry.codex?.effort;
+      this.codexAccess = entry.codex?.access ?? this.plugin.settings.codexAccess;
       this.applyEngine();
     }
     this.populateModeSelect();
@@ -3925,7 +3931,7 @@ export class ChatView extends ItemView {
     }
     const title = this.chatName ?? 'Chat';
     const engine = this.engine;
-    const codex = { model: this.codexModel, effort: this.codexEffort };
+    const codex = { model: this.codexModel, effort: this.codexEffort, access: this.codexAccess };
     const { modelOverride, effortOverride } = this;
     const note = this.attachedNote;
     this.inputEl.value = '';
@@ -3936,6 +3942,7 @@ export class ChatView extends ItemView {
       this.engine = 'codex';
       this.codexModel = codex.model;
       this.codexEffort = codex.effort;
+      this.codexAccess = codex.access;
       this.applyEngine();
     } else if (this.engine === 'codex') {
       this.engine = 'claude';
@@ -4696,7 +4703,7 @@ export class ChatView extends ItemView {
     const token = {};
     this.sessionToken = token;
     this.session = new CodexSession(
-      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, denyRules: sessionDenyRules(this.plugin.settings) },
+      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, denyRules: sessionDenyRules(this.plugin.settings) },
       this.foregroundHandlers(token),
     );
     return this.session;
@@ -4742,8 +4749,8 @@ export class ChatView extends ItemView {
 
   /**
    * The controls for the chat's engine. A Codex chat: the Codex badge, Codex's models and the chosen
-   * model's reasoning efforts in the menus, and no permission mode, fast or phone buttons (Codex
-   * uses its own approval settings).
+   * model's reasoning efforts in the menus, Codex's permissions in the mode menu (see codexAccess.ts),
+   * and no fast or phone buttons.
    */
   private applyEngine(): void {
     const codex = this.engine === 'codex';
@@ -4754,10 +4761,9 @@ export class ChatView extends ItemView {
       this.plugin.loadCodexLimits();
     } else if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);
     else this.planText.empty();
-    for (const el of [this.modeMenu.el, this.fastButton, this.phoneButton]) if (codex) el.hide();
-    this.updatePlanCue();
+    for (const el of [this.fastButton, this.phoneButton]) if (codex) el.hide();
+    this.populateModeSelect();
     if (!codex) {
-      this.modeMenu.el.show();
       this.phoneButton.show();
       // Hidden in a Codex chat whose model has no efforts listed.
       this.effortMenu.el.show();
@@ -5379,6 +5385,18 @@ export class ChatView extends ItemView {
   }
 
   populateModeSelect(): void {
+    if (this.engine === 'codex') {
+      const offered = codexAccessModes(this.plugin.settings.allowBypass);
+      // Full access, when bypass was switched off in settings while this chat used it.
+      if (!(this.codexAccess in offered)) {
+        this.codexAccess = 'default';
+        if (this.session instanceof CodexSession) this.session.setAccess('default');
+      }
+      this.modeMenu.clear();
+      for (const [value, label] of Object.entries(offered)) this.modeMenu.add(value, label, codexAccessShort(value as CodexAccess));
+      this.showMode();
+      return;
+    }
     const modes = permissionModes(this.plugin.settings.allowBypass);
     if (!(this.mode in modes)) {
       // Bypass was switched off in settings while this chat used it.
@@ -5394,8 +5412,9 @@ export class ChatView extends ItemView {
 
   /** The mode menu, its bypass warning and the plan cue, as the chat's mode is. */
   private showMode(): void {
-    this.modeMenu.value = this.mode;
-    this.modeMenu.el.toggleClass('is-bypass', this.mode === 'bypassPermissions');
+    const codex = this.engine === 'codex';
+    this.modeMenu.value = codex ? this.codexAccess : this.mode;
+    this.modeMenu.el.toggleClass('is-bypass', codex ? this.codexAccess === 'full' : this.mode === 'bypassPermissions');
     this.updatePlanCue();
   }
 
@@ -5434,6 +5453,15 @@ export class ChatView extends ItemView {
       this.mode = previous;
       this.showMode();
     }
+  }
+
+  /** A Codex chat's permissions (see codexAccess.ts), from its next message: its session takes them with each turn. */
+  private changeCodexAccess(access: CodexAccess): void {
+    const previous = this.codexAccess;
+    this.codexAccess = access;
+    this.showMode();
+    if (this.session instanceof CodexSession) this.session.setAccess(access);
+    if (previous !== access) this.renderSettingLine(`Codex permissions: ${codexAccessLabel(access)} · ${codexAccessDetail(access)}${this.busy ? ', from the next message' : ''}`);
   }
 
   /** Changes of permission mode asked for (see changeMode): only the latest may undo itself. */
