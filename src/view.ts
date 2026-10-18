@@ -3684,7 +3684,7 @@ export class ChatView extends ItemView {
    * It may be removed here first, with what followed it. Its attachments are not carried.
    */
   private async sendToOtherChat(uuid: string, text: string): Promise<void> {
-    const chats = (await this.plugin.listChats().catch(() => [] as HistoryItem[])).filter((item) => !item.scratch && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title }));
+    const chats = (await this.plugin.listChats().catch(() => [] as HistoryItem[])).filter((item) => !this.plugin.isScratchChat(item) && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title }));
     if (chats.length === 0) {
       new Notice('There is no other chat to send it to.');
       return;
@@ -4196,7 +4196,7 @@ export class ChatView extends ItemView {
       evt.preventDefault();
       const start = this.inputEl.selectionStart;
       const end = this.inputEl.selectionEnd;
-      const chats = this.scratch ? [] : (this.plugin.listedChats() ?? []).filter((item) => !item.scratch && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title }));
+      const chats = this.scratch ? [] : (this.plugin.listedChats() ?? []).filter((item) => !this.plugin.isScratchChat(item) && item.id !== this.chatId).map((item) => ({ id: item.id, title: item.title }));
       new NotePicker(this.app, chats, (item) => {
         // A chat: a link to it, which links the chats once the message is sent.
         const text = item === null ? '@' : 'id' in item ? `${this.plugin.chatMarkdownLink(item.id)} ` : `@[[${this.mentionTarget(item)}]] `;
