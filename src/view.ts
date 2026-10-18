@@ -2206,6 +2206,7 @@ export class ChatView extends ItemView {
           if (entry.scratch) this.plugin.setScratch(message.session_id, engine);
           else this.plugin.recordChat(message.session_id, entry.title ?? 'Untitled chat', undefined, engine);
           if (entry.codex) this.plugin.setCodexChoices(message.session_id, entry.codex);
+          else this.plugin.setClaudeChoices(message.session_id, { model: entry.modelOverride ?? null, effort: entry.effortOverride, mode: entry.mode === 'plan' ? entry.modeBeforePlan : entry.mode });
           if (entry.reportTo) this.plugin.expectReport(message.session_id, entry.reportTo);
           entry.reportTo = undefined;
           if (entry.start) this.adoptStart(message.session_id, entry.start);
@@ -2916,6 +2917,16 @@ export class ChatView extends ItemView {
       this.codexEffort = choices?.effort;
       this.codexAccess = choices?.access ?? this.plugin.settings.codexAccess;
       this.applyEngine();
+    } else {
+      // As it was left: the model, effort and permission mode chosen for it (a branch's own follow below).
+      const kept = this.plugin.claudeChoices(item.id);
+      if (kept) {
+        if (kept.model !== undefined) this.modelOverride = kept.model ?? undefined;
+        if (kept.effort) this.effortOverride = kept.effort;
+        if (kept.mode) this.mode = this.modeBeforePlan = kept.mode;
+        this.populateModeSelect();
+        this.populateModelSelect();
+      }
     }
     this.messagesEl.empty();
     this.resumeId = item.id;
@@ -5434,6 +5445,7 @@ export class ChatView extends ItemView {
     this.showMode();
     const session = this.session;
     if (!session) {
+      this.saveChatChoices();
       this.renderModeLine(previous, mode);
       return;
     }
@@ -5441,6 +5453,7 @@ export class ChatView extends ItemView {
       await session.setPermissionMode(mode);
       // Another chat opened meanwhile: the change was that chat's, and this one shows its own.
       if (session !== this.session) return;
+      this.saveChatChoices();
       this.renderModeLine(previous, mode);
     } catch (error) {
       log('setPermissionMode failed', error);
@@ -5467,13 +5480,17 @@ export class ChatView extends ItemView {
     this.codexAccess = access;
     this.showMode();
     if (this.session instanceof CodexSession) this.session.setAccess(access);
-    this.saveCodexChoices();
+    this.saveChatChoices();
     if (previous !== access) this.renderSettingLine(`Codex permissions: ${codexAccessLabel(access)} · ${codexAccessDetail(access)}${this.busy ? ', from the next message' : ''}`);
   }
 
-  /** A Codex chat's model, effort and permissions, kept with its record to reopen it with (see setCodexChoices). */
-  private saveCodexChoices(): void {
-    if (this.engine === 'codex' && this.chatId) this.plugin.setCodexChoices(this.chatId, { model: this.codexModel, effort: this.codexEffort, access: this.codexAccess });
+  /** The chat's model, effort and permissions, kept with its record to reopen it with (see setCodexChoices, setClaudeChoices). */
+  private saveChatChoices(): void {
+    const id = this.chatId;
+    if (!id) return;
+    if (this.engine === 'codex') this.plugin.setCodexChoices(id, { model: this.codexModel, effort: this.codexEffort, access: this.codexAccess });
+    // Plan mode is not kept: what the chat returns to once the plan is approved or left.
+    else this.plugin.setClaudeChoices(id, { model: this.modelOverride ?? null, effort: this.effortOverride, mode: this.mode === 'plan' ? this.modeBeforePlan : this.mode });
   }
 
   /** Changes of permission mode asked for (see changeMode): only the latest may undo itself. */
@@ -5489,6 +5506,7 @@ export class ChatView extends ItemView {
     if (mode === 'plan') this.modeBeforePlan = previous;
     this.mode = mode;
     this.showMode();
+    this.saveChatChoices();
     this.renderModeLine(previous, mode);
   }
 
@@ -5763,7 +5781,7 @@ export class ChatView extends ItemView {
   private async changeEffort(value: string): Promise<void> {
     if (this.engine === 'codex') {
       this.codexEffort = value || undefined;
-      this.saveCodexChoices();
+      this.saveChatChoices();
       await this.session?.setEffort((this.codexEffort ?? null) as never);
       return this.applyEngine();
     }
@@ -5787,6 +5805,7 @@ export class ChatView extends ItemView {
         this.effortOverride = previous;
       }
     }
+    this.saveChatChoices();
     this.populateEffortSelect();
   }
 
@@ -5796,7 +5815,7 @@ export class ChatView extends ItemView {
       // An effort the new model does not offer goes back to its default.
       const model = this.plugin.codexModels.find((each) => each.id === this.codexModel);
       if (this.codexEffort && model && !model.efforts.some((effort) => effort.value === this.codexEffort)) this.codexEffort = undefined;
-      this.saveCodexChoices();
+      this.saveChatChoices();
       await this.session?.setModel(this.codexModel);
       await this.session?.setEffort((this.codexEffort ?? null) as never);
       return this.applyEngine();
@@ -5832,6 +5851,7 @@ export class ChatView extends ItemView {
       this.currentModel = null;
     }
     this.populateModelSelect();
+    if (switched) this.saveChatChoices();
     if (switched) this.renderSettingLine(`Model: ${this.modelMenu.label}`);
     // A model without fast mode turns it off.
     const chosen = this.chosenModelInfo();
@@ -6100,11 +6120,11 @@ export class ChatView extends ItemView {
             this.chatId = message.session_id;
             if (this.scratch) {
               this.plugin.setScratch(message.session_id, this.engine === 'codex' ? 'codex' : undefined);
-              this.saveCodexChoices();
+              this.saveChatChoices();
             }
             else {
               this.plugin.recordChat(message.session_id, this.chatName ?? 'Untitled chat', copyOf, this.engine === 'codex' ? 'codex' : undefined);
-              this.saveCodexChoices();
+              this.saveChatChoices();
               if (this.reportTo) this.plugin.expectReport(message.session_id, this.reportTo);
               this.reportTo = null;
               this.plugin.adoptProjectState(message.session_id, start.state);
@@ -7236,7 +7256,7 @@ export class ChatView extends ItemView {
       const title = first ? chatTitle(first) : 'Untitled chat';
       this.setChatTitle(title);
       this.plugin.recordChat(id, title, undefined, this.engine === 'codex' ? 'codex' : undefined);
-      this.saveCodexChoices();
+      this.saveChatChoices();
       this.titleFromClaude = false;
       void this.refreshTitle();
     }

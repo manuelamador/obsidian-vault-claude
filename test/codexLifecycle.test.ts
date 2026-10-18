@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { codexAccessModes, codexTurnAccess, readCodexChoices } from '../src/codexAccess';
+import { readClaudeChoices } from '../src/chatChoices';
 import { CodexSession, runCodexOneShot, stopCodexReader } from '../src/codexSession';
 
 import { launchIn } from './fakeCodex';
@@ -89,4 +90,10 @@ test("a Codex chat's choices are read back as kept, what is not one left out", (
   assert.deepEqual(readCodexChoices({ model: 'gpt-5.5', effort: 'high', access: 'ask' }), { model: 'gpt-5.5', effort: 'high', access: 'ask' });
   assert.deepEqual(readCodexChoices({ model: '', effort: 3, access: 'everything' }), {});
   assert.equal(readCodexChoices(null), undefined);
+});
+
+test("a Claude chat's choices are read back as kept: never Plan, and null for Claude Code's own model", () => {
+  assert.deepEqual(readClaudeChoices({ model: 'sonnet', effort: 'high', mode: 'acceptEdits' }), { model: 'sonnet', effort: 'high', mode: 'acceptEdits' });
+  assert.deepEqual(readClaudeChoices({ model: null, effort: 'huge', mode: 'plan' }), { model: null });
+  assert.deepEqual(readClaudeChoices({}), {});
 });

@@ -40,6 +40,7 @@ import { INLINE_CONTEXT_CHARS, inlineEditSystem } from './inlineEditPrompt';
 import { ChatView, VIEW_TYPE } from './view';
 import { DEFAULT_SETTINGS, SCRATCH_IDLE_CHOICES, VaultClaudeSettingTab, chatModel, extraPathEntries, type VaultClaudeSettings } from './settings';
 import { isCodexAccess, readCodexChoices, type CodexChoices } from './codexAccess';
+import { readClaudeChoices, type ClaudeChoices } from './chatChoices';
 
 const MAX_CHAT_RECORDS = 500;
 /** How many ended background tasks the task list keeps, and how much of each one's output it reads. */
@@ -195,7 +196,7 @@ interface PluginData {
   drafts?: Record<string, ChatDraft>;
   planNotes?: Record<string, PlanNote>;
   unseen?: Record<string, 'done' | 'error'>;
-  scratch?: { id: string; usedAt: number; engine?: 'codex'; codex?: CodexChoices };
+  scratch?: { id: string; usedAt: number; engine?: 'codex'; codex?: CodexChoices; claude?: ClaudeChoices };
   sideSessions?: string[];
   pickUp?: PickUpState;
   /** The panels' tabs for chats that finished in their background (see DoneTabs), shown again at the next start. */
@@ -357,7 +358,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Chats that finished while not on screen, and how, until they are shown. */
   unseen: Record<string, 'done' | 'error'> = {};
   /** The scratch chat: one chat that starts over when it has been idle, kept out of the history list. */
-  scratch: { id: string; usedAt: number; engine?: 'codex'; codex?: CodexChoices } | null = null;
+  scratch: { id: string; usedAt: number; engine?: 'codex'; codex?: CodexChoices; claude?: ClaudeChoices } | null = null;
   /** Side chats' sessions not deleted yet: those open now, and any left when Obsidian last quit. */
   sideSessions: string[] = [];
   /** A save waiting to cover a burst of changes (see saveSoon). */
@@ -1578,6 +1579,21 @@ export default class VaultClaudePlugin extends Plugin {
     const kept = readCodexChoices(choices);
     if (JSON.stringify(kept) === JSON.stringify(record.codex)) return;
     record.codex = kept;
+    void this.saveSettings();
+  }
+
+  /** Claude chat `id`'s model, effort and permission mode as chosen in the panel; none for a chat with no record of them. */
+  claudeChoices(id: string): ClaudeChoices | undefined {
+    return this.scratch?.id === id ? this.scratch.claude : this.chats.find((chat) => chat.id === id)?.claude;
+  }
+
+  /** Keeps Claude chat `id`'s choices with its record, so that it reopens with them; nothing for a chat with no record yet. */
+  setClaudeChoices(id: string, choices: ClaudeChoices): void {
+    const record = this.scratch?.id === id ? this.scratch : this.chats.find((chat) => chat.id === id && chat.engine !== 'codex');
+    if (!record) return;
+    const kept = readClaudeChoices(choices);
+    if (JSON.stringify(kept) === JSON.stringify(record.claude)) return;
+    record.claude = kept;
     void this.saveSettings();
   }
 
@@ -3619,13 +3635,14 @@ export default class VaultClaudePlugin extends Plugin {
     delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
     // Up to 0.21.1 each record also held when it was made and last used, which nothing read.
     this.chats = Array.isArray(raw.chats)
-      ? raw.chats.map(({ id, title, copyOf, engine, at, codex }) => {
+      ? raw.chats.map(({ id, title, copyOf, engine, at, codex, claude }) => {
           const choices = engine === 'codex' ? readCodexChoices(codex) : undefined;
-          return { id, title, ...(typeof copyOf === 'string' ? { copyOf } : {}), ...(engine === 'codex' ? { engine } : {}), ...(typeof at === 'number' ? { at } : {}), ...(choices ? { codex: choices } : {}) };
+          const claudeChoices = engine === 'codex' ? undefined : readClaudeChoices(claude);
+          return { id, title, ...(typeof copyOf === 'string' ? { copyOf } : {}), ...(engine === 'codex' ? { engine } : {}), ...(typeof at === 'number' ? { at } : {}), ...(choices ? { codex: choices } : {}), ...(claudeChoices ? { claude: claudeChoices } : {}) };
         })
       : [];
     this.pinned = Array.isArray(raw.pinned) ? raw.pinned : [];
-    this.scratch = raw.scratch && typeof raw.scratch.id === 'string' ? { id: raw.scratch.id, usedAt: raw.scratch.usedAt, ...(raw.scratch.engine === 'codex' ? { engine: 'codex' as const, codex: readCodexChoices(raw.scratch.codex) } : {}) } : null;
+    this.scratch = raw.scratch && typeof raw.scratch.id === 'string' ? { id: raw.scratch.id, usedAt: raw.scratch.usedAt, ...(raw.scratch.engine === 'codex' ? { engine: 'codex' as const, codex: readCodexChoices(raw.scratch.codex) } : { claude: readClaudeChoices(raw.scratch.claude) }) } : null;
     this.sideSessions = Array.isArray(raw.sideSessions) ? raw.sideSessions.filter((id): id is string => typeof id === 'string') : [];
     this.noteChats = raw.noteChats && typeof raw.noteChats === 'object' ? raw.noteChats : {};
     this.noteRefs = raw.noteRefs && typeof raw.noteRefs === 'object' ? raw.noteRefs : {};

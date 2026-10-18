@@ -6,6 +6,7 @@ import * as path from 'path';
 import { log } from './log';
 import { isChatId } from './memos';
 import type { CodexChoices } from './codexAccess';
+import type { ClaudeChoices } from './chatChoices';
 
 /** A chat started from the panel, kept in the plugin's data.json. */
 export interface ChatRecord {
@@ -19,6 +20,8 @@ export interface ChatRecord {
   at?: number;
   /** For a Codex chat, its model, effort and permissions as chosen in the panel (see setCodexChoices). */
   codex?: CodexChoices;
+  /** For a Claude chat, its model, effort and permission mode as chosen in the panel (see setClaudeChoices). */
+  claude?: ClaudeChoices;
 }
 
 export interface HistoryItem {
