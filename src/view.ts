@@ -1580,7 +1580,7 @@ export class ChatView extends ItemView {
   // ---- Phone access ------------------------------------------------------
 
   updatePhoneButton(): void {
-    if (this.engine === 'codex') return void this.phoneButton.hide();
+    if (this.engine === 'codex') return this.updateCodexPhoneButton();
     const { state, activeSessions, error } = this.plugin.remote.status;
     const chatOn = this.remoteUrl !== null;
     const button = this.phoneButton;
@@ -1599,7 +1599,80 @@ export class ChatView extends ItemView {
     button.setAttr('aria-label', parts.length > 0 ? `${parts.join('. ')}. Click for options.` : 'Phone access. Click for options.');
   }
 
+  /**
+   * In a Codex chat, the phone button says whether Codex's phone app can open the chat while the
+   * panel has it: lit while Codex's shared app-server runs and the panel uses it (see codexLaunch).
+   */
+  private updateCodexPhoneButton(): void {
+    const button = this.phoneButton;
+    const running = this.plugin.codexDaemonRunning();
+    const shared = running && this.plugin.settings.codexShared;
+    button.show();
+    button.toggleClass('is-on', shared);
+    button.toggleClass('is-starting', this.codexDaemonStarting);
+    button.toggleClass('is-error', false);
+    button.setAttr(
+      'aria-label',
+      this.codexDaemonStarting
+        ? "Starting Codex's shared app-server…"
+        : shared
+          ? "Codex's shared app-server is running: Codex's phone app can open this chat, follow it and write in it. Click for options."
+          : running
+            ? "Codex's shared app-server is running, but Use Codex's shared app-server is off in the settings. Click for options."
+            : "Codex's phone app cannot open this chat while the panel has it. Click to start Codex's shared app-server.",
+    );
+  }
+
+  /** Codex's shared app-server is being started from this panel (see onCodexPhoneClick). */
+  private codexDaemonStarting = false;
+
+  /** Codex's shared app-server started or stopped: the phone button follows, and an idle Codex chat reconnects through it (or not) with its next message. */
+  codexDaemonChanged(): void {
+    this.updatePhoneButton();
+    if (this.engine === 'codex' && this.session instanceof CodexSession && !this.busy && this.pending.size === 0 && this.tasks.size === 0) {
+      this.sessionToken = null;
+      this.closeSession(this.session);
+      this.session = null;
+    }
+  }
+
+  private onCodexPhoneClick(evt: MouseEvent): void {
+    const menu = new Menu();
+    const running = this.plugin.codexDaemonRunning();
+    if (running) {
+      menu.addItem((item) => item.setTitle(this.plugin.settings.codexShared ? "Codex's shared app-server is running" : "Running, but not used: turned off in the settings").setIcon('smartphone').setDisabled(true));
+      if (!this.plugin.settings.codexShared) {
+        menu.addItem((item) =>
+          item.setTitle("Use Codex's shared app-server").setIcon('check').onClick(async () => {
+            this.plugin.settings.codexShared = true;
+            await this.plugin.saveSettings();
+            this.plugin.codexDaemonSettingChanged();
+          }),
+        );
+      }
+      menu.addItem((item) =>
+        item.setTitle("Stop Codex's shared app-server").setIcon('square').onClick(async () => {
+          const error = await this.plugin.stopCodexDaemon();
+          new Notice(error ? `Could not stop it: ${error}` : "Codex's shared app-server stopped. Codex chats run on their own again.");
+        }),
+      );
+    } else {
+      menu.addItem((item) =>
+        item.setTitle("Start Codex's shared app-server, for the phone app").setIcon('play').onClick(async () => {
+          this.codexDaemonStarting = true;
+          this.updatePhoneButton();
+          const error = await this.plugin.startCodexDaemon();
+          this.codexDaemonStarting = false;
+          this.updatePhoneButton();
+          new Notice(error ? `Codex's shared app-server did not start: ${error}` : "Codex's shared app-server is running, with remote control on: Codex's phone app can open this chat from its next message.");
+        }),
+      );
+    }
+    menu.showAtMouseEvent(evt);
+  }
+
   private onPhoneClick(evt: MouseEvent): void {
+    if (this.engine === 'codex') return this.onCodexPhoneClick(evt);
     const menu = new Menu();
     const chatUrl = this.remoteUrl;
     if (chatUrl) {
@@ -4985,11 +5058,12 @@ export class ChatView extends ItemView {
       this.plugin.loadCodexLimits();
     } else if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);
     else this.planText.empty();
-    if (codex) this.phoneButton.hide();
+    // Claude's phone access, or whether Codex's phone app can open the chat (see updateCodexPhoneButton).
+    this.phoneButton.show();
+    this.updatePhoneButton();
     this.populateModeSelect();
     this.updateFastButton();
     if (!codex) {
-      this.phoneButton.show();
       // Hidden in a Codex chat whose model has no efforts listed.
       this.effortMenu.el.show();
       this.populateModelSelect();

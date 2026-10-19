@@ -394,6 +394,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         toggle.setValue(settings.codexShared).onChange(async (value) => {
           settings.codexShared = value;
           await this.plugin.saveSettings();
+          this.plugin.codexDaemonSettingChanged();
         }),
       );
 

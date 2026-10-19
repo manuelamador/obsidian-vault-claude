@@ -155,6 +155,10 @@ async function main(): Promise<void> {
     claudeChoices: (): undefined => undefined,
     setClaudeChoices: () => undefined,
     forgetCodexRead: () => undefined,
+    codexDaemonRunning: () => false,
+    startCodexDaemon: async (): Promise<null> => null,
+    stopCodexDaemon: async (): Promise<null> => null,
+    codexDaemonSettingChanged: () => undefined,
     codexModels: [],
     chatContext: {},
     setChatContext: () => undefined,
@@ -4646,6 +4650,23 @@ async function main(): Promise<void> {
       const zoteroOk = listed && iconOk && found && tabs === 'Files,Zotero' && text === 'Kortum (1997) — Research, Patenting, and Technological Change' && groupText.endsWith(' · Reading Group') && !told && toldNow;
       console.log(`Zotero in the @ picker: tabs ${tabs}; listed ${listed}; found by words ${found}; "${text}"; not running told on its tab only ${!told && toldNow} -> ${zoteroOk}`);
       if (!zoteroOk) process.exitCode = 1;
+    }
+
+    {
+      // A Codex chat's phone button: lit while Codex's shared app-server runs, else offering to start it.
+      const phoneView = view as unknown as { useEngine(engine: 'claude' | 'codex'): void; phoneButton: HTMLElement; updatePhoneButton(): void };
+      const daemon = plugin as unknown as { codexDaemonRunning: () => boolean };
+      view.newChat();
+      phoneView.useEngine('codex');
+      const offAsk = !phoneView.phoneButton.hasClass('is-on') && phoneView.phoneButton.style.display !== 'none' && (phoneView.phoneButton.getAttribute('aria-label') ?? '').includes('Click to start');
+      daemon.codexDaemonRunning = () => true;
+      phoneView.updatePhoneButton();
+      const lit = phoneView.phoneButton.hasClass('is-on');
+      daemon.codexDaemonRunning = () => false;
+      view.newChat();
+      const daemonOk = offAsk && lit;
+      console.log(`Codex phone button: offers to start ${offAsk}; lit with the daemon ${lit} -> ${daemonOk}`);
+      if (!daemonOk) process.exitCode = 1;
     }
 
     {

@@ -1,4 +1,5 @@
 import { existsSync, promises as fsPromises } from 'fs';
+import { execFile } from 'child_process';
 import { homedir } from 'os';
 import type { TaskInfo } from './backgroundTasks';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
@@ -1445,10 +1446,51 @@ export default class VaultClaudePlugin extends Plugin {
     const cwd = this.vaultRoot();
     if (!cwd) return 'Codex chats need the vault to be a folder on this computer.';
     const env = claudeEnv(codexPath, extraPathEntries(this.settings.extraPath));
-    // Codex's shared app-server, when its daemon runs: its control socket, under Codex's home.
-    const home = env.CODEX_HOME || joinPath(homedir(), '.codex');
-    const shared = this.settings.codexShared && existsSync(joinPath(home, 'app-server-control', 'app-server-control.sock'));
+    const shared = this.settings.codexShared && this.codexDaemonRunning(env);
     return { codexPath, cwd, env, ...(shared ? { shared: true } : {}) };
+  }
+
+  /** Whether Codex's shared app-server (its daemon) runs: its control socket, under Codex's home, is there. */
+  codexDaemonRunning(env: Record<string, string | undefined> = process.env): boolean {
+    const home = env.CODEX_HOME || joinPath(homedir(), '.codex');
+    return existsSync(joinPath(home, 'app-server-control', 'app-server-control.sock'));
+  }
+
+  /**
+   * Starts Codex's shared app-server with remote control on, as `codex app-server daemon start` and
+   * `enable-remote-control` do in a terminal, and waits for its socket: Codex's phone app can then
+   * open the panel's Codex chats (see codexLaunch). An error's text, or null once it runs.
+   */
+  async startCodexDaemon(): Promise<string | null> {
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return launch;
+    const run = (args: string[]) =>
+      new Promise<string | null>((resolve) =>
+        execFile(launch.codexPath, args, { env: launch.env, timeout: 60_000 }, (error, _stdout, stderr) => resolve(error ? (stderr.trim().split('\n').pop() || error.message) : null)),
+      );
+    const started = await run(['app-server', 'daemon', 'start']);
+    if (started) return started;
+    const remote = await run(['app-server', 'daemon', 'enable-remote-control']);
+    if (remote) log('enabling codex remote control failed', remote);
+    for (let waited = 0; waited < 10_000 && !this.codexDaemonRunning(launch.env); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250));
+    for (const view of this.chatViews()) view.codexDaemonChanged();
+    return this.codexDaemonRunning(launch.env) ? null : 'it did not start in time';
+  }
+
+  /** Use Codex's shared app-server was switched: the panels' phone buttons and idle Codex chats follow. */
+  codexDaemonSettingChanged(): void {
+    for (const view of this.chatViews()) view.codexDaemonChanged();
+  }
+
+  /** Stops Codex's shared app-server (`codex app-server daemon stop`); the panel's Codex chats go back to processes of their own. */
+  async stopCodexDaemon(): Promise<string | null> {
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return launch;
+    const error = await new Promise<string | null>((resolve) =>
+      execFile(launch.codexPath, ['app-server', 'daemon', 'stop'], { env: launch.env, timeout: 60_000 }, (failed, _stdout, stderr) => resolve(failed ? (stderr.trim().split('\n').pop() || failed.message) : null)),
+    );
+    for (const view of this.chatViews()) view.codexDaemonChanged();
+    return error;
   }
 
   /**
