@@ -48,7 +48,8 @@ export class NotePicker extends FuzzySuggestModal<Picked> {
     if (tabs.length > 1) {
       const bar = this.modalEl.createDiv({ cls: 'vc-picker-tabs', attr: { role: 'tablist' } });
       for (const tab of tabs) {
-        const el = bar.createEl('button', { cls: 'vc-picker-tab', text: TAB_NAMES[tab], attr: { role: 'tab' } });
+        // Out of the focus order: Tab moves between tabs (below) while the typing stays in the input.
+        const el = bar.createEl('button', { cls: 'vc-picker-tab', text: TAB_NAMES[tab], attr: { role: 'tab', tabindex: '-1' } });
         // A click on a tab keeps the input focused, for typing on.
         el.addEventListener('mousedown', (evt) => evt.preventDefault());
         el.addEventListener('click', () => this.showTab(tab));
@@ -76,6 +77,12 @@ export class NotePicker extends FuzzySuggestModal<Picked> {
         },
       );
     }
+  }
+
+  /** Opened with the input focused, for typing at once (the tabs before it would otherwise take the focus). */
+  onOpen(): void {
+    super.onOpen();
+    window.setTimeout(() => this.inputEl.focus(), 0);
   }
 
   /** What the Zotero tab says while its works are not listed: being read, or Zotero not running. */
