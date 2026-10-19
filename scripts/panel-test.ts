@@ -159,6 +159,9 @@ async function main(): Promise<void> {
     startCodexDaemon: async (): Promise<null> => null,
     stopCodexDaemon: async (): Promise<null> => null,
     codexDaemonSettingChanged: () => undefined,
+    setPhoneClaude: async () => undefined,
+    phoneChatCount: () => 0,
+    setPhoneCodex: async () => undefined,
     codexModels: [],
     chatContext: {},
     setChatContext: () => undefined,
@@ -4653,19 +4656,29 @@ async function main(): Promise<void> {
     }
 
     {
-      // A Codex chat's phone button: lit while Codex's shared app-server runs, else offering to start it.
+      // The phone button, the same in Claude and Codex chats: off, then green with Codex on the phone, accent with Claude Code, both marked when both are.
       const phoneView = view as unknown as { useEngine(engine: 'claude' | 'codex'): void; phoneButton: HTMLElement; updatePhoneButton(): void };
-      const daemon = plugin as unknown as { codexDaemonRunning: () => boolean };
+      const daemon = plugin as unknown as { codexDaemonRunning: () => boolean; settings: { phoneCodex: boolean; phoneClaude: boolean }; remote: { status: { state: string } } };
+      const statusWas = daemon.remote.status;
       view.newChat();
       phoneView.useEngine('codex');
-      const offAsk = !phoneView.phoneButton.hasClass('is-on') && phoneView.phoneButton.style.display !== 'none' && (phoneView.phoneButton.getAttribute('aria-label') ?? '').includes('Click to start');
-      daemon.codexDaemonRunning = () => true;
       phoneView.updatePhoneButton();
-      const lit = phoneView.phoneButton.hasClass('is-on');
+      const offShown = phoneView.phoneButton.style.display !== 'none' && !phoneView.phoneButton.hasClass('is-on') && (phoneView.phoneButton.getAttribute('aria-label') ?? '').startsWith('Phone access: off');
+      daemon.codexDaemonRunning = () => true;
+      daemon.settings.phoneCodex = true;
+      phoneView.updatePhoneButton();
+      const codexLit = phoneView.phoneButton.hasClass('is-codex') && !phoneView.phoneButton.hasClass('is-claude');
+      daemon.settings.phoneClaude = true;
+      daemon.remote.status = { ...statusWas, state: 'connected' };
+      phoneView.updatePhoneButton();
+      const bothLit = phoneView.phoneButton.hasClass('is-codex') && phoneView.phoneButton.hasClass('is-claude');
       daemon.codexDaemonRunning = () => false;
+      daemon.settings.phoneCodex = false;
+      daemon.settings.phoneClaude = false;
+      daemon.remote.status = statusWas;
       view.newChat();
-      const daemonOk = offAsk && lit;
-      console.log(`Codex phone button: offers to start ${offAsk}; lit with the daemon ${lit} -> ${daemonOk}`);
+      const daemonOk = offShown && codexLit && bothLit;
+      console.log(`phone button for both engines: off ${offShown}; Codex green ${codexLit}; both marked ${bothLit} -> ${daemonOk}`);
       if (!daemonOk) process.exitCode = 1;
     }
 

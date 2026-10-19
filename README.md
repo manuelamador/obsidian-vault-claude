@@ -314,22 +314,20 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 - Branching works as in a Claude chat (from a reply, or the whole chat): Codex copies the conversation up to and including that reply's turn, and the copy goes on with the chat's model, effort and permissions.
 - The arrow beside your messages offers **Send this message to another chat…** and **Remove from here on**. Codex keeps no copy of what it removes, so there is no Undo. It cannot copy a conversation from a message on, so **Copy** and **Move from here on to a new chat** are not offered.
 - **Compact now** in the usage card asks Codex to compact the conversation; the divider marks it, as in a Claude chat.
-- **In Codex's own app and on the phone**, each Codex chat is listed under its title in the panel, not under the context sent with its first message. With Codex's shared app-server running (`codex app-server daemon start`, with remote control on: what Codex's phone app talks to) and **Use Codex's shared app-server** on, the panel's Codex chats go through it, so the phone app can open a chat the panel has open, follow its replies and write in it. Without it, a Codex chat's own process is let go of after three idle minutes, so the phone app can open the chat meanwhile. **Keep Codex chats out of Codex's own lists** archives them in Codex while they are not open in the panel. In a Codex chat, the phone button is lit while the shared app-server runs; otherwise clicking it offers to start it, with remote control on (a lasting Codex setting). One started from the panel stops when Obsidian quits, and the panel offers to stop only a shared app-server it started itself; one started outside Obsidian may serve other Codex clients, and is stopped there.
+- **In Codex's own app and on the phone**, each Codex chat is listed under its title in the panel, and your messages read as you typed them: the context the panel adds (the attached note, mentions, a project's context) goes to Codex apart from the message. Messages sent before 0.35.0 keep their context in Codex's record. For Codex's phone app, see Phone access. Without Codex on the phone, a Codex chat's own process is let go of after three idle minutes, so the phone app can open the chat meanwhile.
 - **Fast mode** (⚡) asks for Codex's fast tier, for models that offer it: faster output, using more of your Codex limits.
-- Claude Code's own features are not offered in a Codex chat: Plan mode and `/plan`, slash commands and the phone.
+- Claude Code's own features are not offered in a Codex chat: Plan mode and `/plan`, and slash commands.
 
 </details>
 
 ### Phone access
 
-**Continue a chat on your phone.** The phone icon connects it to the Claude app or claude.ai/code through Remote Control, and disconnects it again. Its menu can also let the phone start new sessions in this vault.
+**Chats on your phone, Claude Code's and Codex's alike.** The phone button at the top of the panel, the same in Claude and Codex chats, turns each on or off for the whole panel, and what is on stays on the next time Obsidian starts:
 
-<details>
-<summary>Phone menu</summary>
+- **Claude Code on the phone:** every Claude chat running in the panel, the one on screen and those in the background, can be continued from the Claude app or claude.ai/code (Remote Control), and chats that start later follow; the phone can also start new sessions in the vault. The menu opens this chat, or the vault's sessions, in claude.ai/code.
+- **Codex on the phone:** Codex chats go through Codex's shared app-server (its daemon, with remote control on), so Codex's phone app can open any of them, follow replies as they come and write in them. The panel starts it when needed and stops it when Obsidian quits; one started outside Obsidian is used as it is and left running.
 
-<img src="docs/phone-menu.png" width="480" alt="The phone menu open below the phone button at the top right of the panel: Continue this chat on your phone, and Let the phone start new sessions in this vault">
-
-</details>
+The button is lit in the accent colour while Claude Code is on the phone, green while Codex is, and the accent colour with a green dot when both are.
 
 ### Safety
 
@@ -372,44 +370,58 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 | Claude Code executable | Path to `claude`; detected automatically when empty |
 | Default model, effort | Starting values for new Claude Code chats. **Default** is Claude Code's default model; **Claude Code's setting** runs the model Claude Code's own settings name, when they name one |
 | Model for small jobs | For small jobs run on Claude Code (default Sonnet) |
-| Default permission mode | Starting mode for new Claude Code chats |
 | **Codex** | |
 | Codex executable | Path to `codex`; detected automatically when empty |
 | Default Codex model, effort | Starting values for new Codex chats (default: Codex's own) |
+| Default Codex permissions | What new Codex chats may do without asking (default: Default) |
 | Codex model for small jobs | For small jobs run on Codex (default: same as Codex chats) |
 | **Chats** | |
+| Attach the open note to new chats | Off: a new chat starts with no note, and the chip offers the open one |
 | Files left out of a chat's notes | Patterns of notes not listed (default `*attachments/*`) |
+| Side chat knows | The whole chat it was opened from (default), or only what you ask it |
+| Remember sent messages for ↑ | Keep your last 100 sent messages for ↑ in any chat (default on); **Clear** empties them |
+| History includes all vault sessions | Also list sessions started outside the panel |
+| Rebuild connections | Reads every chat's links to notes again |
+| Notify when Claude finishes, Notify after | Notifications for long replies and approvals while Obsidian is in the background (default on, 30 s) |
+| **Scratch chat** | |
 | Scratch chat | Offer the scratch chat in the history, an empty chat and the new-chat menu (default on) |
 | Scratch chat starts over after | 1 hour to 1 week unused (default 24 hours) |
 | Scratch chat model | A Claude Code or Codex model for the scratch chat (default: as small jobs run) |
-| Side chat knows | The whole chat it was opened from (default), or only what you ask it |
-| Offer bypass permissions | Adds Bypass to the mode menus |
+| **Permissions** | |
+| Default permission mode | Starting mode for new Claude Code chats |
+| Offer bypass permissions | Adds Bypass to the mode menus, and Full access for Codex chats |
 | Deny rules | Actions refused in every mode, one rule per line; for Codex, the commands it asks to run |
+| **Zotero** | |
+| Zotero in @ | The works in your Zotero libraries in the `@` picker, read through Zotero's local API while Zotero runs (default off) |
+| **Gmail** | |
 | Gmail features | Cards for mail and drafts, Make a todo, Draft an email from this note and mail read by chats, for Claude Code's Gmail connector; turn off without Gmail (default on) |
-| Mail: drafts only | With Claude Code's Gmail connector, Claude reads mail and writes drafts but cannot send, reply or forward (default on) |
 | Todo note | Where Make a todo on an email card adds its line, and the section (default `Todo.md`, Open) |
+| Mail: drafts only | With Claude Code's Gmail connector, Claude reads mail and writes drafts but cannot send, reply or forward (default on) |
+| **Saved notes** | |
+| Folder for saved chats | Where Save chat as note and Save summary as note write (default `Claude chats`) |
+| Folder for memos | Where memos and the Memos table go (default `Claude chats/Memos`); memos elsewhere are still listed |
+| **Appearance and input** | |
 | Tool calls | Summary, one line each, or hidden |
 | Panel side margins | 8–96 px |
 | Send with ⌘+Enter (Ctrl+Enter on Windows) | Otherwise Enter sends |
-| Remember sent messages for ↑ | Keep your last 100 sent messages for ↑ in any chat (default on); **Clear** empties them |
-| Attach the open note to new chats | Off: a new chat starts with no note, and the chip offers the open one |
-| History includes all vault sessions | Also list sessions started outside the panel |
-| Folder for saved chats | Where Save chat as note and Save summary as note write (default `Claude chats`) |
-| Folder for memos | Where memos and the Memos table go (default `Claude chats/Memos`); memos elsewhere are still listed |
-| Notify when Claude finishes, Notify after | Notifications for long replies and approvals while Obsidian is in the background (default on, 30 s) |
-| Phone access | Put every new chat on the phone, name in the Claude app, start with Obsidian |
+| **Phone access** | |
+| Claude Code on the phone | Every Claude chat running in the panel reachable from the Claude app and claude.ai/code, and new sessions in the vault from the phone (default off) |
+| Name in the Claude app | How the vault appears in the Claude app |
+| Codex on the phone | Codex chats through Codex's shared app-server, so Codex's phone app can open them (default off) |
+| Keep Codex chats out of Codex's own lists | Archives them in Codex while not open in the panel (default off) |
+| **Advanced** | |
 | Extra PATH entries | Directories added to PATH for commands Claude runs |
 
 ## Commands
 
-Open chat · New chat · New chat in a new tab · New Codex chat · Run this message in a new chat, report back · Show background tasks · Chat history · Pick up where you left off · Pick up where you left off: show ignored chats again · Edit selection with Claude · Find in chat · Go to previous / next message you sent · List messages you sent · Write this message in a note · Send the draft note · Send this note to Claude as a prompt · Suggest frontmatter updates for this note · Draft an email from this note… · Quote the selected chat text in your next message · Open side chat · Open scratch chat · Clear scratch chat · Toggle fast mode · Focus chat input · Stop Claude · Rename chat · Branch this chat into a new tab · Save chat as note · Save chat summary as note · Ask Claude about selection · Continue from this memo · Open connections · Create project… · Write every project’s context anew · Rebuild connections from chat files · Take all chats off the phone · Toggle phone access (Remote Control)
+Open chat · New chat · New chat in a new tab · New Codex chat · Run this message in a new chat, report back · Show background tasks · Chat history · Pick up where you left off · Pick up where you left off: show ignored chats again · Edit selection with Claude · Find in chat · Go to previous / next message you sent · List messages you sent · Write this message in a note · Send the draft note · Send this note to Claude as a prompt · Suggest frontmatter updates for this note · Draft an email from this note… · Quote the selected chat text in your next message · Open side chat · Open scratch chat · Clear scratch chat · Toggle fast mode · Focus chat input · Stop Claude · Rename chat · Branch this chat into a new tab · Save chat as note · Save chat summary as note · Ask Claude about selection · Continue from this memo · Open connections · Create project… · Write every project’s context anew · Rebuild connections from chat files · Toggle Claude Code on the phone · Toggle Codex on the phone · Move chat to the main area, or back to the sidebar · Open chat in a new window
 
 ## Limitations
 
 - Each open or working chat runs its own Claude Code or Codex process (Claude Code's about 360 MB).
-- A Codex chat cannot be branched, copied from a message, or put on the phone.
+- A Codex chat cannot be copied or moved from a message on to a new chat (Codex copies a conversation from its start only).
 - Background tasks end when Obsidian quits or the last Claude panel closes.
-- Each chat put on the phone appears as its own session in the Claude app.
+- With Claude Code on the phone, each running chat appears as its own session in the Claude app.
 - Tested on macOS. Windows support is built in but has not yet been run on a Windows machine; Linux is untested.
 
 ## Troubleshooting

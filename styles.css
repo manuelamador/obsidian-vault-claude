@@ -63,6 +63,30 @@
   background: var(--interactive-accent-hover);
 }
 
+/* Codex on the phone (alone): green, as Claude Code's is the accent colour. */
+.vc-phone.is-codex:not(.is-claude),
+.vc-phone.is-codex:not(.is-claude):hover {
+  background: var(--color-green);
+  color: var(--text-on-accent);
+}
+
+/* Both on: the accent colour, with a green dot for Codex. */
+.vc-phone.is-claude.is-codex {
+  position: relative;
+}
+
+.vc-phone.is-claude.is-codex::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-green);
+  box-shadow: 0 0 0 1.5px var(--interactive-accent);
+}
+
 .vc-header .clickable-icon.has-background {
   position: relative;
 }

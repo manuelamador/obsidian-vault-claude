@@ -80,7 +80,7 @@ export interface VaultClaudeSettings {
   /** Zotero's works in the `@` picker, read through Zotero's local API (see zotero.ts). */
   zoteroMentions: boolean;
   /** Codex chats run through Codex's shared app-server (its daemon) when it runs, so the phone app can open them too (see codexLaunch). */
-  codexShared: boolean;
+  phoneCodex: boolean;
   /** Codex chats kept out of Codex's own lists (the app, the phone): archived while not open in the panel. */
   codexHidden: boolean;
   /** What a side chat knows: the whole chat it was opened from (a fork of it), or only what is asked. */
@@ -113,8 +113,8 @@ export interface VaultClaudeSettings {
   todoNote: string;
   todoSection: string;
   phoneAccessName: string;
-  phoneAccessAtStartup: boolean;
-  phoneEveryChat: boolean;
+  /** Claude Code on the phone: the vault's Remote Control server, and Remote Control for every chat running in the panel (see setPhoneClaude). */
+  phoneClaude: boolean;
   extraPath: string;
 }
 
@@ -160,7 +160,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   scratchModel: '',
   rememberPrompts: true,
   zoteroMentions: false,
-  codexShared: true,
+  phoneCodex: false,
   codexHidden: false,
   sideChatContext: 'chat',
   smallJobModel: 'sonnet',
@@ -182,8 +182,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   todoNote: 'Todo.md',
   todoSection: 'Open',
   phoneAccessName: '',
-  phoneAccessAtStartup: false,
-  phoneEveryChat: false,
+  phoneClaude: false,
   extraPath: '',
 };
 
@@ -386,31 +385,6 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Use Codex's shared app-server")
-      .setDesc(
-        "When Codex's app-server daemon runs (codex app-server daemon start; with remote control on, it is what Codex's phone app talks to), Codex chats go through it: the phone app can then open a chat the panel has open, follow its replies and write in it. Without it, each chat runs a Codex process of its own, let go of after a few idle minutes so the phone app can open the chat meanwhile.",
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(settings.codexShared).onChange(async (value) => {
-          settings.codexShared = value;
-          await this.plugin.saveSettings();
-          this.plugin.codexDaemonSettingChanged();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName("Keep Codex chats out of Codex's own lists")
-      .setDesc(
-        "Archives the panel's Codex chats in Codex while they are not open in the panel, so they do not appear in the Codex app or on the phone. The panel lists and reopens them as before.",
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(settings.codexHidden).onChange(async (value) => {
-          settings.codexHidden = value;
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
       .setName('Codex model for small jobs')
       .setDesc('For small jobs run on Codex (see Small jobs run on). A smaller model answers faster and uses less of the plan.')
       .addDropdown((dropdown) =>
@@ -426,6 +400,18 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Chats').setHeading();
 
     new Setting(containerEl)
+      .setName('Attach the open note to new chats')
+      .setDesc(
+        'Each chat has at most one attached note, which goes with every message, with the lines selected in it while it is open. When off, a new chat starts with none: the chip above the input offers the open note, and a click attaches it.',
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.attachActiveNote).onChange(async (value) => {
+          settings.attachActiveNote = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('Files left out of a chat\'s notes')
       .setDesc('Only notes (.md) are listed by the notes button, by a note\'s chat links, and when linking a memo. These patterns leave out more of them, one per line; * stands for any characters.')
       .addTextArea((text) =>
@@ -437,6 +423,84 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
+
+    new Setting(containerEl)
+      .setName('Side chat knows')
+      .setDesc('What a side chat is given: a copy of the whole chat it was opened from, or only what you ask it, the quoted text included. The copy answers with the whole conversation in mind; asking only what you quote is faster and uses less of the plan.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ chat: 'The whole chat', quote: 'Only what is asked' })
+          .setValue(settings.sideChatContext)
+          .onChange(async (value) => {
+            settings.sideChatContext = value === 'quote' ? 'quote' : 'chat';
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Remember sent messages for ↑')
+      .setDesc('↑ in an empty input brings back messages you sent, in this chat and others. Off: only this chat\'s, and the messages kept from others are cleared. They are kept in the plugin\'s data file (the last 100, each up to 1,000 characters), which deleting a chat does not clear.')
+      .addToggle((toggle) =>
+        toggle.setValue(settings.rememberPrompts).onChange(async (value) => {
+          settings.rememberPrompts = value;
+          if (!value) this.plugin.promptHistory = [];
+          await this.plugin.saveSettings();
+        }),
+      )
+      .addButton((button) =>
+        button.setButtonText('Clear').onClick(async () => {
+          this.plugin.promptHistory = [];
+          await this.plugin.saveSettings();
+          new Notice('Sent messages kept for ↑ cleared.');
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('History includes all vault sessions')
+      .setDesc(
+        'Off: the history lists chats started from this panel. On: it also lists Claude Code sessions run in the vault folder from the terminal, the desktop app or an editor. Those open as a copy (a forked session), so the original session is left unchanged.',
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.historyIncludesAllSessions).onChange(async (value) => {
+          settings.historyIncludesAllSessions = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('Rebuild connections')
+      .setDesc(
+        "Reads every chat's session file again and adds the links it shows to notes it changed, was sent and linked to, which the connections map and projects follow. No link is taken away; links removed by hand stay removed, and chats put in a project by hand stay in it. Also in the command palette.",
+      )
+      .addButton((button) => button.setButtonText('Rebuild…').onClick(() => this.plugin.confirmRebuildConnections()));
+
+    new Setting(containerEl)
+      .setName('Notify when Claude finishes')
+      .setDesc(
+        'A system notification when a reply that took longer than the time below finishes, or when Claude is waiting for approval, while Obsidian is not the app in front. Clicking it brings the chat back.',
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.notifyWhenDone).onChange(async (value) => {
+          settings.notifyWhenDone = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('Notify after (seconds)')
+      .setDesc('Replies that finish sooner than this never notify.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(0, 300, 10)
+          .setValue(settings.notifyAfterSeconds)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            settings.notifyAfterSeconds = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl).setName('Scratch chat').setHeading();
 
     new Setting(containerEl)
       .setName('Scratch chat')
@@ -479,18 +543,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(containerEl)
-      .setName('Side chat knows')
-      .setDesc('What a side chat is given: a copy of the whole chat it was opened from, or only what you ask it, the quoted text included. The copy answers with the whole conversation in mind; asking only what you quote is faster and uses less of the plan.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions({ chat: 'The whole chat', quote: 'Only what is asked' })
-          .setValue(settings.sideChatContext)
-          .onChange(async (value) => {
-            settings.sideChatContext = value === 'quote' ? 'quote' : 'chat';
-            await this.plugin.saveSettings();
-          }),
-      );
+    new Setting(containerEl).setName('Permissions').setHeading();
 
     new Setting(containerEl)
       .setName('Default permission mode')
@@ -534,6 +587,22 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         area.inputEl.rows = 6;
       });
 
+    new Setting(containerEl).setName('Zotero').setHeading();
+
+    new Setting(containerEl)
+      .setName('Zotero in @')
+      .setDesc(
+        'Lists the works in your Zotero libraries (My Library and the groups) in the @ picker. A work picked goes with the message as its citation, its DOI and Zotero links, and where its PDF is on this computer, in Claude and Codex chats alike. Read through Zotero\'s local API on this computer while Zotero runs: the only requests the plugin makes itself.',
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.zoteroMentions).onChange(async (value) => {
+          settings.zoteroMentions = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl).setName('Gmail').setHeading();
+
     new Setting(containerEl)
       .setName('Gmail features')
       .setDesc("For Claude Code's Gmail connector: cards for the mail Claude reads and the drafts it writes, Make a todo from a message, Draft an email from this note, and the threads a chat read. Turn off if you do not have Gmail connected to Claude Code.")
@@ -571,107 +640,8 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
         );
-    }
 
-    new Setting(containerEl)
-      .setName('Tool calls')
-      .setDesc('Summary: one collapsed line per run of tool calls. One line each: a line per call. Hidden: permission prompts and errors only.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions({ summary: 'Summary', lines: 'One line each', hidden: 'Hidden' })
-          .setValue(settings.toolDisplay)
-          .onChange(async (value) => {
-            settings.toolDisplay = value as ToolDisplay;
-            await this.plugin.saveSettings();
-          }),
-      );
-
-
-    new Setting(containerEl)
-      .setName('Panel side margins')
-      .setDesc('Space left and right of the chat, the header and the input box, in pixels.')
-      .addSlider((slider) =>
-        slider
-          .setLimits(8, 96, 4)
-          .setValue(settings.panelMargin)
-          .setDynamicTooltip()
-          .onChange(async (value) => {
-            settings.panelMargin = value;
-            await this.plugin.saveSettings();
-            this.plugin.refreshPanelMargins();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName(`Send with ${Platform.isMacOS ? '⌘' : 'Ctrl'}+Enter`)
-      .setDesc('When off, Enter sends and Shift+Enter inserts a newline.')
-      .addToggle((toggle) =>
-        toggle.setValue(settings.sendWithModifier).onChange(async (value) => {
-          settings.sendWithModifier = value;
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName('Zotero in @')
-      .setDesc(
-        'Lists the works in your Zotero libraries (My Library and the groups) in the @ picker. A work picked goes with the message as its citation, its DOI and Zotero links, and where its PDF is on this computer, in Claude and Codex chats alike. Read through Zotero\'s local API on this computer while Zotero runs: the only requests the plugin makes itself.',
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(settings.zoteroMentions).onChange(async (value) => {
-          settings.zoteroMentions = value;
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName('Remember sent messages for ↑')
-      .setDesc('↑ in an empty input brings back messages you sent, in this chat and others. Off: only this chat\'s, and the messages kept from others are cleared. They are kept in the plugin\'s data file (the last 100, each up to 1,000 characters), which deleting a chat does not clear.')
-      .addToggle((toggle) =>
-        toggle.setValue(settings.rememberPrompts).onChange(async (value) => {
-          settings.rememberPrompts = value;
-          if (!value) this.plugin.promptHistory = [];
-          await this.plugin.saveSettings();
-        }),
-      )
-      .addButton((button) =>
-        button.setButtonText('Clear').onClick(async () => {
-          this.plugin.promptHistory = [];
-          await this.plugin.saveSettings();
-          new Notice('Sent messages kept for ↑ cleared.');
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName('Attach the open note to new chats')
-      .setDesc(
-        'Each chat has at most one attached note, which goes with every message, with the lines selected in it while it is open. When off, a new chat starts with none: the chip above the input offers the open note, and a click attaches it.',
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(settings.attachActiveNote).onChange(async (value) => {
-          settings.attachActiveNote = value;
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName('History includes all vault sessions')
-      .setDesc(
-        'Off: the history lists chats started from this panel. On: it also lists Claude Code sessions run in the vault folder from the terminal, the desktop app or an editor. Those open as a copy (a forked session), so the original session is left unchanged.',
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(settings.historyIncludesAllSessions).onChange(async (value) => {
-          settings.historyIncludesAllSessions = value;
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName('Rebuild connections')
-      .setDesc(
-        "Reads every chat's session file again and adds the links it shows to notes it changed, was sent and linked to, which the connections map and projects follow. No link is taken away; links removed by hand stay removed, and chats put in a project by hand stay in it. Also in the command palette.",
-      )
-      .addButton((button) => button.setButtonText('Rebuild…').onClick(() => this.plugin.confirmRebuildConnections()));
+    new Setting(containerEl).setName('Saved notes').setHeading();
 
     new Setting(containerEl)
       .setName('Folder for saved chats')
@@ -699,46 +669,63 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(containerEl)
-      .setName('Notify when Claude finishes')
-      .setDesc(
-        'A system notification when a reply that took longer than the time below finishes, or when Claude is waiting for approval, while Obsidian is not the app in front. Clicking it brings the chat back.',
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(settings.notifyWhenDone).onChange(async (value) => {
-          settings.notifyWhenDone = value;
-          await this.plugin.saveSettings();
-        }),
-      );
+    new Setting(containerEl).setName('Appearance and input').setHeading();
+
+    }
 
     new Setting(containerEl)
-      .setName('Notify after (seconds)')
-      .setDesc('Replies that finish sooner than this never notify.')
-      .addSlider((slider) =>
-        slider
-          .setLimits(0, 300, 10)
-          .setValue(settings.notifyAfterSeconds)
-          .setDynamicTooltip()
+      .setName('Tool calls')
+      .setDesc('Summary: one collapsed line per run of tool calls. One line each: a line per call. Hidden: permission prompts and errors only.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ summary: 'Summary', lines: 'One line each', hidden: 'Hidden' })
+          .setValue(settings.toolDisplay)
           .onChange(async (value) => {
-            settings.notifyAfterSeconds = value;
+            settings.toolDisplay = value as ToolDisplay;
             await this.plugin.saveSettings();
           }),
       );
 
-    new Setting(containerEl).setName('Phone access').setHeading();
-
     new Setting(containerEl)
-      .setDesc(
-        'The phone button in the panel can put the chat on screen on your phone (Remote Control for that chat: continue it from the Claude app or claude.ai/code while the panel is open), or run Claude Code\'s Remote Control server in this vault so the phone can start new sessions here. Server sessions use the default permission mode above, with Bypass replaced by Ask first, and the Claude Code settings files; the deny rules above apply to panel chats only.',
+      .setName('Panel side margins')
+      .setDesc('Space left and right of the chat, the header and the input box, in pixels.')
+      .addSlider((slider) =>
+        slider
+          .setLimits(8, 96, 4)
+          .setValue(settings.panelMargin)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            settings.panelMargin = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshPanelMargins();
+          }),
       );
 
     new Setting(containerEl)
-      .setName('Put every chat on the phone')
-      .setDesc('Turn Remote Control on for each new panel chat as it starts. Each chat appears as its own session in the Claude app.')
+      .setName(`Send with ${Platform.isMacOS ? '⌘' : 'Ctrl'}+Enter`)
+      .setDesc('When off, Enter sends and Shift+Enter inserts a newline.')
       .addToggle((toggle) =>
-        toggle.setValue(settings.phoneEveryChat).onChange(async (value) => {
-          settings.phoneEveryChat = value;
+        toggle.setValue(settings.sendWithModifier).onChange(async (value) => {
+          settings.sendWithModifier = value;
           await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl).setName('Phone access').setHeading();
+
+    new Setting(containerEl).setDesc(
+      'The phone button in the panel switches these too, and its colour shows which are on: the accent colour for Claude Code, green for Codex. What is switched on stays on the next time Obsidian starts.',
+
+    );
+
+    new Setting(containerEl)
+      .setName('Claude Code on the phone')
+      .setDesc(
+        'Every Claude chat running in the panel can be continued from the Claude app or claude.ai/code, and the phone can start new sessions in this vault (Claude Code\'s Remote Control). Sessions started from the phone use the default permission mode above, with Bypass replaced by Ask first; the deny rules above apply to panel chats only.',
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.phoneClaude).onChange(async (value) => {
+          await this.plugin.setPhoneClaude(value);
         }),
       );
 
@@ -756,18 +743,29 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Start phone access with Obsidian')
+      .setName('Codex on the phone')
       .setDesc(
-        'Start the vault\'s phone server (claude remote-control) whenever Obsidian opens, so the Claude app can start new sessions in this vault. ' +
-          'It does not put panel chats on the phone: that is "Put every chat on the phone" above. ' +
-          'The server keeps one Claude Code process running while Obsidian is open. When off, start it from the phone button\'s menu.',
+        "Codex chats go through Codex's shared app-server (its daemon, with remote control on), so Codex's phone app can open any of them, follow replies and write in them. Started by the panel when needed, and stopped when Obsidian quits; one started outside Obsidian is used as it is and left running.",
       )
       .addToggle((toggle) =>
-        toggle.setValue(settings.phoneAccessAtStartup).onChange(async (value) => {
-          settings.phoneAccessAtStartup = value;
+        toggle.setValue(settings.phoneCodex).onChange(async (value) => {
+          await this.plugin.setPhoneCodex(value);
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Keep Codex chats out of Codex's own lists")
+      .setDesc(
+        "Archives the panel's Codex chats in Codex while they are not open in the panel, so they do not appear in the Codex app or on the phone. The panel lists and reopens them as before.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.codexHidden).onChange(async (value) => {
+          settings.codexHidden = value;
           await this.plugin.saveSettings();
         }),
       );
+
+    new Setting(containerEl).setName('Advanced').setHeading();
 
     new Setting(containerEl)
       .setName('Extra PATH entries')

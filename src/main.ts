@@ -629,14 +629,14 @@ export default class VaultClaudePlugin extends Plugin {
       },
     });
     this.addCommand({
-      id: 'take-all-off-phone',
-      name: 'Take all chats off the phone',
-      callback: () => void this.takeAllOffPhone(),
+      id: 'toggle-phone-access',
+      name: 'Toggle Claude Code on the phone',
+      callback: () => void this.setPhoneClaude(!this.settings.phoneClaude),
     });
     this.addCommand({
-      id: 'toggle-phone-access',
-      name: 'Toggle phone access (Remote Control)',
-      callback: () => this.toggleRemote(),
+      id: 'toggle-codex-phone',
+      name: 'Toggle Codex on the phone',
+      callback: () => void this.setPhoneCodex(!this.settings.phoneCodex),
     });
     this.addSettingTab(new VaultClaudeSettingTab(this.app, this));
     // Equations in the chat keep their LaTeX, for quoting. The panel renders with no source path;
@@ -709,7 +709,9 @@ export default class VaultClaudePlugin extends Plugin {
     // Side chats open when Obsidian last quit: their sessions are deleted now, as closing them would have.
     const leftover = [...this.sideSessions];
     this.app.workspace.onLayoutReady(() => {
-      if (this.settings.phoneAccessAtStartup) this.startRemote();
+      // Phone access as it was left: Claude Code's Remote Control, and Codex's shared app-server.
+      if (this.settings.phoneClaude) this.startRemote();
+      if (this.settings.phoneCodex && !this.codexDaemonRunning()) void this.startCodexDaemon().then((error) => error && log('starting codex for the phone failed', error));
       void this.sweepSideSessions(leftover);
       void this.tidyPlanNotes();
       void this.nameCodexThreadsOnce();
@@ -990,10 +992,46 @@ export default class VaultClaudePlugin extends Plugin {
     this.remote.start({ ...launch, name: this.phoneAccessName(), permissionMode: mode });
   }
 
-  toggleRemote(): void {
-    if (this.remote.isRunning()) this.remote.stop();
-    else this.startRemote();
+  /**
+   * Claude Code on the phone, or off: the vault's Remote Control server, and Remote Control for every
+   * Claude chat running in the panels (chats that start later follow; see ChatView). Kept for the next start.
+   */
+  async setPhoneClaude(on: boolean): Promise<void> {
+    this.settings.phoneClaude = on;
+    await this.saveSettings();
+    if (on) {
+      if (!this.remote.isRunning()) this.startRemote();
+      for (const view of this.chatViews()) await view.putChatsOnPhone();
+    } else {
+      this.remote.stop();
+      await this.takeAllOffPhone();
+    }
+    for (const view of this.chatViews()) view.updatePhoneButton();
   }
+
+  /**
+   * Codex on the phone, or off: Codex chats go through its shared app-server, started now if none runs
+   * (and stopped when Obsidian quits; see onunload). Off, the panel stops one it started; one started
+   * elsewhere stays, unused by the panel. Kept for the next start.
+   */
+  async setPhoneCodex(on: boolean): Promise<void> {
+    this.settings.phoneCodex = on;
+    await this.saveSettings();
+    if (on && !this.codexDaemonRunning()) {
+      for (const view of this.chatViews()) {
+        view.codexDaemonStarting = true;
+        view.updatePhoneButton();
+      }
+      const error = await this.startCodexDaemon();
+      for (const view of this.chatViews()) view.codexDaemonStarting = false;
+      if (error) new Notice(`Codex on the phone: its shared app-server did not start: ${error}`);
+    } else if (!on && this.startedCodexDaemon) {
+      const error = await this.stopCodexDaemon();
+      if (error) new Notice(`Could not stop Codex's shared app-server: ${error}`);
+    }
+    this.codexDaemonSettingChanged();
+  }
+
 
   private onRemoteChange(): void {
     const { state, error } = this.remote.status;
@@ -1452,7 +1490,7 @@ export default class VaultClaudePlugin extends Plugin {
     const cwd = this.vaultRoot();
     if (!cwd) return 'Codex chats need the vault to be a folder on this computer.';
     const env = claudeEnv(codexPath, extraPathEntries(this.settings.extraPath));
-    const shared = this.settings.codexShared && this.codexDaemonRunning(env);
+    const shared = this.settings.phoneCodex && this.codexDaemonRunning(env);
     return { codexPath, cwd, env, ...(shared ? { shared: true, socketPath: this.codexSocketPath(env) } : {}) };
   }
 
@@ -1494,7 +1532,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Whether this session of Obsidian started Codex's shared app-server, and so may stop it (other Codex clients may use one started elsewhere). */
   startedCodexDaemon = false;
 
-  /** Use Codex's shared app-server was switched: the panels' phone buttons and idle Codex chats follow. */
+  /** Codex on the phone was switched: the panels' phone buttons and idle Codex chats follow. */
   codexDaemonSettingChanged(): void {
     for (const view of this.chatViews()) view.codexDaemonChanged();
   }
@@ -3818,6 +3856,12 @@ export default class VaultClaudePlugin extends Plugin {
     if (!SCRATCH_IDLE_CHOICES.includes(this.settings.scratchIdleHours)) this.settings.scratchIdleHours = DEFAULT_SETTINGS.scratchIdleHours;
     if (this.settings.sideChatContext !== 'quote') this.settings.sideChatContext = 'chat';
     if (this.settings.newChatEngine !== 'codex') this.settings.newChatEngine = 'claude';
+    // Up to 0.34.0 two settings: phone access at startup, and every chat on the phone; now one.
+    const phoneWas = stored as Partial<Record<'phoneAccessAtStartup' | 'phoneEveryChat', boolean>>;
+    if (typeof stored.phoneClaude !== 'boolean') this.settings.phoneClaude = phoneWas.phoneAccessAtStartup === true || phoneWas.phoneEveryChat === true;
+    delete (this.settings as Partial<Record<'phoneAccessAtStartup' | 'phoneEveryChat' | 'codexShared', unknown>>).phoneAccessAtStartup;
+    delete (this.settings as Partial<Record<'phoneAccessAtStartup' | 'phoneEveryChat' | 'codexShared', unknown>>).phoneEveryChat;
+    delete (this.settings as Partial<Record<'phoneAccessAtStartup' | 'phoneEveryChat' | 'codexShared', unknown>>).codexShared;
     if (this.settings.smallJobEngine !== 'codex') this.settings.smallJobEngine = 'claude';
     if (!isCodexAccess(this.settings.codexAccess) || (this.settings.codexAccess === 'full' && !this.settings.allowBypass)) this.settings.codexAccess = 'default';
     for (const key of ['codexModel', 'codexEffort', 'smallJobCodexModel'] as const) if (typeof this.settings[key] !== 'string') this.settings[key] = '';

@@ -681,7 +681,7 @@ export class ChatView extends ItemView {
   private historyButton!: HTMLButtonElement;
   /** claude.ai link while the chat on screen has Remote Control on. */
   private remoteUrl: string | null = null;
-  /** Set once "Put every chat on the phone" has been applied to the current session. */
+  /** Set once Claude Code on the phone has put the current session on the phone (see setChatRemote). */
   private remoteRequested = false;
   /** A chat in this panel finished while the panel was hidden; shown on the tab until it is seen. */
   private unseen: 'done' | 'error' | null = null;
@@ -1579,52 +1579,33 @@ export class ChatView extends ItemView {
 
   // ---- Phone access ------------------------------------------------------
 
-  updatePhoneButton(): void {
-    if (this.engine === 'codex') return this.updateCodexPhoneButton();
-    const { state, activeSessions, error } = this.plugin.remote.status;
-    const chatOn = this.remoteUrl !== null;
-    const button = this.phoneButton;
-    button.toggleClass('is-on', chatOn || state === 'connected');
-    button.toggleClass('is-starting', !chatOn && state === 'starting');
-    button.toggleClass('is-error', !chatOn && state === 'error');
-    const parts: string[] = [];
-    if (chatOn) parts.push('This chat is on your phone');
-    if (state === 'connected') {
-      parts.push(`The phone can start sessions in this vault as "${this.plugin.phoneAccessName()}"${activeSessions ? ` (${activeSessions} active)` : ''}`);
-    } else if (state === 'starting') {
-      parts.push('Vault phone access: connecting…');
-    } else if (state === 'error') {
-      parts.push(`Vault phone access stopped: ${error ?? 'unknown error'}`);
-    }
-    button.setAttr('aria-label', parts.length > 0 ? `${parts.join('. ')}. Click for options.` : 'Phone access. Click for options.');
-  }
-
   /**
-   * In a Codex chat, the phone button says whether Codex's phone app can open the chat while the
-   * panel has it: lit while Codex's shared app-server runs and the panel uses it (see codexLaunch).
+   * The phone button, the same in Claude and Codex chats: lit in the accent colour while Claude Code
+   * is on the phone (the vault's Remote Control server, and every Claude chat running here), green
+   * while Codex is (its shared app-server, used by the panel), both when both are.
    */
-  private updateCodexPhoneButton(): void {
+  updatePhoneButton(): void {
     const button = this.phoneButton;
-    const running = this.plugin.codexDaemonRunning();
-    const shared = running && this.plugin.settings.codexShared;
+    const { state, activeSessions, error } = this.plugin.remote.status;
+    const claude = this.plugin.settings.phoneClaude && state === 'connected';
+    const codex = this.plugin.settings.phoneCodex && this.plugin.codexDaemonRunning();
     button.show();
-    button.toggleClass('is-on', shared);
-    button.toggleClass('is-starting', this.codexDaemonStarting);
-    button.toggleClass('is-error', false);
-    button.setAttr(
-      'aria-label',
-      this.codexDaemonStarting
-        ? "Starting Codex's shared app-server…"
-        : shared
-          ? "Codex's shared app-server is running: Codex's phone app can open this chat, follow it and write in it. Click for options."
-          : running
-            ? "Codex's shared app-server is running, but Use Codex's shared app-server is off in the settings. Click for options."
-            : "Codex's phone app cannot open this chat while the panel has it. Click to start Codex's shared app-server.",
-    );
+    button.toggleClass('is-on', claude || codex);
+    button.toggleClass('is-claude', claude);
+    button.toggleClass('is-codex', codex);
+    button.toggleClass('is-starting', (this.plugin.settings.phoneClaude && state === 'starting') || this.codexDaemonStarting);
+    button.toggleClass('is-error', this.plugin.settings.phoneClaude && state === 'error');
+    const parts: string[] = [];
+    if (claude) parts.push(`Claude Code on the phone: ${this.plugin.phoneChatCount()} chat(s) reachable, and new sessions in the vault as "${this.plugin.phoneAccessName()}"${activeSessions ? ` (${activeSessions} active)` : ''}`);
+    else if (this.plugin.settings.phoneClaude && state === 'starting') parts.push('Claude Code on the phone: connecting…');
+    else if (this.plugin.settings.phoneClaude && state === 'error') parts.push(`Claude Code on the phone stopped: ${error ?? 'unknown error'}`);
+    if (codex) parts.push("Codex on the phone: Codex's phone app can open every Codex chat");
+    else if (this.codexDaemonStarting) parts.push("Codex on the phone: starting Codex's shared app-server…");
+    button.setAttr('aria-label', parts.length > 0 ? `${parts.join('. ')}. Click for options.` : 'Phone access: off. Click to turn it on for Claude Code or Codex.');
   }
 
-  /** Codex's shared app-server is being started from this panel (see onCodexPhoneClick). */
-  private codexDaemonStarting = false;
+  /** Codex's shared app-server is being started (see VaultClaudePlugin.setPhoneCodex). */
+  codexDaemonStarting = false;
 
   /** Codex's shared app-server started or stopped: the phone button follows, and an idle Codex chat reconnects through it (or not) with its next message. */
   codexDaemonChanged(): void {
@@ -1636,96 +1617,60 @@ export class ChatView extends ItemView {
     }
   }
 
-  private onCodexPhoneClick(evt: MouseEvent): void {
+  /** The phone menu: Claude Code and Codex, each on or off for the whole panel, with where to open what is on. */
+  private onPhoneClick(evt: MouseEvent): void {
     const menu = new Menu();
+    const { settings, remote } = this.plugin;
+    menu.addItem((item) =>
+      item
+        .setTitle('Claude Code on the phone')
+        .setIcon('smartphone')
+        .setChecked(settings.phoneClaude)
+        .onClick(() => void this.plugin.setPhoneClaude(!settings.phoneClaude)),
+    );
+    if (settings.phoneClaude) {
+      const chatUrl = this.remoteUrl;
+      if (chatUrl) menu.addItem((item) => item.setTitle('Open this chat in claude.ai/code').setIcon('external-link').onClick(() => window.open(chatUrl)));
+      const vaultUrl = remote.status.url;
+      if (vaultUrl) menu.addItem((item) => item.setTitle('Open vault sessions in claude.ai/code').setIcon('external-link').onClick(() => window.open(vaultUrl)));
+    }
+    menu.addSeparator();
     const running = this.plugin.codexDaemonRunning();
-    if (running) {
-      menu.addItem((item) => item.setTitle(this.plugin.settings.codexShared ? "Codex's shared app-server is running" : "Running, but not used: turned off in the settings").setIcon('smartphone').setDisabled(true));
-      if (!this.plugin.settings.codexShared) {
-        menu.addItem((item) =>
-          item.setTitle("Use Codex's shared app-server").setIcon('check').onClick(async () => {
-            this.plugin.settings.codexShared = true;
-            await this.plugin.saveSettings();
-            this.plugin.codexDaemonSettingChanged();
-          }),
-        );
-      }
-      // Only one this panel started: one started elsewhere may serve other Codex clients, the phone among them.
-      if (this.plugin.startedCodexDaemon) {
-        menu.addItem((item) =>
-          item.setTitle("Stop Codex's shared app-server (started here)").setIcon('square').onClick(async () => {
-            const error = await this.plugin.stopCodexDaemon();
-            new Notice(error ? `Could not stop it: ${error}` : "Codex's shared app-server stopped. Codex chats run on their own again.");
-          }),
-        );
-      } else {
-        menu.addItem((item) => item.setTitle('Started outside Obsidian: stop it there (codex app-server daemon stop)').setIcon('info').setDisabled(true));
-      }
-    } else {
-      menu.addItem((item) =>
-        item.setTitle("Start Codex's shared app-server until Obsidian quits, with remote control on (lasting: future starts keep it on)").setIcon('play').onClick(async () => {
-          this.codexDaemonStarting = true;
-          this.updatePhoneButton();
-          const error = await this.plugin.startCodexDaemon();
-          this.codexDaemonStarting = false;
-          this.updatePhoneButton();
-          new Notice(error ? `Codex's shared app-server did not start: ${error}` : "Codex's shared app-server is running, with remote control on: Codex's phone app can open this chat from its next message.");
-        }),
-      );
+    menu.addItem((item) =>
+      item
+        .setTitle('Codex on the phone')
+        .setIcon('smartphone')
+        .setChecked(settings.phoneCodex)
+        .onClick(() => void this.plugin.setPhoneCodex(!settings.phoneCodex)),
+    );
+    if (settings.phoneCodex && running && !this.plugin.startedCodexDaemon) {
+      menu.addItem((item) => item.setTitle("Its shared app-server was started outside Obsidian, and is left running").setIcon('info').setDisabled(true));
     }
     menu.showAtMouseEvent(evt);
   }
 
-  private onPhoneClick(evt: MouseEvent): void {
-    if (this.engine === 'codex') return this.onCodexPhoneClick(evt);
-    const menu = new Menu();
-    const chatUrl = this.remoteUrl;
-    if (chatUrl) {
-      menu.addItem((item) => item.setTitle('Open this chat in claude.ai/code').setIcon('external-link').onClick(() => window.open(chatUrl)));
-      menu.addItem((item) =>
-        item
-          .setTitle('Copy link to this chat')
-          .setIcon('copy')
-          .onClick(() => {
-            navigator.clipboard.writeText(chatUrl).catch((error: unknown) => log('copying the link failed', error));
-          }),
-      );
-      menu.addItem((item) => item.setTitle('Take this chat off the phone').setIcon('square').onClick(() => void this.setChatRemote(false)));
-    } else {
-      menu.addItem((item) =>
-        item.setTitle('Continue this chat on your phone').setIcon('smartphone').onClick(() => void this.setChatRemote(true)),
-      );
-    }
-    // Across every panel; offered when a chat other than the one on screen is on the phone.
-    const total = this.plugin.phoneChatCount();
-    if (total > (chatUrl ? 1 : 0)) {
-      menu.addItem((item) =>
-        item.setTitle(`Take all chats off the phone (${total})`).setIcon('x-circle').onClick(() => void this.plugin.takeAllOffPhone()),
-      );
-    }
-    menu.addSeparator();
-    const { remote } = this.plugin;
-    if (remote.isRunning()) {
-      const vaultUrl = remote.status.url;
-      if (vaultUrl) {
-        menu.addItem((item) =>
-          item.setTitle('Open vault sessions in claude.ai/code').setIcon('external-link').onClick(() => window.open(vaultUrl)),
-        );
+  /** Every Claude chat of this panel that is running, put on the phone (see setChatRemote), quietly: Claude Code on the phone was turned on. */
+  async putChatsOnPhone(): Promise<void> {
+    if (this.engine !== 'codex' && this.session && !this.remoteUrl) await this.setChatRemote(true, true);
+    for (const entry of this.background) {
+      if (entry.remoteUrl || entry.session instanceof CodexSession) continue;
+      try {
+        const response = (await entry.session.enableRemoteControl(true, entry.title ?? 'Obsidian chat')) as { session_url?: string } | null;
+        if (response?.session_url) entry.remoteUrl = response.session_url;
+      } catch (error) {
+        log('enabling remote control failed', error);
       }
-      menu.addItem((item) => item.setTitle('Stop new phone sessions in this vault').setIcon('square').onClick(() => remote.stop()));
-    } else {
-      menu.addItem((item) =>
-        item.setTitle('Let the phone start new sessions in this vault').setIcon('folder-open').onClick(() => this.plugin.startRemote()),
-      );
     }
-    menu.showAtMouseEvent(evt);
+    this.updateBackgroundIndicator();
+    this.updatePhoneButton();
   }
 
   /**
    * Puts the chat on screen on the phone (Remote Control for its session) or takes it off.
    * A chat that has not started yet is started, or resumed, without sending a message.
    */
-  private async setChatRemote(on: boolean): Promise<void> {
+  /** `quiet`: no notice, as when every chat is put on the phone at once (see putChatsOnPhone). */
+  private async setChatRemote(on: boolean, quiet = false): Promise<void> {
     if (!on) {
       const session = this.session;
       try {
@@ -1763,7 +1708,7 @@ export class ChatView extends ItemView {
       this.remoteUrl = response.session_url;
       log('remote control on for chat', { chatId: this.chatId });
       const url = response.session_url;
-      new Notice(
+      if (!quiet) new Notice(
         createFragment((frag) => {
           frag.appendText('This chat is on your phone: open Code in the Claude app, or ');
           const open = frag.createEl('a', { text: 'claude.ai/code', href: '#' });
@@ -1778,7 +1723,7 @@ export class ChatView extends ItemView {
     } catch (error) {
       log('enabling remote control failed', error);
       if (session !== this.session) return;
-      new Notice(`Could not put this chat on your phone: ${errorText(error)}`);
+      if (!quiet) new Notice(`Could not put this chat on your phone: ${errorText(error)}`);
       this.remoteUrl = null;
     }
     this.updatePhoneButton();
@@ -5063,7 +5008,7 @@ export class ChatView extends ItemView {
       this.plugin.loadCodexLimits();
     } else if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);
     else this.planText.empty();
-    // Claude's phone access, or whether Codex's phone app can open the chat (see updateCodexPhoneButton).
+    // Phone access, the same for both engines (see updatePhoneButton).
     this.phoneButton.show();
     this.updatePhoneButton();
     this.populateModeSelect();
@@ -6512,9 +6457,10 @@ export class ChatView extends ItemView {
             this.modelsRequested = true;
             void this.loadModels(this.session);
           }
-          if (this.plugin.settings.phoneEveryChat && this.engine !== 'codex' && !this.scratch && !this.remoteUrl && !this.remoteRequested && this.session) {
+          // Claude Code on the phone: every chat that starts is reachable from it.
+          if (this.plugin.settings.phoneClaude && this.engine !== 'codex' && !this.remoteUrl && !this.remoteRequested && this.session) {
             this.remoteRequested = true;
-            void this.setChatRemote(true);
+            void this.setChatRemote(true, true);
           }
         } else if (message.subtype === 'compact_boundary') {
           // Optional in practice, whatever the SDK's types say: a Claude Code release may leave it out.
