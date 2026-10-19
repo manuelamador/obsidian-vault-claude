@@ -1473,9 +1473,15 @@ export default class VaultClaudePlugin extends Plugin {
     const remote = await run(['app-server', 'daemon', 'enable-remote-control']);
     if (remote) log('enabling codex remote control failed', remote);
     for (let waited = 0; waited < 10_000 && !this.codexDaemonRunning(launch.env); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250));
+    const running = this.codexDaemonRunning(launch.env);
+    // Started here: the panel may stop it again (see stopCodexDaemon); one started elsewhere is not its to stop.
+    this.startedCodexDaemon = running;
     for (const view of this.chatViews()) view.codexDaemonChanged();
-    return this.codexDaemonRunning(launch.env) ? null : 'it did not start in time';
+    return running ? null : 'it did not start in time';
   }
+
+  /** Whether this session of Obsidian started Codex's shared app-server, and so may stop it (other Codex clients may use one started elsewhere). */
+  startedCodexDaemon = false;
 
   /** Use Codex's shared app-server was switched: the panels' phone buttons and idle Codex chats follow. */
   codexDaemonSettingChanged(): void {
@@ -1489,6 +1495,7 @@ export default class VaultClaudePlugin extends Plugin {
     const error = await new Promise<string | null>((resolve) =>
       execFile(launch.codexPath, ['app-server', 'daemon', 'stop'], { env: launch.env, timeout: 60_000 }, (failed, _stdout, stderr) => resolve(failed ? (stderr.trim().split('\n').pop() || failed.message) : null)),
     );
+    if (!error) this.startedCodexDaemon = false;
     for (const view of this.chatViews()) view.codexDaemonChanged();
     return error;
   }

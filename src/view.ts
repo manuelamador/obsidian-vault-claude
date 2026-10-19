@@ -1650,15 +1650,20 @@ export class ChatView extends ItemView {
           }),
         );
       }
-      menu.addItem((item) =>
-        item.setTitle("Stop Codex's shared app-server").setIcon('square').onClick(async () => {
-          const error = await this.plugin.stopCodexDaemon();
-          new Notice(error ? `Could not stop it: ${error}` : "Codex's shared app-server stopped. Codex chats run on their own again.");
-        }),
-      );
+      // Only one this panel started: one started elsewhere may serve other Codex clients, the phone among them.
+      if (this.plugin.startedCodexDaemon) {
+        menu.addItem((item) =>
+          item.setTitle("Stop Codex's shared app-server (started here)").setIcon('square').onClick(async () => {
+            const error = await this.plugin.stopCodexDaemon();
+            new Notice(error ? `Could not stop it: ${error}` : "Codex's shared app-server stopped. Codex chats run on their own again.");
+          }),
+        );
+      } else {
+        menu.addItem((item) => item.setTitle('Started outside Obsidian: stop it there (codex app-server daemon stop)').setIcon('info').setDisabled(true));
+      }
     } else {
       menu.addItem((item) =>
-        item.setTitle("Start Codex's shared app-server, for the phone app").setIcon('play').onClick(async () => {
+        item.setTitle("Start Codex's shared app-server, with remote control on (lasting: future starts keep it on)").setIcon('play').onClick(async () => {
           this.codexDaemonStarting = true;
           this.updatePhoneButton();
           const error = await this.plugin.startCodexDaemon();
