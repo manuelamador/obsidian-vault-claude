@@ -2,7 +2,8 @@ import { chmodSync, writeFileSync } from 'node:fs';
 
 /**
  * A stand-in for `codex app-server` in `dir`: it notes that it started, answers the handshake and
- * the thread's start (writing each turn's params to `turn.json`), and then as `mode` says: `exit`, asked to start a turn, answers and exits
+ * the thread's start (writing each turn's params to `turn.json`, its arguments to `started` and every
+ * request's method to `methods.log`), and then as `mode` says: `exit`, asked to start a turn, answers and exits
  * without finishing it; `silent`, answers nothing after the handshake; `die`, exits as soon as the
  * thread has started; `ask`, having started a turn, asks the panel a question and finishes the turn
  * only once it is answered (or refused).
@@ -12,7 +13,7 @@ export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' =
   writeFileSync(
     file,
     `#!/usr/bin/env node
-require('fs').writeFileSync(${JSON.stringify(`${dir}/started`)}, '');
+require('fs').writeFileSync(${JSON.stringify(`${dir}/started`)}, process.argv.slice(2).join(' '));
 const mode = ${JSON.stringify(mode)};
 let buffer = '';
 process.stdin.on('data', (chunk) => {
@@ -28,6 +29,7 @@ process.stdin.on('data', (chunk) => {
       process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 't1', turn: { id: 'turn1', status: 'completed' } } }) + '\\n');
       continue;
     }
+    if (message.method) require('fs').appendFileSync(${JSON.stringify(`${dir}/methods.log`)}, message.method + '\\n');
     if (message.id === undefined) continue;
     const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
     if (message.method === 'initialize') reply({});

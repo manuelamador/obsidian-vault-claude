@@ -79,6 +79,10 @@ export interface VaultClaudeSettings {
   rememberPrompts: boolean;
   /** Zotero's works in the `@` picker, read through Zotero's local API (see zotero.ts). */
   zoteroMentions: boolean;
+  /** Codex chats run through Codex's shared app-server (its daemon) when it runs, so the phone app can open them too (see codexLaunch). */
+  codexShared: boolean;
+  /** Codex chats kept out of Codex's own lists (the app, the phone): archived while not open in the panel. */
+  codexHidden: boolean;
   /** What a side chat knows: the whole chat it was opened from (a fork of it), or only what is asked. */
   sideChatContext: 'chat' | 'quote';
   /** Model for inline edits, chat summaries and the scratch chat; empty for the chats' model. */
@@ -156,6 +160,8 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   scratchModel: '',
   rememberPrompts: true,
   zoteroMentions: false,
+  codexShared: true,
+  codexHidden: false,
   sideChatContext: 'chat',
   smallJobModel: 'sonnet',
   effort: '',
@@ -377,6 +383,30 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
             settings.codexAccess = value as CodexAccess;
             await this.plugin.saveSettings();
           }),
+      );
+
+    new Setting(containerEl)
+      .setName("Use Codex's shared app-server")
+      .setDesc(
+        "When Codex's app-server daemon runs (codex app-server daemon start; with remote control on, it is what Codex's phone app talks to), Codex chats go through it: the phone app can then open a chat the panel has open, follow its replies and write in it. Without it, each chat runs a Codex process of its own, let go of after a few idle minutes so the phone app can open the chat meanwhile.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.codexShared).onChange(async (value) => {
+          settings.codexShared = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Keep Codex chats out of Codex's own lists")
+      .setDesc(
+        "Archives the panel's Codex chats in Codex while they are not open in the panel, so they do not appear in the Codex app or on the phone. The panel lists and reopens them as before.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.codexHidden).onChange(async (value) => {
+          settings.codexHidden = value;
+          await this.plugin.saveSettings();
+        }),
       );
 
     new Setting(containerEl)

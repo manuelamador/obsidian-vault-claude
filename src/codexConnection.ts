@@ -11,6 +11,8 @@ export interface CodexLaunch {
   cwd: string;
   codexPath: string;
   env: Record<string, string | undefined>;
+  /** Through Codex's shared app-server (its daemon, `codex app-server proxy`) rather than a process of its own: see codexLaunch. */
+  shared?: boolean;
 }
 
 export interface CodexConnectionHandlers {
@@ -54,7 +56,10 @@ export class CodexConnection {
     private readonly handlers: CodexConnectionHandlers,
     private readonly options: CodexConnectionOptions,
   ) {
-    const child = spawn(launch.codexPath, ['app-server'], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // Shared: the same protocol, relayed to the daemon's socket, where a thread open here is the
+    // same one Codex's phone app and other clients have open.
+    const args = launch.shared ? ['app-server', 'proxy'] : ['app-server'];
+    const child = spawn(launch.codexPath, args, { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;
     // A write to a Codex that has just exited: reported by its end, not thrown.
     child.stdin.on('error', (error) => log('writing to codex failed', error));

@@ -22,6 +22,8 @@ export interface CodexSessionConfig extends CodexLaunch {
   fork?: string;
   /** Codex only reads (a read-only sandbox, never asking), and the thread is not saved: a side chat's. */
   readOnly?: boolean;
+  /** Kept out of Codex's own lists (the app, the phone): archived when the session ends, unarchived before it resumes. */
+  hidden?: boolean;
   /** Instructions added to Codex's own (as the panel's system prompt addition is for Claude). */
   developerInstructions?: string;
   /** The model and reasoning effort to run; none uses Codex's own settings. */
@@ -166,8 +168,19 @@ export class CodexSession {
     this.closed = true;
     this.endCompaction();
     this.withdrawApprovals();
-    if (this.connection) this.connection.stop();
-    else this.markEnded();
+    const connection = this.connection;
+    if (!connection) return this.markEnded();
+    // Hidden from Codex's lists: archived as it is let go of (given a moment, then stopped regardless).
+    if (this.config.hidden && this.sessionId && !this.config.readOnly && connection.open) {
+      const stop = () => connection.stop();
+      const timer = setTimeout(stop, 2000);
+      void connection.request('thread/archive', { threadId: this.sessionId }).catch((error: unknown) => log('archiving the codex thread failed', error)).finally(() => {
+        clearTimeout(timer);
+        stop();
+      });
+      return;
+    }
+    connection.stop();
   }
 
   /** The usage limits of the account, read through this session's own app-server (see readCodexLimits). */
@@ -295,6 +308,9 @@ export class CodexSession {
         ...(this.config.readOnly ? { sandbox: 'read-only', approvalPolicy: 'never', ephemeral: true } : {}),
       };
       const { resume, fork } = this.config;
+      // Kept archived (see hidden): Codex resumes or copies only a thread that is not.
+      const archived = resume ?? fork;
+      if (this.config.hidden && archived) await unarchiveQuietly((method, params) => this.request(method, params), archived);
       const opened = (await (resume
         ? this.request('thread/resume', { ...params, threadId: resume })
         : fork
@@ -535,7 +551,7 @@ export function warmCodexReader(launch: CodexLaunch): void {
 
 /** Runs `use` against the Codex app-server kept for reads (see CodexReader), started for `launch` if need be. */
 async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: string, params: unknown) => Promise<unknown>, reader: CodexReader) => Promise<T>): Promise<T> {
-  const key = JSON.stringify([launch.codexPath, launch.cwd, launch.env.PATH]);
+  const key = JSON.stringify([launch.codexPath, launch.cwd, launch.env.PATH, launch.shared === true]);
   if (reader && (!reader.usable || reader.key !== key)) reader.stop();
   const current = reader?.usable ? reader : new CodexReader(key, launch, (gone) => {
     if (reader === gone) reader = null;
@@ -594,6 +610,16 @@ export async function archiveCodexThread(launch: CodexLaunch, threadId: string):
   await withAppServer(launch, (request) => request('thread/archive', { threadId }));
 }
 
+/** Unarchives thread `threadId`, if it is archived: Codex answers an error for one that is not, which is no failure here. */
+export async function unarchiveQuietly(request: (method: string, params: unknown) => Promise<unknown>, threadId: string): Promise<void> {
+  await request('thread/unarchive', { threadId }).catch(() => undefined);
+}
+
+/** Names Codex thread `threadId` (`thread/name/set`): the title Codex's own lists show, the app and the phone, rather than the first message. */
+export async function nameCodexThread(launch: CodexLaunch, threadId: string, name: string): Promise<void> {
+  await withAppServer(launch, (request) => request('thread/name/set', { threadId, name }));
+}
+
 /** A thread's turn as `thread/read` gives it: its id and items. */
 interface CodexTurn {
   id?: string;
@@ -615,8 +641,9 @@ export function codexTurnHolding(turns: CodexTurn[], itemId: string): CodexTurn 
  * after it (`thread/revert`): the conversation only, not the files those turns changed. Codex keeps
  * no copy of what it removed. The chat's own Codex process must have ended first (see removeCodexFrom).
  */
-export async function revertCodexThread(launch: CodexLaunch, threadId: string, messageId: string): Promise<void> {
+export async function revertCodexThread(launch: CodexLaunch, threadId: string, messageId: string, hidden = false): Promise<void> {
   await withAppServer(launch, async (request) => {
+    if (hidden) await unarchiveQuietly(request, threadId);
     const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };
     const turn = codexTurnHolding(read.thread?.turns ?? [], messageId);
     if (!turn?.id) throw new Error('that message was not found in the Codex conversation');
@@ -629,6 +656,7 @@ export async function revertCodexThread(launch: CodexLaunch, threadId: string, m
       await request('thread/revert', { threadId, beforeTurnId: turn.id });
     } finally {
       await request('thread/unsubscribe', { threadId }).catch(() => undefined);
+      if (hidden) await request('thread/archive', { threadId }).catch(() => undefined);
     }
   });
 }
@@ -637,8 +665,10 @@ export async function revertCodexThread(launch: CodexLaunch, threadId: string, m
  * A copy of Codex thread `threadId` that Codex saves (`thread/fork`): up to and including the turn
  * holding item `upTo`, or all of it. The copy's id.
  */
-export async function forkCodexThread(launch: CodexLaunch, threadId: string, upTo?: string): Promise<string> {
+export async function forkCodexThread(launch: CodexLaunch, threadId: string, upTo?: string, hidden = false): Promise<string> {
   return withAppServer(launch, async (request) => {
+    // Codex copies only a thread that is not archived (see CodexSessionConfig.hidden).
+    if (hidden) await unarchiveQuietly(request, threadId);
     let lastTurnId: string | undefined;
     if (upTo) {
       const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };

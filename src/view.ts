@@ -125,6 +125,8 @@ import { codexAccessDetail, codexAccessLabel, codexAccessModes, codexAccessShort
 import { shortTitle, zoteroCitation, zoteroItemByLink, zoteroLabel, zoteroLink, zoteroLinksIn, zoteroPdfPath } from './zotero';
 
 /** How long after a panel writes a memo's Send box its own write is told from someone else's edit (see setMemoBox). */
+/** How long a Codex chat may sit idle before its own process is let go of (see releaseCodexWhenIdle). */
+const CODEX_IDLE_RELEASE_MS = 3 * 60_000;
 const MEMO_BOX_SETTLE_MS = 1500;
 
 /** The most chats the back arrow goes through. */
@@ -1270,6 +1272,7 @@ export class ChatView extends ItemView {
 
   async onClose(): Promise<void> {
     this.closing = true;
+    this.cancelCodexRelease();
     this.doneTabs.stop();
     this.plugin.panelClosing(this);
     closeImage();
@@ -3680,7 +3683,7 @@ export class ChatView extends ItemView {
     this.newChat();
     await this.plugin.processesEnded(id);
     try {
-      await revertCodexThread(launch, id, uuid);
+      await revertCodexThread(launch, id, uuid, this.plugin.settings.codexHidden);
     } catch (error) {
       log('removing from a message failed', error);
       new Notice(`Could not remove it: ${errorText(error)}`);
@@ -3896,7 +3899,7 @@ export class ChatView extends ItemView {
     const title = branchTitle(from.title);
     let id: string;
     try {
-      id = await forkCodexThread(launch, source, upTo);
+      id = await forkCodexThread(launch, source, upTo, this.plugin.settings.codexHidden);
     } catch (error) {
       log('branching failed', error);
       new Notice(`Could not branch this chat: ${errorText(error)}`);
@@ -4924,7 +4927,7 @@ export class ChatView extends ItemView {
     const token = {};
     this.sessionToken = token;
     this.session = new CodexSession(
-      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, fast: this.fastMode, denyRules: sessionDenyRules(this.plugin.settings) },
+      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, fast: this.fastMode, hidden: this.plugin.settings.codexHidden, denyRules: sessionDenyRules(this.plugin.settings) },
       this.foregroundHandlers(token),
     );
     return this.session;
@@ -6529,7 +6532,10 @@ export class ChatView extends ItemView {
         }
         break;
       case 'result': {
-        if (this.engine === 'codex' && this.chatId) this.plugin.touchCodexChat(this.chatId);
+        if (this.engine === 'codex' && this.chatId) {
+          this.plugin.touchCodexChat(this.chatId);
+          this.releaseCodexWhenIdle();
+        }
         // A chat run to report back, its answer seen here: it goes to the chat it reports to all the same.
         if (this.chatId && this.plugin.awaitsReport(this.chatId)) this.plugin.reportDone(this.chatId, this.lastReplyText, message.is_error);
         // Codex's limits read again after each of its replies, as Claude's plan usage is, by its own app-server.
@@ -6609,7 +6615,37 @@ export class ChatView extends ItemView {
 
   /** `prompts`: the messages the turn answers, when known (see turnPrompts). */
   /** `prompts`: the messages the turn answers, when known (see turnPrompts); `turn`: a turn already drawn that it goes on in. */
+  /**
+   * Without Codex's shared app-server, a Codex chat's own process holds its thread, and Codex's phone
+   * app cannot open it meanwhile ("another Codex session is using this task"): let go of after
+   * CODEX_IDLE_RELEASE_MS with nothing running, and started again, carrying the thread on, when a message is sent.
+   */
+  private releaseCodexWhenIdle(): void {
+    this.cancelCodexRelease();
+    const launch = this.plugin.codexLaunch();
+    if (typeof launch === 'string' || launch.shared) return;
+    const session = this.session;
+    this.codexRelease = window.setTimeout(() => {
+      this.codexRelease = null;
+      if (this.session !== session || !session || this.engine !== 'codex' || this.busy || this.pending.size > 0 || this.tasks.size > 0) return;
+      log('codex chat idle: its process let go of');
+      // No end to report: the token goes first, so its handlers say nothing.
+      this.sessionToken = null;
+      this.closeSession(session);
+      this.session = null;
+    }, CODEX_IDLE_RELEASE_MS);
+  }
+
+  private cancelCodexRelease(): void {
+    if (this.codexRelease !== null) window.clearTimeout(this.codexRelease);
+    this.codexRelease = null;
+  }
+
+  /** The timer letting go of an idle Codex chat's process (see releaseCodexWhenIdle). */
+  private codexRelease: number | null = null;
+
   private beginTurn(prompts: string[] = [], turn: HTMLElement | null = null): void {
+    this.cancelCodexRelease();
     this.busy = true;
     this.turnPrompts = prompts;
     this.interrupted = false;
@@ -8094,7 +8130,7 @@ export class ChatView extends ItemView {
       }
       const chat = this.plugin.settings.sideChatContext === 'chat' ? (this.chatId ?? this.resumeId) : null;
       return new CodexSession(
-        { ...codex, ...(chat ? { fork: chat } : {}), readOnly: true, developerInstructions: APPEND_SYSTEM_PROMPT + sideChatPrompt(chat !== null), model: this.codexModel, effort: this.codexEffort, denyRules: sessionDenyRules(this.plugin.settings) },
+        { ...codex, ...(chat ? { fork: chat } : {}), readOnly: true, hidden: this.plugin.settings.codexHidden, developerInstructions: APPEND_SYSTEM_PROMPT + sideChatPrompt(chat !== null), model: this.codexModel, effort: this.codexEffort, denyRules: sessionDenyRules(this.plugin.settings) },
         handlers,
       );
     }

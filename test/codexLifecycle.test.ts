@@ -101,3 +101,37 @@ test("a Claude chat's choices are read back as kept: never Plan, and null for Cl
   assert.deepEqual(readClaudeChoices({ model: null, effort: 'huge', mode: 'plan' }), { model: null });
   assert.deepEqual(readClaudeChoices({}), {});
 });
+
+test("a Codex chat kept out of Codex's lists is unarchived before it resumes and archived as it is let go of; a shared one goes through Codex's proxy", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  try {
+    let ended: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => (ended = resolve));
+    const handlers = { onMessage: () => undefined, onEnd: () => ended(), onPermission: async () => ({ behavior: 'deny' as const, message: '' }) };
+    const session = new CodexSession({ ...launchIn(dir), resume: 't1', hidden: true, shared: true }, handlers as never);
+    session.send('hello');
+    await done;
+    const methods = readFileSync(`${dir}/methods.log`, 'utf8').trim().split('\n');
+    assert.ok(methods.indexOf('thread/unarchive') >= 0 && methods.indexOf('thread/unarchive') < methods.indexOf('thread/resume'), methods.join(','));
+    assert.equal(readFileSync(`${dir}/started`, 'utf8'), 'app-server proxy');
+    session.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a hidden Codex chat is archived when the panel lets go of it", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  try {
+    const handlers = { onMessage: () => undefined, onEnd: () => undefined, onPermission: async () => ({ behavior: 'deny' as const, message: '' }) };
+    // 'ask' keeps the turn open, so the session is still running when it is closed.
+    const session = new CodexSession({ ...launchIn(dir, 'ask'), hidden: true }, handlers as never);
+    session.send('hello');
+    for (let i = 0; i < 100 && !existsSync(`${dir}/turn.json`); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    session.close();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.ok(readFileSync(`${dir}/methods.log`, 'utf8').includes('thread/archive'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

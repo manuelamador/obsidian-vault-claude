@@ -1,4 +1,5 @@
 import { existsSync, promises as fsPromises } from 'fs';
+import { homedir } from 'os';
 import type { TaskInfo } from './backgroundTasks';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
 import { isAbsolute, join as joinPath } from 'path';
@@ -11,7 +12,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
-import { findCodex, listCodexModels, readCodexLimits, readCodexThread, readCodexThreadStamp, archiveCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
+import { findCodex, listCodexModels, readCodexLimits, readCodexThread, readCodexThreadStamp, archiveCodexThread, nameCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -189,6 +190,7 @@ export interface ContextReading {
 
 interface PluginData {
   settings?: Partial<VaultClaudeSettings>;
+  codexThreadsNamed?: boolean;
   chats?: ChatRecord[];
   models?: ModelInfo[];
   modelsFetchedAt?: number;
@@ -709,6 +711,7 @@ export default class VaultClaudePlugin extends Plugin {
       if (this.settings.phoneAccessAtStartup) this.startRemote();
       void this.sweepSideSessions(leftover);
       void this.tidyPlanNotes();
+      void this.nameCodexThreadsOnce();
       // Listed once soon after starting, so that even the first history opened shows its rows at once;
       // and the note links of sessions Claude Code has since deleted are let go.
       const timer = window.setTimeout(() => {
@@ -1441,8 +1444,37 @@ export default class VaultClaudePlugin extends Plugin {
     if (!codexPath) return 'Codex was not found: set its path under Settings → Vault Claude → Codex executable.';
     const cwd = this.vaultRoot();
     if (!cwd) return 'Codex chats need the vault to be a folder on this computer.';
-    return { codexPath, cwd, env: claudeEnv(codexPath, extraPathEntries(this.settings.extraPath)) };
+    const env = claudeEnv(codexPath, extraPathEntries(this.settings.extraPath));
+    // Codex's shared app-server, when its daemon runs: its control socket, under Codex's home.
+    const home = env.CODEX_HOME || joinPath(homedir(), '.codex');
+    const shared = this.settings.codexShared && existsSync(joinPath(home, 'app-server-control', 'app-server-control.sock'));
+    return { codexPath, cwd, env, ...(shared ? { shared: true } : {}) };
   }
+
+  /**
+   * Gives Codex thread `id` the chat's title in Codex's own lists (the app, the phone), which
+   * otherwise show its first message: the context the panel sends ahead of what was typed.
+   */
+  nameCodexThread(id: string, title: string): void {
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string' || !title.trim()) return;
+    void nameCodexThread(launch, id, title).catch((error: unknown) => log('naming the codex thread failed', error));
+  }
+
+  /** Once: names the Codex threads of the chats recorded before they were named (see nameCodexThread). */
+  private async nameCodexThreadsOnce(): Promise<void> {
+    if (this.codexThreadsNamed) return;
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return;
+    for (const chat of this.chats.filter((record) => record.engine === 'codex')) {
+      await nameCodexThread(launch, chat.id, chat.title).catch((error: unknown) => log('naming the codex thread failed', chat.id, error));
+    }
+    this.codexThreadsNamed = true;
+    this.saveSoon();
+  }
+
+  /** Whether the Codex threads recorded before naming have been named (see nameCodexThreadsOnce). */
+  private codexThreadsNamed = false;
 
   /** When the Codex models were last asked for: a failed listing is not asked again at once. */
   private codexModelsTriedAt = 0;
@@ -1722,6 +1754,8 @@ export default class VaultClaudePlugin extends Plugin {
     this.listedAt = 0;
     if (this.isPanelChat(id)) return;
     this.chats.unshift({ id, title, ...(copyOf ? { copyOf } : {}), ...(engine ? { engine, at: Date.now() } : {}) });
+    // A Codex chat's thread takes its title in Codex's own lists, rather than its first message.
+    if (engine === 'codex' && title !== 'Untitled chat') this.nameCodexThread(id, title);
     const original = copyOf ? this.lastListing?.find((item) => item.id === copyOf) : undefined;
     if (original) (original.copies ??= []).unshift({ id, title, updatedAt: Date.now(), fromPanel: true, copied: true });
     // Past MAX_CHAT_RECORDS, the oldest Claude chats' records go: only the record, which their session
@@ -3528,8 +3562,9 @@ export default class VaultClaudePlugin extends Plugin {
     }
     for (const view of this.chatViews()) view.onChatRenamed(id, title);
     const dir = this.vaultRoot();
-    // A Codex chat's name is kept in the panel's record only.
-    if (!dir || this.isCodexChat(id)) return;
+    // A Codex chat's name goes to its thread, which Codex's own lists show.
+    if (this.isCodexChat(id)) return this.nameCodexThread(id, title);
+    if (!dir) return;
     try {
       await renameSessionTitle(id, dir, title);
     } catch (error) {
@@ -3781,6 +3816,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.chatContext = raw.chatContext && typeof raw.chatContext === 'object' ? raw.chatContext : {};
     this.reportTo = raw.reportTo && typeof raw.reportTo === 'object' ? raw.reportTo : {};
     this.chatReports = raw.chatReports && typeof raw.chatReports === 'object' ? raw.chatReports : {};
+    this.codexThreadsNamed = raw.codexThreadsNamed === true;
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
     this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};
     this.models = Array.isArray(raw.models) ? raw.models : [];
@@ -3841,6 +3877,7 @@ export default class VaultClaudePlugin extends Plugin {
       promptHistory: this.promptHistory,
       reportTo: this.reportTo,
       chatReports: this.chatReports,
+      codexThreadsNamed: this.codexThreadsNamed,
     };
   }
 }
