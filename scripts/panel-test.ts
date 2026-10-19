@@ -246,6 +246,7 @@ async function main(): Promise<void> {
     finishedTasks: [],
     taskEnded: () => undefined,
     finishedTasksSeen: () => undefined,
+    clearFinishedTasks: () => undefined,
     taskFileTail: async () => null,
     expectReport: () => undefined,
     awaitsReport: () => false,

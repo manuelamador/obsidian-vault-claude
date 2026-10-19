@@ -25,6 +25,8 @@ export interface TasksHost {
   finishedOutput(task: FinishedTask): Promise<{ output: string; truncated: boolean } | null>;
   /** The list was looked at: the tasks that ended are seen. */
   seen(): void;
+  /** Clears the tasks that ended from the list. */
+  clearFinished(): void;
   /** Called with a redraw for whenever the tasks change; returns what stops it. */
   watch(changed: () => void): () => void;
 }
@@ -84,7 +86,13 @@ export class TasksModal extends Modal {
       for (const task of chat.tasks) this.drawTask(contentEl, chat, task, scrolls.get(task.id));
     }
     if (finished.length === 0) return;
-    contentEl.createDiv({ cls: 'vc-task-chat', text: 'Finished' });
+    const head = contentEl.createDiv({ cls: 'vc-task-chat' });
+    head.createSpan({ cls: 'vc-task-chat-title', text: 'Finished' });
+    const clear = head.createEl('button', { text: 'Clear', attr: { 'aria-label': 'Clear the finished tasks from the list' } });
+    clear.addEventListener('click', () => {
+      this.host.clearFinished();
+      this.draw();
+    });
     for (const task of finished) this.drawFinished(contentEl, task, scrolls.get(task.info.id));
   }
 

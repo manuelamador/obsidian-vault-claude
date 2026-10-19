@@ -5757,10 +5757,11 @@ export class ChatView extends ItemView {
   /** The tasks of this panel's chats changed: the button beside Stop counts them, and an open list redraws. */
   private tasksChanged(): void {
     const count = this.tasks.size + [...this.background].reduce((sum, entry) => sum + entry.tasks.size, 0);
-    // Up too while a task that ended has not been looked at, its output in the list.
+    // Up too while the list holds tasks that ended, until cleared; marked while one is not yet looked at.
     const unseen = this.plugin.finishedTasks.some((task) => !task.seen);
+    const finished = this.plugin.finishedTasks.length > 0;
     if (this.tasksButton) {
-      this.tasksButton.toggle(count > 0 || unseen);
+      this.tasksButton.toggle(count > 0 || finished);
       this.tasksButton.toggleClass('has-finished', unseen);
       this.tasksCount.setText(count > 0 ? String(count) : '✓');
     }
@@ -5782,6 +5783,7 @@ export class ChatView extends ItemView {
       finished: () => this.plugin.finishedTasks,
       finishedOutput: (task) => this.plugin.taskFileTail(task.outputFile),
       seen: () => this.plugin.finishedTasksSeen(),
+      clearFinished: () => this.plugin.clearFinishedTasks(),
       stop: async (chatId, taskId) => {
         await sessionOf(chatId)?.stopTask(taskId);
       },

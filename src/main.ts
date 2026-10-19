@@ -1515,7 +1515,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.saveSoon();
   }
 
-  /** Background tasks that have ended, newest first, until Obsidian restarts (see FinishedTask). */
+  /** Background tasks that have ended, newest first (at most FINISHED_TASKS), kept until cleared or Obsidian restarts (see FinishedTask). */
   finishedTasks: FinishedTask[] = [];
 
   /** A background task of chat `task.chatId` ended: kept for the task list, and the panels' list buttons follow. */
@@ -1524,10 +1524,16 @@ export default class VaultClaudePlugin extends Plugin {
     for (const view of this.chatViews()) view.tasksUpdated();
   }
 
-  /** The finished tasks are seen (the task list was opened): the list buttons no longer stay up for them. */
+  /** The finished tasks are seen (the task list was opened): no longer marked as new on the list buttons. */
   finishedTasksSeen(): void {
     if (!this.finishedTasks.some((task) => !task.seen)) return;
     for (const task of this.finishedTasks) task.seen = true;
+    for (const view of this.chatViews()) view.tasksUpdated();
+  }
+
+  /** Clears the finished tasks from the list (Clear in it): the list buttons go once nothing runs. */
+  clearFinishedTasks(): void {
+    this.finishedTasks = [];
     for (const view of this.chatViews()) view.tasksUpdated();
   }
 
