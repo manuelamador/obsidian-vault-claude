@@ -3,7 +3,8 @@
 // the requests it makes of the panel, and its end. Both a Codex chat (see CodexSession) and the
 // reader kept for threads, models and small jobs (see CodexReader) run on it, so that the process is
 // started, stopped and reported ended in one way.
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn } from 'child_process';
+import { CodexSocket } from './codexSocket';
 import { log } from './log';
 
 /** How to run Codex: the executable, the vault folder, and the environment (PATH fixed as for Claude Code; see claudeEnv). */
@@ -11,8 +12,9 @@ export interface CodexLaunch {
   cwd: string;
   codexPath: string;
   env: Record<string, string | undefined>;
-  /** Through Codex's shared app-server (its daemon, `codex app-server proxy`) rather than a process of its own: see codexLaunch. */
+  /** Through Codex's shared app-server (its daemon), at this control socket, rather than a process of its own: see codexLaunch. */
   shared?: boolean;
+  socketPath?: string;
 }
 
 export interface CodexConnectionHandlers {
@@ -42,7 +44,8 @@ const STDERR_LINES = 40;
 export class CodexConnection {
   /** The handshake done: requests may be made. Rejected when it ends first. */
   readonly ready: Promise<void>;
-  private readonly child: ChildProcessWithoutNullStreams;
+  /** Where messages go: a Codex process of its own (one JSON object a line on its stdin), or the daemon's socket. */
+  private pipe: { send(text: string): void; stop(): void };
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private next = 0;
   private buffer = '';
@@ -56,11 +59,46 @@ export class CodexConnection {
     private readonly handlers: CodexConnectionHandlers,
     private readonly options: CodexConnectionOptions,
   ) {
-    // Shared: the same protocol, relayed to the daemon's socket, where a thread open here is the
-    // same one Codex's phone app and other clients have open.
-    const args = launch.shared ? ['app-server', 'proxy'] : ['app-server'];
-    const child = spawn(launch.codexPath, args, { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] });
-    this.child = child;
+    this.pipe = launch.shared && launch.socketPath ? this.openSocket(launch.socketPath, launch) : this.openProcess(launch);
+    this.ready = this.request('initialize', { clientInfo: { name: 'vault-claude', title: 'Vault Claude', version: '1' }, capabilities: null }).then(() => this.notify('initialized'));
+    // Awaited by whoever uses it; not left unhandled when it ends before anyone has.
+    this.ready.catch(() => undefined);
+  }
+
+  /**
+   * Codex's shared app-server, through its control socket: the same JSON-RPC, one message a
+   * WebSocket text message. Messages written before the upgrade wait for it; when it cannot be
+   * reached at all (a socket left by a daemon that has ended, say), a process of its own takes over.
+   */
+  private openSocket(path: string, launch: CodexLaunch): { send(text: string): void; stop(): void } {
+    const waiting: string[] = [];
+    let opened = false;
+    const socket = new CodexSocket(path, {
+      onOpen: () => {
+        opened = true;
+        for (const text of waiting.splice(0)) socket.send(text);
+      },
+      onMessage: (text) => this.onData(`${text}\n`),
+      onClose: (error) => {
+        log('codex shared app-server connection closed', error?.message ?? 'on purpose');
+        if (!opened && error && !this.stopping && !this.done) {
+          log('codex shared app-server unreachable: a process of its own instead');
+          this.pipe = this.openProcess(launch);
+          for (const text of waiting.splice(0)) this.pipe.send(text);
+          return;
+        }
+        this.end(this.stopping ? this.stopping.reason : error);
+      },
+    });
+    return {
+      send: (text) => (socket.open ? socket.send(text) : waiting.push(text)),
+      stop: () => socket.close(),
+    };
+  }
+
+  /** A `codex app-server` process of its own, the JSON-RPC one object a line on its stdio. */
+  private openProcess(launch: CodexLaunch): { send(text: string): void; stop(): void } {
+    const child = spawn(launch.codexPath, ['app-server'], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] });
     // A write to a Codex that has just exited: reported by its end, not thrown.
     child.stdin.on('error', (error) => log('writing to codex failed', error));
     child.stdout.setEncoding('utf8');
@@ -81,9 +119,17 @@ export class CodexConnection {
       // Stopped on purpose: its reason, if any; else an exit nobody asked for.
       this.end(this.stopping ? this.stopping.reason : code === 0 ? undefined : new Error(`Codex exited with code ${code ?? signal}`));
     });
-    this.ready = this.request('initialize', { clientInfo: { name: 'vault-claude', title: 'Vault Claude', version: '1' }, capabilities: null }).then(() => this.notify('initialized'));
-    // Awaited by whoever uses it; not left unhandled when it ends before anyone has.
-    this.ready.catch(() => undefined);
+    return {
+      send: (text) => void child.stdin.write(`${text}\n`),
+      stop: () => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        child.kill();
+        const timer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        }, KILL_AFTER_MS);
+        child.once('exit', () => clearTimeout(timer));
+      },
+    };
   }
 
   /** Whether it can still be used: not stopped, not ended. */
@@ -145,13 +191,7 @@ export class CodexConnection {
     if (this.done) return;
     if (!this.stopping) this.stopping = { reason };
     this.rejectPending(reason ?? new Error('Codex was stopped'));
-    const child = this.child;
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    child.kill();
-    const timer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    }, KILL_AFTER_MS);
-    child.once('exit', () => clearTimeout(timer));
+    this.pipe.stop();
   }
 
   private end(error: Error | undefined): void {
@@ -169,7 +209,7 @@ export class CodexConnection {
 
   private write(message: Record<string, unknown>): void {
     if (this.done) return;
-    this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+    this.pipe.send(JSON.stringify({ jsonrpc: '2.0', ...message }));
   }
 
   private onData(chunk: string): void {

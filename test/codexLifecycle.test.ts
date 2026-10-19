@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { codexAccessModes, codexTurnAccess, readCodexChoices } from '../src/codexAccess';
 import { readClaudeChoices } from '../src/chatChoices';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:net';
+import { CodexConnection } from '../src/codexConnection';
+import { unframe } from '../src/codexSocket';
 import { CodexSession, runCodexOneShot, stopCodexReader } from '../src/codexSession';
 
 import { launchIn } from './fakeCodex';
@@ -102,18 +106,18 @@ test("a Claude chat's choices are read back as kept: never Plan, and null for Cl
   assert.deepEqual(readClaudeChoices({}), {});
 });
 
-test("a Codex chat kept out of Codex's lists is unarchived before it resumes and archived as it is let go of; a shared one goes through Codex's proxy", async () => {
+test("a Codex chat kept out of Codex's lists is unarchived before it resumes; a shared one whose daemon cannot be reached runs a process of its own", async () => {
   const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
   try {
     let ended: () => void = () => undefined;
     const done = new Promise<void>((resolve) => (ended = resolve));
     const handlers = { onMessage: () => undefined, onEnd: () => ended(), onPermission: async () => ({ behavior: 'deny' as const, message: '' }) };
-    const session = new CodexSession({ ...launchIn(dir), resume: 't1', hidden: true, shared: true }, handlers as never);
+    const session = new CodexSession({ ...launchIn(dir), resume: 't1', hidden: true, shared: true, socketPath: `${dir}/no-daemon.sock` }, handlers as never);
     session.send('hello');
     await done;
     const methods = readFileSync(`${dir}/methods.log`, 'utf8').trim().split('\n');
     assert.ok(methods.indexOf('thread/unarchive') >= 0 && methods.indexOf('thread/unarchive') < methods.indexOf('thread/resume'), methods.join(','));
-    assert.equal(readFileSync(`${dir}/started`, 'utf8'), 'app-server proxy');
+    assert.equal(readFileSync(`${dir}/started`, 'utf8'), 'app-server');
     session.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -132,6 +136,49 @@ test("a hidden Codex chat is archived when the panel lets go of it", async () =>
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.ok(readFileSync(`${dir}/methods.log`, 'utf8').includes('thread/archive'));
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a Codex connection to the shared app-server speaks WebSocket over its socket: the upgrade, then JSON-RPC in text messages", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  const path = `${dir}/daemon.sock`;
+  const seen: string[] = [];
+  // A stand-in daemon: answers the upgrade, then each request with its method's name.
+  const server = createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    let upgraded = false;
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!upgraded) {
+        const end = buffer.indexOf('\r\n\r\n');
+        if (end < 0) return;
+        const key = /sec-websocket-key:\s*(\S+)/i.exec(buffer.subarray(0, end).toString())?.[1] ?? '';
+        buffer = buffer.subarray(end + 4);
+        const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+        socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+        upgraded = true;
+      }
+      for (let parsed = unframe(buffer); parsed; parsed = unframe(buffer)) {
+        buffer = buffer.subarray(parsed.length);
+        if (parsed.opcode !== 1) continue;
+        const message = JSON.parse(parsed.payload.toString()) as { id?: number; method?: string };
+        seen.push(message.method ?? '');
+        if (message.id === undefined) continue;
+        const reply = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { method: message.method } }));
+        socket.write(Buffer.concat([Buffer.from([0x81, reply.length]), reply]));
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(path, resolve));
+  try {
+    const connection = new CodexConnection({ codexPath: '/nonexistent', cwd: dir, env: {}, shared: true, socketPath: path }, {}, { timeoutMs: 1500 });
+    await connection.ready;
+    assert.deepEqual(await connection.request('thread/list', {}), { method: 'thread/list' });
+    connection.stop();
+    assert.deepEqual(seen.slice(0, 3), ['initialize', 'initialized', 'thread/list']);
+  } finally {
+    server.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

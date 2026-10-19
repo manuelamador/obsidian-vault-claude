@@ -1453,13 +1453,18 @@ export default class VaultClaudePlugin extends Plugin {
     if (!cwd) return 'Codex chats need the vault to be a folder on this computer.';
     const env = claudeEnv(codexPath, extraPathEntries(this.settings.extraPath));
     const shared = this.settings.codexShared && this.codexDaemonRunning(env);
-    return { codexPath, cwd, env, ...(shared ? { shared: true } : {}) };
+    return { codexPath, cwd, env, ...(shared ? { shared: true, socketPath: this.codexSocketPath(env) } : {}) };
   }
 
   /** Whether Codex's shared app-server (its daemon) runs: its control socket, under Codex's home, is there. */
   codexDaemonRunning(env: Record<string, string | undefined> = process.env): boolean {
+    return existsSync(this.codexSocketPath(env));
+  }
+
+  /** Where Codex's shared app-server listens: its control socket, under Codex's home. */
+  private codexSocketPath(env: Record<string, string | undefined>): string {
     const home = env.CODEX_HOME || joinPath(homedir(), '.codex');
-    return existsSync(joinPath(home, 'app-server-control', 'app-server-control.sock'));
+    return joinPath(home, 'app-server-control', 'app-server-control.sock');
   }
 
   /**
