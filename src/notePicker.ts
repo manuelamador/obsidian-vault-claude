@@ -96,7 +96,9 @@ export class NotePicker extends FuzzySuggestModal<Picked> {
   getItems(): Picked[] {
     if (this.tab === 'chats') return this.chats;
     if (this.tab === 'zotero') return this.zoteroItems;
-    return this.app.vault.getAllLoadedFiles().filter((item) => item.path !== '/' && (item instanceof TFile || item instanceof TFolder));
+    // Not what Settings → Files and links → Excluded files hides from Obsidian's own search and quick switcher.
+    const excluded = (path: string) => (this.app.metadataCache as unknown as { isUserIgnored?: (path: string) => boolean }).isUserIgnored?.(path) === true;
+    return this.app.vault.getAllLoadedFiles().filter((item) => item.path !== '/' && (item instanceof TFile || item instanceof TFolder) && !excluded(item.path));
   }
 
   getItemText(item: Picked): string {
