@@ -3202,8 +3202,14 @@ async function main(): Promise<void> {
     const labelForTasks = stopButtonEl.textContent;
     const tabWithTasks = view.getDisplayText();
     const shownForTasks = stopButtonEl.isShown() && labelForTasks === 'Stop 1 task';
+    stub.Modal.last = null;
     stopButtonEl.click();
-    const stoppedOk = stoppedOnScreen.join(',') === 'agent-1';
+    // Asked first, naming the task; stopped once confirmed.
+    const asked = stub.Modal.last as unknown as { heading: string; message: string; onConfirm(): void } | null;
+    const askedFirst = stoppedOnScreen.length === 0 && asked?.heading === 'Stop the background tasks?' && asked.message.includes('its background task');
+    asked?.onConfirm();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const stoppedOk = askedFirst && stoppedOnScreen.join(',') === 'agent-1';
     stopView.onMessage({ type: 'system', subtype: 'task_notification', task_id: 'agent-1', status: 'stopped', summary: 'Audit', output_file: '', uuid: 'u', session_id: 's' });
     const hiddenAfter = !stopButtonEl.isShown();
     const tabAfter = view.getDisplayText();
@@ -3212,7 +3218,7 @@ async function main(): Promise<void> {
     if (!tabTasksOk) process.exitCode = 1;
     stopView.session = null;
     const stopOk = shownForTasks && stoppedOk && hiddenAfter;
-    console.log(`Stop for background tasks: shown "${labelForTasks}" ${shownForTasks}; stopped ${stoppedOnScreen.join(',')}; hidden once they end ${hiddenAfter} -> ${stopOk}`);
+    console.log(`Stop for background tasks: shown "${labelForTasks}" ${shownForTasks}; asked first ${askedFirst}; stopped ${stoppedOnScreen.join(',')}; hidden once they end ${hiddenAfter} -> ${stopOk}`);
     if (!stopOk) process.exitCode = 1;
     view.newChat();
     // Selecting text in a reply shows the Quote button above it; a click quotes it in the input.

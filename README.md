@@ -256,7 +256,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 
   <img src="docs/done-tabs-closed.png" width="54" alt="Two tabs on the panel's right edge, each marked ✓"> <img src="docs/done-tab.png" width="300" alt="A tab pointed at, open to the left: the chat “demo chat”, “Claude finished”, the start of its reply “This is a test”, and × to remove it">
 
-- Background agents and commands can keep running after a reply ends. **Stop N tasks** beside Send, or ■ in history, stops them; a dot on the tab icon shows tasks are running. The list button beside Stop (also **Show background tasks**) lists the tasks of the panel's chats: what each is, for how long, its latest progress, a command's output so far, and **Stop** for one alone. Tasks that ended stay listed under **Finished** (the last 20, until Obsidian restarts) with their output, and one that ends in a chat not on screen says so in a notice.
+- Background agents and commands can keep running after a reply ends. **Stop N tasks** beside Send, or ■ in history, stops them; Stop or Esc while tasks run (stopping a reply ends its tasks too) asks first, naming them; a dot on the tab icon shows tasks are running. The list button beside Stop (also **Show background tasks**) lists the tasks of the panel's chats: what each is, for how long, its latest progress, a command's output so far, and **Stop** for one alone. Tasks that ended stay listed under **Finished** (the last 20, until Obsidian restarts) with their output, and one that ends in a chat not on screen says so in a notice.
 
   <img src="docs/background-tasks.png" width="480" alt="The input after a reply that left two background agents running: “Stop 2 tasks” beside Send">
 

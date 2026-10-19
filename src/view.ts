@@ -1164,7 +1164,8 @@ export class ChatView extends ItemView {
       // Esc ends a reply only; background tasks are stopped with the button, on purpose.
       if (evt.key !== 'Escape' || evt.defaultPrevented || !this.busy) return;
       evt.preventDefault();
-      this.interruptTurn();
+      // Ending the reply ends the chat's background tasks too: asked first when there are any.
+      this.confirmStop(() => this.interruptTurn());
     });
 
     this.stopButton = actions.createEl('button', { text: 'Stop' });
@@ -5712,8 +5713,26 @@ export class ChatView extends ItemView {
    * otherwise the background tasks that are still running after the reply ended.
    */
   private stop(): void {
-    if (this.busy) this.interruptTurn();
-    else this.stopTasks();
+    this.confirmStop(() => (this.busy ? this.interruptTurn() : this.stopTasks()));
+  }
+
+  /**
+   * Runs `stop` at once, or, while the chat has background tasks running (which stopping ends), once
+   * the dialog naming them is confirmed: a task is often long, and a stray Esc or click would lose it.
+   */
+  private confirmStop(stop: () => void): void {
+    const running = [...this.tasks];
+    if (running.length === 0) return stop();
+    const names = running.map((id) => this.taskInfo.get(id)?.description || 'a background task');
+    const listed = names.slice(0, 3).map((name) => `“${name}”`).join(', ') + (names.length > 3 ? ` and ${names.length - 3} more` : '');
+    const what = running.length === 1 ? 'its background task' : `its ${running.length} background tasks`;
+    new ConfirmModal(
+      this.app,
+      this.busy ? 'Stop the reply?' : 'Stop the background tasks?',
+      `${this.busy ? 'Stopping the reply also ends' : 'This ends'} ${what}: ${listed}. Their output so far stays in the task list.`,
+      'Stop',
+      stop,
+    ).open();
   }
 
   /** Stop shows while a reply runs, and after it for as long as the chat has background tasks running. */
