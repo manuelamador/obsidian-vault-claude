@@ -1,8 +1,11 @@
 .vc-root {
   /* Left and right margin of every part of the panel; set from the "Panel side margins" setting. */
   --vc-side-margin: 20px;
-  /* The panel's own background, for what floats over the messages. */
+  /* The panel's own background, for what floats over the messages: the editor's in the main area
+     or a window of its own, the sidebar's in a sidebar (below). */
   --vc-panel-bg: var(--background-primary);
+  /* What stands out from it (cards, hints, lists): the other of the theme's two backgrounds. */
+  --vc-raised-bg: var(--background-secondary);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -171,7 +174,7 @@
   max-height: 260px;
   overflow-y: auto;
   padding: var(--size-4-1);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   box-shadow: var(--shadow-s);
@@ -349,7 +352,7 @@
   max-height: 60vh;
   overflow-y: auto;
   padding: var(--size-4-3);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   box-shadow: var(--shadow-s);
@@ -589,7 +592,7 @@
   text-overflow: ellipsis;
   font-size: var(--font-ui-small);
   color: var(--text-muted);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   box-shadow: var(--shadow-s);
@@ -634,6 +637,7 @@
 .mod-left-split .vc-root,
 .mod-right-split .vc-root {
   --vc-panel-bg: var(--background-secondary);
+  --vc-raised-bg: var(--background-primary);
 }
 
 /*
@@ -685,7 +689,7 @@
   max-height: 60%;
   overflow-y: auto;
   padding: var(--size-4-1);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   box-shadow: var(--shadow-l);
@@ -1068,7 +1072,7 @@
   padding: var(--size-4-3) var(--size-4-4);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-l);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   box-shadow: var(--shadow-s);
 }
 
@@ -1737,7 +1741,7 @@ button.vc-continue-button:hover span:last-child {
   padding: 3px 9px;
   border: 1px solid var(--background-modifier-border-hover);
   border-radius: var(--radius-s);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   color: var(--text-normal);
   font-size: var(--font-ui-small);
   font-weight: var(--font-semibold);
@@ -1791,7 +1795,7 @@ button.vc-continue-button:hover span:last-child {
   width: min(420px, calc(100% - 2 * var(--vc-side-margin)));
   display: flex;
   flex-direction: column;
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   box-shadow: var(--shadow-l);
@@ -1870,7 +1874,7 @@ button.vc-continue-button:hover span:last-child {
   margin: var(--size-4-2) 0;
   padding: var(--size-2-2) var(--size-4-2);
   border-radius: var(--radius-m);
-  background: var(--background-secondary);
+  background: var(--vc-panel-bg);
 }
 
 .vc-side-chat-question > :first-child,
@@ -1919,7 +1923,7 @@ button.vc-continue-button:hover span:last-child {
   padding: var(--size-2-1) var(--size-4-2);
   border: 1px solid var(--background-modifier-border-hover);
   border-radius: var(--radius-s);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   box-shadow: var(--shadow-s);
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
@@ -2028,7 +2032,7 @@ button.vc-continue-button:hover span:last-child {
   padding: var(--size-2-2) var(--size-4-2);
   border: 1px solid var(--background-modifier-border-hover);
   border-radius: var(--radius-s);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   box-shadow: var(--shadow-s);
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
@@ -3331,7 +3335,7 @@ body:has(.vc-pick-up) .popover.hover-popover {
   border: 1px solid var(--background-modifier-border);
   border-left: 3px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
-  background: var(--background-primary);
+  background: var(--vc-raised-bg);
   box-shadow: var(--shadow-s);
   font-size: var(--font-ui-small);
   transition: box-shadow 120ms ease-out;
@@ -3445,7 +3449,7 @@ body:has(.vc-pick-up) .popover.hover-popover {
   padding: var(--size-4-2);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-l);
-  background: var(--background-secondary);
+  background: var(--vc-panel-bg);
 }
 
 .vc-email-thread-head {
@@ -3570,7 +3574,7 @@ body:has(.vc-pick-up) .popover.hover-popover {
   padding: 2px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
-  background: var(--background-secondary);
+  background: var(--vc-panel-bg);
 }
 
 .vc-engine-switch button.vc-engine-choice {
@@ -3780,7 +3784,7 @@ a.vc-email-attachment:hover {
   border: 1px solid var(--background-modifier-border);
   border-left: 3px solid var(--interactive-accent);
   border-radius: var(--radius-m);
-  background: var(--background-secondary);
+  background: var(--vc-panel-bg);
 }
 
 .vc-report.is-failed {
