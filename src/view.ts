@@ -14,6 +14,7 @@ import {
   normalizePath,
   setIcon,
   type TAbstractFile,
+  type PaneType,
   type WorkspaceLeaf,
 } from 'obsidian';
 import type {
@@ -1274,10 +1275,17 @@ export class ChatView extends ItemView {
     closeImage();
     this.sideChat.close();
     this.saveDraft();
-    // Another panel takes the running chats over; with none, they stop and the notice says so.
-    const heir = this.plugin.otherChatView(this);
-    if (heir) this.handOver(heir);
-    else this.reportStopped();
+    // Another panel takes the running chats over. With none, a panel closed in the main area or its
+    // own window hands them to a new one in the sidebar, the chat on screen with them; closed in the
+    // sidebar itself (or with Obsidian quitting), they stop and the notice says so.
+    const shown = { id: this.chatId ?? this.resumeId, title: this.chatName ?? 'Chat', scratch: this.scratch };
+    const running = this.busy || this.background.size > 0 || this.tasks.size > 0;
+    const fallback = !this.plugin.otherChatView(this) && running && !this.plugin.quitting && !this.inSidebar();
+    const heir = this.plugin.otherChatView(this) ?? (fallback ? await this.plugin.newPanelAt('sidebar').catch(() => null) : null);
+    if (heir) {
+      this.handOver(heir);
+      if (fallback) void (shown.scratch ? heir.openScratch() : shown.id ? heir.openChat({ id: shown.id, title: shown.title, updatedAt: Date.now(), fromPanel: this.plugin.isPanelChat(shown.id) }) : Promise.resolve());
+    } else this.reportStopped();
     // What still waits on you in the chat on screen (none when it moved to another panel) is answered
     // before its process ends: its record then says the panel was closed, rather than that the request
     // was cut off, which Claude reads as an error when the chat is opened again.
@@ -1316,6 +1324,68 @@ export class ChatView extends ItemView {
     if (moving.length === 0) return;
     const tasks = moving.reduce((sum, entry) => sum + entry.tasks.size, 0);
     new Notice(`${chatsAndTasks(moving.length, tasks)} moved to another Claude panel, still running.`);
+  }
+
+  /** Whether this panel is in a sidebar, rather than the main area or a window of its own. */
+  inSidebar(): boolean {
+    const root = this.leaf?.getRoot?.();
+    // Unknown (no workspace to place it): taken as the sidebar, where the panel opens.
+    return !root || root === this.app.workspace.rightSplit || root === this.app.workspace.leftSplit;
+  }
+
+  /**
+   * Moves the chat on screen to a panel in the main area (as a tab), the sidebar (the panel there,
+   * if any) or a window of its own, and closes this panel: a chat running goes on running there,
+   * an idle one reopens there from its record; this panel's other running chats go with it (see onClose).
+   */
+  async moveChat(place: 'main' | 'sidebar' | 'window'): Promise<void> {
+    const target = (place === 'sidebar' ? this.plugin.sidebarChatView(this) : null) ?? (await this.plugin.newPanelAt(place));
+    if (!target) {
+      new Notice('Could not open a panel there.');
+      return;
+    }
+    const id = this.chatId ?? this.resumeId;
+    const title = this.chatName ?? 'Chat';
+    const scratch = this.scratch;
+    // Running: set aside to go on running; idle: its process let go of, so the other panel may resume it.
+    this.newChat();
+    const entry = id ? [...this.background].find((each) => each.chatId === id) : undefined;
+    if (entry) {
+      this.background.delete(entry);
+      this.updateBackgroundIndicator();
+      target.adoptBackground(entry);
+    }
+    if (scratch) await target.openScratch();
+    else if (id) await target.openChat({ id, title, updatedAt: Date.now(), fromPanel: this.plugin.isPanelChat(id) });
+    this.leaf.detach();
+  }
+
+  /**
+   * Before a note opens from the panel: the main window's most recent note made the active leaf, so
+   * that it opens where the notes are, not in a window of the panel's own nor in place of the panel
+   * in the main area. False when there is no note to open beside (a new tab then).
+   */
+  private towardNotes(): boolean {
+    const { workspace } = this.app;
+    if (this.inSidebar() && this.containerEl.ownerDocument === document) return true;
+    if (!workspace.rootSplit) return true;
+    const recent = workspace.getMostRecentLeaf?.(workspace.rootSplit);
+    const leaf = recent && recent !== this.leaf ? recent : workspace.getLeavesOfType('markdown').find((each) => each.getRoot() === workspace.rootSplit);
+    if (!leaf) return false;
+    workspace.setActiveLeaf(leaf, { focus: false });
+    return true;
+  }
+
+  /** A new tab for a note, in the main window (see towardNotes). */
+  private noteLeaf(): WorkspaceLeaf {
+    this.towardNotes();
+    return this.app.workspace.getLeaf('tab');
+  }
+
+  /** Opens link `link` as Obsidian does, in the main window (see towardNotes). */
+  private openNoteLink(link: string, source: string, newLeaf: PaneType | boolean): Promise<void> {
+    const beside = this.towardNotes();
+    return this.app.workspace.openLinkText(link, source, beside ? newLeaf : 'tab');
   }
 
   /** Whether this panel is closing, so it can take over nothing. */
@@ -2782,7 +2852,7 @@ export class ChatView extends ItemView {
         searchText: (item) => this.plugin.chatSearchText(item.id),
         stopTasks: (item) => void this.plugin.stopChatTasks(item.id),
         noteLinks: () => ({ changed: this.plugin.noteChats, sent: this.plugin.noteRefs, mentioned: this.plugin.noteMentions }),
-        openNote: (path) => void this.app.workspace.openLinkText(path, '', 'tab'),
+        openNote: (path) => void this.openNoteLink(path, '', 'tab'),
         projectOf: (folder) => this.plugin.projectOfFolder(folder)?.path ?? null,
         // Without the prefix new projects are named with, which every one would match.
         projectName: (item) => this.plugin.homeProject(item.id)?.basename.replace(/^Claude Project — /, '') ?? null,
@@ -3421,7 +3491,7 @@ export class ChatView extends ItemView {
     try {
       const path = await this.savedNotePath(formatDate(Date.now()).slice(0, 10), title || 'Claude reply');
       const file = await this.app.vault.create(path, `${markdown}\n`);
-      await this.app.workspace.getLeaf('tab').openFile(file);
+      await this.noteLeaf().openFile(file);
       new Notice(`Saved to ${path}.`);
     } catch (error) {
       log('saving the reply as a note failed', error);
@@ -3975,7 +4045,7 @@ export class ChatView extends ItemView {
     try {
       const path = await this.savedNotePath(date, title);
       const file = await this.app.vault.create(path, chatToMarkdown(title, id, transcript, date, this.plugin.ticks[id]));
-      await this.app.workspace.getLeaf('tab').openFile(file);
+      await this.noteLeaf().openFile(file);
       new Notice(`Saved to ${path}.`);
       this.offerProjectAfterSave(id);
     } catch (error) {
@@ -4013,7 +4083,7 @@ export class ChatView extends ItemView {
       if (controller.signal.aborted) return;
       const path = await this.savedNotePath(date, title, ' — summary');
       const file = await this.app.vault.create(path, summaryNote(answer, { date, sessionId: id }));
-      await this.app.workspace.getLeaf('tab').openFile(file);
+      await this.noteLeaf().openFile(file);
       new Notice(`Saved the summary to ${path}.`);
       this.offerProjectAfterSave(id);
     } catch (error) {
@@ -5207,7 +5277,7 @@ export class ChatView extends ItemView {
     else if (target.closest('.vc-project-offer')) this.openConnections();
     else if (target.closest('.vc-context-remove')) this.attachNote(null);
     else if (target.closest('.vc-context-offer')) this.attachNote(this.activeNote()?.file.path ?? null);
-    else if (target.closest('.vc-context-chip') && this.attachedNote) void this.app.workspace.openLinkText(this.attachedNote, '', Keymap.isModEvent(evt));
+    else if (target.closest('.vc-context-chip') && this.attachedNote) void this.openNoteLink(this.attachedNote, '', Keymap.isModEvent(evt));
   }
 
   /**
@@ -5410,7 +5480,7 @@ export class ChatView extends ItemView {
             .setIcon(icon)
             .onClick((click) => {
               if (click.altKey) this.attachNoteFromMenu(entry);
-              else void this.app.workspace.openLinkText(entry.target, '', Keymap.isModEvent(click));
+              else void this.openNoteLink(entry.target, '', Keymap.isModEvent(click));
             }),
         );
       }
@@ -7207,7 +7277,7 @@ export class ChatView extends ItemView {
             if (chatKey) this.plugin.setPlanNote(chatKey, file.path, plan);
             editButton.setText('Open the plan note');
           }
-          await this.app.workspace.getLeaf('tab').openFile(file);
+          await this.noteLeaf().openFile(file);
           new Notice('Edit the plan there, then approve it, or send feedback, here.');
         } catch (error) {
           log('opening a plan note failed', error);
@@ -7484,7 +7554,7 @@ export class ChatView extends ItemView {
   async editDraft(): Promise<void> {
     const open = this.draftFile();
     if (open) {
-      await this.app.workspace.getLeaf('tab').openFile(open);
+      await this.noteLeaf().openFile(open);
       new Notice('Write your message there, then send the draft.');
       return;
     }
@@ -7507,7 +7577,7 @@ export class ChatView extends ItemView {
       this.updateDraftLine();
       // Kept with the chat, so that it is its draft again when the chat comes back.
       this.saveDraft();
-      await this.app.workspace.getLeaf('tab').openFile(file);
+      await this.noteLeaf().openFile(file);
       new Notice('Write your message there, then send the draft.');
     } catch (error) {
       log('opening a draft failed', error);
@@ -7915,7 +7985,7 @@ export class ChatView extends ItemView {
         parts.appendText(`Saved “${saved.basename}”. `);
         parts.createEl('a', { text: 'Open it', href: '#' }).addEventListener('click', (evt) => {
           evt.preventDefault();
-          void this.app.workspace.getLeaf('tab').openFile(saved);
+          void this.noteLeaf().openFile(saved);
         });
       });
       new Notice(frag, 8000);
@@ -8349,13 +8419,13 @@ export class ChatView extends ItemView {
     if (link) {
       evt.preventDefault();
       const href = link.dataset.href ?? link.getAttribute('href');
-      if (href) void this.app.workspace.openLinkText(href, '', Keymap.isModEvent(evt));
+      if (href) void this.openNoteLink(href, '', Keymap.isModEvent(evt));
       return;
     }
     const fileLink = target.closest<HTMLElement>('.vc-file-link');
     if (fileLink?.dataset.path) {
       evt.preventDefault();
-      void this.app.workspace.openLinkText(fileLink.dataset.path, '', Keymap.isModEvent(evt));
+      void this.openNoteLink(fileLink.dataset.path, '', Keymap.isModEvent(evt));
       return;
     }
     // Any other link opens as one in a note's reading view does, through window.open: Obsidian then

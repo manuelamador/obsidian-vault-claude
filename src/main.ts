@@ -409,6 +409,7 @@ export default class VaultClaudePlugin extends Plugin {
       if (ours(evt.reason)) log('unhandled rejection', evt.reason);
     });
     await this.loadSettings();
+    this.registerEvent(this.app.workspace.on('quit', () => (this.quitting = true)));
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
     // Opened again with the workspace: it shows the chat of the first panel.
     this.registerView(CONNECTIONS_VIEW_TYPE, (leaf) => new ConnectionsView(leaf, (pane) => void this.followPanel(pane, this.connectionsPanel ?? this.chatViews()[0] ?? null), () => this.confirmRebuildConnections()));
@@ -491,6 +492,19 @@ export default class VaultClaudePlugin extends Plugin {
       editorCallback: (editor, ctx) => {
         if (ctx.file) void this.openInlineEdit(editor, ctx.file, ctx);
       },
+    });
+    this.addCommand({
+      id: 'move-chat',
+      name: 'Move chat to the main area, or back to the sidebar',
+      callback: () => {
+        const view = this.frontChatView();
+        if (view) void view.moveChat(view.inSidebar() ? 'main' : 'sidebar');
+      },
+    });
+    this.addCommand({
+      id: 'move-chat-to-window',
+      name: 'Open chat in a new window',
+      callback: () => void this.frontChatView()?.moveChat('window'),
     });
     this.addCommand({
       id: 'new-chat-tab',
@@ -902,6 +916,8 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   onunload(): void {
+    // Panels closing now are not reopened in the sidebar (see ChatView.onClose).
+    this.quitting = true;
     // Clean-ups still waiting (what a removal left, see ChatView.removeFrom) are done now, not lost.
     for (const [timer, run] of this.cleanups) {
       window.clearTimeout(timer);
@@ -997,6 +1013,24 @@ export default class VaultClaudePlugin extends Plugin {
       if (!leaf) return null;
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
+    await workspace.revealLeaf(leaf);
+    return leaf.view instanceof ChatView ? leaf.view : null;
+  }
+
+  /** Obsidian is quitting or the plugin unloading: a panel closing is not reopened in the sidebar (see ChatView.onClose). */
+  quitting = false;
+
+  /** The chat panel in a sidebar other than `except`, if any: the one a chat moved to the sidebar goes to. */
+  sidebarChatView(except: ChatView): ChatView | null {
+    return this.chatViews().find((view) => view !== except && view.inSidebar() && !view.isClosing()) ?? null;
+  }
+
+  /** Opens an empty chat panel in the main area (as a tab), the right sidebar, or a window of its own. */
+  async newPanelAt(place: 'main' | 'sidebar' | 'window'): Promise<ChatView | null> {
+    const { workspace } = this.app;
+    const leaf = place === 'window' ? workspace.openPopoutLeaf() : place === 'sidebar' ? workspace.getRightLeaf(false) : workspace.getLeaf('tab');
+    if (!leaf) return null;
+    await leaf.setViewState({ type: VIEW_TYPE, active: true });
     await workspace.revealLeaf(leaf);
     return leaf.view instanceof ChatView ? leaf.view : null;
   }

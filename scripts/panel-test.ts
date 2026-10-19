@@ -215,6 +215,8 @@ async function main(): Promise<void> {
     // The panel another one hands its running chats to when it closes; none by default.
     heir: null as { adoptBackground(entry: unknown): void } | null,
     panelClosing: () => undefined,
+    newPanelAt: async (): Promise<null> => null,
+    quitting: false,
     otherChatView() {
       return this.heir;
     },
@@ -4825,6 +4827,29 @@ async function main(): Promise<void> {
       !movedSaid.some((line) => line.includes('stopped'));
     console.log(`closing hands its chats over: moved ${adopted.length}; ${JSON.stringify(movedSaid[0])} -> ${movedOk}`);
     if (!movedOk) process.exitCode = 1;
+
+    // Closed in the main area or a window of its own with no other panel: a new panel in the sidebar takes the chats over.
+    {
+      (plugin as { heir: unknown }).heir = null;
+      const fellBack: unknown[] = [];
+      const placed: string[] = [];
+      const fallbackPlugin = plugin as unknown as { newPanelAt(place: string): Promise<unknown> };
+      fallbackPlugin.newPanelAt = async (place: string) => {
+        placed.push(place);
+        return { adoptBackground: (entry: unknown) => void fellBack.push(entry), openChat: async () => true, openScratch: async () => undefined };
+      };
+      const placeView = view as unknown as { inSidebar(): boolean; closing: boolean };
+      const realInSidebar = placeView.inSidebar;
+      placeView.inSidebar = () => false;
+      placeView.closing = false;
+      startRunning();
+      const fellSaid = await notices(() => view.onClose());
+      placeView.inSidebar = realInSidebar;
+      placeView.closing = false;
+      const fallbackOk = placed.join() === 'sidebar' && fellBack.length === 2 && !fellSaid.some((line) => line.includes('stopped'));
+      console.log(`closing outside the sidebar falls back to a sidebar panel: placed ${placed.join()}; moved ${fellBack.length} -> ${fallbackOk}`);
+      if (!fallbackOk) process.exitCode = 1;
+    }
 
     (plugin as { heir: unknown }).heir = null;
     startRunning();
