@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { CodexConnection } from '../src/codexConnection';
 import { unframe } from '../src/codexSocket';
-import { CodexSession, runCodexOneShot, stopCodexReader } from '../src/codexSession';
+import { contextApart, CodexSession, runCodexOneShot, stopCodexReader } from '../src/codexSession';
 
 import { launchIn } from './fakeCodex';
 
@@ -179,6 +179,32 @@ test("a Codex connection to the shared app-server speaks WebSocket over its sock
     assert.deepEqual(seen.slice(0, 3), ['initialize', 'initialized', 'thread/list']);
   } finally {
     server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a Codex message's context goes to the model apart, so the message reads as typed in Codex's app", async () => {
+  assert.equal(contextApart('', 'just a question'), null);
+  assert.deepEqual(contextApart('<project_context>p</project_context>', '<obsidian_context>\nNote attached to this chat: a.md\n</obsidian_context>\n\nwhat now?'), {
+    context: '<project_context>p</project_context>\n\n<obsidian_context>\nNote attached to this chat: a.md\n</obsidian_context>',
+    content: 'what now?',
+  });
+  // Nothing typed and no image: the context stays with the message, which would otherwise be empty.
+  assert.equal(contextApart('', '<obsidian_context>x</obsidian_context>\n\n'), null);
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  try {
+    let ended: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => (ended = resolve));
+    const handlers = { onMessage: () => undefined, onEnd: () => ended(), onPermission: async () => ({ behavior: 'deny' as const, message: '' }) };
+    const session = new CodexSession(launchIn(dir), handlers as never);
+    session.send('<obsidian_context>\nNote attached to this chat: a.md\n</obsidian_context>\n\nwhat now?');
+    await done;
+    const methods = readFileSync(`${dir}/methods.log`, 'utf8').trim().split('\n');
+    assert.ok(methods.indexOf('thread/inject_items') >= 0 && methods.indexOf('thread/inject_items') < methods.indexOf('turn/start'), methods.join(','));
+    const params = JSON.parse(readFileSync(`${dir}/turn.json`, 'utf8')) as { input: { text: string }[] };
+    assert.equal(params.input[0].text, 'what now?');
+    session.close();
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

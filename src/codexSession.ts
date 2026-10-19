@@ -8,6 +8,7 @@ import * as path from 'path';
 import { CodexConnection, type CodexLaunch } from './codexConnection';
 import { codexInit, codexItemCompleted, codexItemStarted, codexTurnResult, type CodexItem, type CodexUsage } from './codexEvents';
 import type { SDKControlGetContextUsageResponse } from '@anthropic-ai/claude-agent-sdk';
+import { splitContext } from './history';
 import { log } from './log';
 import { contextBlock, type ContextPart } from './projects';
 import type { SessionHandlers, UserContent } from './session';
@@ -121,6 +122,9 @@ export class CodexSession {
         const context = this.pendingContext.splice(0);
         const block = contextBlock(context.flatMap((each) => each.parts));
         const input = [...(block.text ? codexInput(block.text) : []), ...codexInput(content)];
+        // Starting a turn, the context (the projects', the attached note, mentions) goes to the model on
+        // its own (see contextApart), so the message reads as typed in Codex's app and on the phone.
+        const apart = this.turnId ? null : contextApart(block.text, content);
         const went = new Set(block.keys);
         const delivered = () => {
           for (const each of context) each.delivered(this.sessionId, each.parts.map((part) => part.key).filter((key) => went.has(key)));
@@ -145,7 +149,17 @@ export class CodexSession {
         const client = uuid ? { clientUserMessageId: uuid } : {};
         // For this turn only: off again, the next turn takes the thread's own tier.
         const tier = this.config.fast ? { serviceTierForTurn: CODEX_FAST_TIER } : {};
-        const started = (await this.request('turn/start', { threadId: this.sessionId, input, ...choice, ...access, ...client, ...tier })) as { turn?: { id?: string } };
+        let turnInput = input;
+        if (apart) {
+          try {
+            await this.request('thread/inject_items', { threadId: this.sessionId, items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: apart.context }] }] });
+            turnInput = codexInput(apart.content);
+          } catch (error) {
+            // A Codex without it: the context stays in the message, as before.
+            log('codex took no context apart; sent with the message', error);
+          }
+        }
+        const started = (await this.request('turn/start', { threadId: this.sessionId, input: turnInput, ...choice, ...access, ...client, ...tier })) as { turn?: { id?: string } };
         this.turnId ??= started.turn?.id ?? null;
         delivered();
       })
@@ -432,6 +446,28 @@ export class CodexSession {
 }
 
 /** A message of yours as Codex takes it: its text, and its images as data URLs. */
+/**
+ * The context a message carries (`projects`, the projects' block, and what the panel prepends to the
+ * message's text: see splitContext) apart from what was typed, for Codex to take it as a developer
+ * message of its own (`thread/inject_items`): the model reads the same, and the message, in Codex's
+ * own lists and its phone app, is what was typed. Null when there is none, or nothing would be left of the message.
+ */
+export function contextApart(projects: string, content: UserContent): { context: string; content: UserContent } | null {
+  const text = typeof content === 'string' ? content : content.find((block) => block.type === 'text')?.text ?? '';
+  const { context, rest } = splitContext(text);
+  const all = [projects, context].filter(Boolean).join('\n\n');
+  const images = typeof content === 'string' ? 0 : content.filter((block) => block.type === 'image').length;
+  if (!all || (!rest.trim() && images === 0)) return null;
+  if (typeof content === 'string') return { context: all, content: rest };
+  let replaced = false;
+  const blocks = content.map((block) => {
+    if (block.type !== 'text' || replaced) return block;
+    replaced = true;
+    return { ...block, text: rest };
+  });
+  return { context: all, content: blocks.filter((block) => block.type !== 'text' || block.text.trim()) as UserContent };
+}
+
 export function codexInput(content: UserContent): unknown[] {
   if (typeof content === 'string') return [{ type: 'text', text: content, text_elements: [] }];
   return content.flatMap((block): unknown[] => {
