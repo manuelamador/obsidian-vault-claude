@@ -1,7 +1,7 @@
 // Zotero items for the `@` picker, read through Zotero's local API on this computer
 // (127.0.0.1:23119, the one Zotero serves while it runs): the only requests the plugin makes
 // itself, and only with "Zotero in @" on. Every library is read: My Library and the groups.
-import { requestUrl } from 'obsidian';
+import { get as httpGet } from 'http';
 
 const ZOTERO = 'http://127.0.0.1:23119';
 /** Items read per request: the most the API gives. */
@@ -35,16 +35,31 @@ export interface ZoteroAnswer {
 /** Reads `path` of the local API; rejects when Zotero does not answer (not running). */
 export type ZoteroGet = (path: string) => Promise<ZoteroAnswer>;
 
-export const zoteroGet: ZoteroGet = async (path) => {
-  const answer = await requestUrl({ url: `${ZOTERO}${path}`, throw: false });
-  let json: unknown = null;
-  try {
-    json = answer.json;
-  } catch {
-    json = null;
-  }
-  return { status: answer.status, json, text: answer.text, headers: answer.headers };
-};
+/** How long Zotero is given to answer one request. */
+const ZOTERO_TIMEOUT_MS = 10_000;
+
+export const zoteroGet: ZoteroGet = (path) =>
+  // Node's own request: Zotero's local API gives Obsidian's (a browser's, to it) an empty answer.
+  new Promise((resolve, reject) => {
+    const request = httpGet(`${ZOTERO}${path}`, { timeout: ZOTERO_TIMEOUT_MS }, (answer) => {
+      let text = '';
+      answer.setEncoding('utf8');
+      answer.on('data', (chunk: string) => (text += chunk));
+      answer.on('end', () => {
+        let json: unknown = null;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          json = null;
+        }
+        const headers = Object.fromEntries(Object.entries(answer.headers).map(([key, value]) => [key.toLowerCase(), Array.isArray(value) ? value.join(', ') : (value ?? '')]));
+        resolve({ status: answer.statusCode ?? 0, json, text, headers });
+      });
+      answer.on('error', reject);
+    });
+    request.on('timeout', () => request.destroy(new Error('Zotero did not answer in time')));
+    request.on('error', reject);
+  });
 
 /** The API's path for a library. */
 function libraryPath(library: ZoteroLibrary): string {
