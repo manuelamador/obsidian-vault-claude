@@ -1663,7 +1663,7 @@ export class ChatView extends ItemView {
       }
     } else {
       menu.addItem((item) =>
-        item.setTitle("Start Codex's shared app-server, with remote control on (lasting: future starts keep it on)").setIcon('play').onClick(async () => {
+        item.setTitle("Start Codex's shared app-server until Obsidian quits, with remote control on (lasting: future starts keep it on)").setIcon('play').onClick(async () => {
           this.codexDaemonStarting = true;
           this.updatePhoneButton();
           const error = await this.plugin.startCodexDaemon();

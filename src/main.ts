@@ -1,5 +1,5 @@
 import { existsSync, promises as fsPromises } from 'fs';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { homedir } from 'os';
 import type { TaskInfo } from './backgroundTasks';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
@@ -922,6 +922,12 @@ export default class VaultClaudePlugin extends Plugin {
   onunload(): void {
     // Panels closing now are not reopened in the sidebar (see ChatView.onClose).
     this.quitting = true;
+    // Codex's shared app-server, if this session started it, stops with Obsidian: left to finish on its
+    // own, as Obsidian does not wait. One started elsewhere is not the plugin's to stop.
+    if (this.startedCodexDaemon) {
+      const launch = this.codexLaunch();
+      if (typeof launch !== 'string') spawn(launch.codexPath, ['app-server', 'daemon', 'stop'], { env: launch.env, detached: true, stdio: 'ignore' }).unref();
+    }
     // Clean-ups still waiting (what a removal left, see ChatView.removeFrom) are done now, not lost.
     for (const [timer, run] of this.cleanups) {
       window.clearTimeout(timer);
