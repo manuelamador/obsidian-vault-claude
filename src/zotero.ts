@@ -129,8 +129,9 @@ async function libraryItems(get: ZoteroGet, library: ZoteroLibrary): Promise<Zot
       const item = readItem(raw, library);
       if (item) items.push(item);
     }
-    const total = Number(answer.headers['total-results'] ?? answer.headers['Total-Results'] ?? 0);
-    if (answer.json.length < PAGE || start + PAGE >= total) return items;
+    // The total, when Zotero sends it, saves asking for an empty last page; without it, a short page ends the list.
+    const total = Number(answer.headers['total-results']);
+    if (answer.json.length < PAGE || (total > 0 && start + PAGE >= total)) return items;
   }
 }
 
@@ -143,7 +144,10 @@ export async function listZoteroItems(get: ZoteroGet = zoteroGet): Promise<Zoter
       if (typeof group.id === 'number') libraries.push({ kind: 'group', id: group.id, name: group.data?.name ?? '' });
     }
   }
-  return (await Promise.all(libraries.map((library) => libraryItems(get, library)))).flat();
+  // A library that cannot be read (a group left, refused) is left out, not the rest with it.
+  const read = await Promise.allSettled(libraries.map((library) => libraryItems(get, library)));
+  if (read.every((each) => each.status === 'rejected')) throw (read[0] as PromiseRejectedResult).reason;
+  return read.flatMap((each) => (each.status === 'fulfilled' ? each.value : []));
 }
 
 /** The item `link` selects, read from Zotero; null when it is not there. Rejects when Zotero is not running. */

@@ -164,6 +164,7 @@ export class CodexSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.endCompaction();
     this.withdrawApprovals();
     if (this.connection) this.connection.stop();
     else this.markEnded();
@@ -225,16 +226,29 @@ export class CodexSession {
   }
   /**
    * Compacts the conversation now (`thread/compact/start`), as Claude Code's `/compact` does: Codex
-   * runs it as a turn, whose end ends the panel's (see turn/completed).
+   * runs it as a turn, whose end ends the panel's (see turn/completed). A message sent meanwhile
+   * waits for that end, rather than steering the compaction or starting a turn beside it.
    */
   compact(): void {
     this.sending = this.sending
       .then(() => (this.closed ? Promise.reject(new Error('the Codex session was closed')) : this.start()))
       .then(async () => {
         this.turnMessages = [];
+        const ended = new Promise<void>((resolve) => (this.compacting = resolve));
         await this.request('thread/compact/start', { threadId: this.sessionId });
+        await ended;
       })
-      .catch((error: unknown) => this.fail(error));
+      .catch((error: unknown) => this.fail(error))
+      .finally(() => this.endCompaction());
+  }
+
+  /** Ends the wait on a compaction (see compact): its turn ended, or the session did. */
+  private compacting: (() => void) | null = null;
+
+  private endCompaction(): void {
+    const ended = this.compacting;
+    this.compacting = null;
+    ended?.();
   }
 
   /** What it may do without asking, from the next turn (a turn running keeps what it started with). */
@@ -267,6 +281,7 @@ export class CodexSession {
             this.failure ??= error ?? null;
             this.closed = true;
             this.withdrawApprovals();
+            this.endCompaction();
             this.markEnded();
             this.handlers.onEnd(reason, stderr);
           },
@@ -326,6 +341,7 @@ export class CodexSession {
         break;
       }
       case 'turn/completed': {
+        this.endCompaction();
         const turn = (params.turn ?? {}) as { status: string; error?: { message?: string } | null; durationMs?: number | null };
         this.turnId = null;
         this.withdrawApprovals();
@@ -383,6 +399,7 @@ export class CodexSession {
   /** The session cannot go on: Codex is stopped, and the panel told why once it has exited. */
   private fail(error: unknown): void {
     log('codex failed', error);
+    this.endCompaction();
     if (this.closed) return;
     this.failure = error instanceof Error ? error : new Error(String(error));
     this.closed = true;

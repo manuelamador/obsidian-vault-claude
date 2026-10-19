@@ -1161,7 +1161,7 @@ export class ChatView extends ItemView {
 
     // Esc anywhere in the panel stops Claude; an Esc already used (closing the command list) does not.
     this.registerDomEvent(root, 'keydown', (evt) => {
-      // Esc ends a reply only; background tasks are stopped with the button, on purpose.
+      // Esc ends the reply, which ends its background tasks too (see stop): asked first when there are any.
       if (evt.key !== 'Escape' || evt.defaultPrevented || !this.busy) return;
       evt.preventDefault();
       // Ending the reply ends the chat's background tasks too: asked first when there are any.
@@ -4941,13 +4941,13 @@ export class ChatView extends ItemView {
     this.effortMenu.value = this.codexEffort && efforts.some((effort) => effort.value === this.codexEffort) ? this.codexEffort : '';
   }
 
-  /** Codex's models were read: a Codex chat's menus list them. */
   /** The Codex model the chat runs, as Codex lists it: the one chosen, else Codex's default; none before the models are read. */
   private codexModelInfo(): CodexModel | undefined {
     const models = this.plugin.codexModels;
     return models.find((model) => model.id === this.codexModel) ?? (this.codexModel ? undefined : models.find((model) => model.isDefault));
   }
 
+  /** Codex's models were read: a Codex chat's menus list them. */
   codexModelsChanged(): void {
     if (this.engine === 'codex') this.applyEngine();
   }
@@ -5027,23 +5027,24 @@ export class ChatView extends ItemView {
    */
   private async zoteroBlocks(text: string): Promise<string[]> {
     if (!this.plugin.settings.zoteroMentions) return [];
-    const blocks: string[] = [];
-    for (const link of zoteroLinksIn(text)) {
-      const item = await zoteroItemByLink(link).catch(() => undefined);
-      if (item === undefined) {
-        blocks.push(`Zotero work ${link}: not looked up, as Zotero is not running.`);
-        continue;
-      }
-      if (!item) {
-        blocks.push(`Zotero work ${link}: not found in Zotero.`);
-        continue;
-      }
-      const pdf = await zoteroPdfPath(item).catch(() => null);
-      const label = zoteroLabel(item).replace(/"/g, "'");
-      blocks.push(`<zotero_item label="${label}" link="${link}">\n${zoteroCitation(item)}\n${pdf ? `PDF: ${pdf}` : 'No PDF in Zotero.'}\n</zotero_item>`);
-    }
-    return blocks;
+    // All at once: each is three short requests to Zotero.
+    return Promise.all(
+      zoteroLinksIn(text).map(async (link) => {
+        let item: Awaited<ReturnType<typeof zoteroItemByLink>>;
+        try {
+          item = await zoteroItemByLink(link);
+        } catch (error) {
+          const refused = (error as { code?: string }).code === 'ECONNREFUSED';
+          return `Zotero work ${link}: not looked up, ${refused ? 'as Zotero is not running' : `as Zotero did not answer (${errorText(error)})`}.`;
+        }
+        if (!item) return `Zotero work ${link}: not found in Zotero.`;
+        const pdf = await zoteroPdfPath(item).catch(() => null);
+        const label = zoteroLabel(item).replace(/"/g, "'");
+        return `<zotero_item label="${label}" link="${link}">\n${zoteroCitation(item)}\n${pdf ? `PDF: ${pdf}` : 'No PDF in Zotero.'}\n</zotero_item>`;
+      }),
+    );
   }
+
 
   /**
    * Follows the tab in front. A note becomes the note in front; another kind of view in the main area
@@ -5726,16 +5727,23 @@ export class ChatView extends ItemView {
     const names = running.map((id) => this.taskInfo.get(id)?.description || 'a background task');
     const listed = names.slice(0, 3).map((name) => `“${name}”`).join(', ') + (names.length > 3 ? ` and ${names.length - 3} more` : '');
     const what = running.length === 1 ? 'its background task' : `its ${running.length} background tasks`;
+    // Confirmed later: only for the chat asked about, not another opened meanwhile.
+    const session = this.session;
     new ConfirmModal(
       this.app,
       this.busy ? 'Stop the reply?' : 'Stop the background tasks?',
       `${this.busy ? 'Stopping the reply also ends' : 'This ends'} ${what}: ${listed}. Their output so far stays in the task list.`,
       'Stop',
-      stop,
+      () => {
+        if (this.session !== session) {
+          new Notice('Another chat was opened meanwhile: nothing was stopped.');
+          return;
+        }
+        stop();
+      },
     ).open();
   }
 
-  /** Stop shows while a reply runs, and after it for as long as the chat has background tasks running. */
   /**
    * A background task of chat `chatId` ended (`message`, its notice): kept by the plugin for the task
    * list, its output still readable there; a notice says so when its chat is not the one on screen.
@@ -5798,6 +5806,7 @@ export class ChatView extends ItemView {
     }).open();
   }
 
+  /** Stop shows while a reply runs, and after it for as long as the chat has background tasks running. */
   private updateStopButton(): void {
     if (!this.stopButton) return;
     this.tasksChanged();
@@ -6001,7 +6010,7 @@ export class ChatView extends ItemView {
       const model = this.plugin.codexModels.find((each) => each.id === this.codexModel);
       if (this.codexEffort && model && !model.efforts.some((effort) => effort.value === this.codexEffort)) this.codexEffort = undefined;
       // Fast mode, which the new model does not offer, goes off.
-      if (this.fastMode && this.codexModelInfo()?.fast === false) {
+      if (this.fastMode && this.plugin.codexModels.length > 0 && this.codexModelInfo()?.fast !== true) {
         this.fastMode = false;
         await this.session?.setFastMode(false);
       }

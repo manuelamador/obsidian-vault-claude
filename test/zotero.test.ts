@@ -54,3 +54,16 @@ test('Zotero not running: listing rejects, so the picker can say to start it', a
   };
   await assert.rejects(listZoteroItems(get));
 });
+
+test('a group library that cannot be read is left out, not the rest; a library without a total ends on a short page', async () => {
+  const page = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `K${i}`, data: { itemType: 'book', title: `B${i}` }, meta: { creatorSummary: 'A', parsedDate: '2001' } }));
+  const { get } = stand({
+    '/api/users/0/groups?format=json': { json: [{ id: 7, data: { name: 'Left group' } }] },
+    // No Total-Results header: the full first page does not end the list.
+    '/api/users/0/items/top?format=json&limit=100&start=0': { json: page(100) },
+    '/api/users/0/items/top?format=json&limit=100&start=100': { json: page(3) },
+  });
+  const items = await listZoteroItems(get);
+  assert.equal(items.length, 103);
+  assert.ok(items.every((item) => item.library.kind === 'user'));
+});

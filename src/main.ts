@@ -45,6 +45,8 @@ import { listZoteroItems, type ZoteroItem } from './zotero';
 
 /** How many Codex chats' conversations are kept as read (see loadAnyChat). */
 const CODEX_READS_KEPT = 10;
+/** How long a Codex thread must have been unchanged for its read to be kept (its stamp counts seconds). */
+const CODEX_SETTLED_MS = 5_000;
 /** How long Zotero's works, once listed, are offered by the @ picker before they are listed again. */
 const ZOTERO_LIST_FRESH_MS = 5 * 60_000;
 const MAX_CHAT_RECORDS = 500;
@@ -1363,9 +1365,9 @@ export default class VaultClaudePlugin extends Plugin {
     return typeof value === 'string' && value ? value : null;
   }
 
-  /** Whether a chat was started in the panel (rather than elsewhere in the vault, which opens as a copy). */
-  /** Zotero's works as last listed for the @ picker, and when (see zoteroItems). */
+  /** Zotero's works as last listed for the @ picker, and when (see zoteroItems); `pending`, a listing under way. */
   private zoteroList: { items: ZoteroItem[]; at: number } | null = null;
+  private zoteroPending: Promise<ZoteroItem[]> | null = null;
 
   /**
    * Zotero's works for the `@` picker (see listZoteroItems), listed again after ZOTERO_LIST_FRESH_MS;
@@ -1374,10 +1376,14 @@ export default class VaultClaudePlugin extends Plugin {
   zoteroItems(): Promise<ZoteroItem[]> | null {
     if (!this.settings.zoteroMentions) return null;
     if (this.zoteroList && Date.now() - this.zoteroList.at < ZOTERO_LIST_FRESH_MS) return Promise.resolve(this.zoteroList.items);
-    return listZoteroItems().then((items) => {
-      this.zoteroList = { items, at: Date.now() };
-      return items;
-    });
+    // One listing at a time: an @ typed while one runs waits for it.
+    this.zoteroPending ??= listZoteroItems()
+      .then((items) => {
+        this.zoteroList = { items, at: Date.now() };
+        return items;
+      })
+      .finally(() => (this.zoteroPending = null));
+    return this.zoteroPending;
   }
 
   /** Whether `item` is the scratch chat: marked so in the history's rows, not in the listing kept here (see listChats). */
@@ -1385,6 +1391,7 @@ export default class VaultClaudePlugin extends Plugin {
     return item.scratch === true || item.id === this.scratch?.id;
   }
 
+  /** Whether a chat was started in the panel (rather than elsewhere in the vault, which opens as a copy). */
   isPanelChat(id: string): boolean {
     return this.chats.some((chat) => chat.id === id);
   }
@@ -1466,7 +1473,10 @@ export default class VaultClaudePlugin extends Plugin {
     const { transcript, edits } = codexTranscript(id, read.turns as { items?: CodexItem[] }[], launch.cwd);
     const chat: LoadedChat = { transcript: transcript as unknown as LoadedChat['transcript'], edits };
     this.codexReads.delete(id);
-    if (read.updatedAt !== undefined) {
+    // Codex stamps a change to the second: a thread changed within the last few seconds may change
+    // again under the same stamp, so its read is not kept.
+    const changedMs = read.updatedAt !== undefined ? (read.updatedAt < 1e12 ? read.updatedAt * 1000 : read.updatedAt) : 0;
+    if (read.updatedAt !== undefined && Date.now() - changedMs > CODEX_SETTLED_MS) {
       this.codexReads.set(id, { updatedAt: read.updatedAt, chat: { transcript: [...chat.transcript], edits } });
       // The most recently read kept.
       for (const old of [...this.codexReads.keys()].slice(0, Math.max(0, this.codexReads.size - CODEX_READS_KEPT))) this.codexReads.delete(old);
