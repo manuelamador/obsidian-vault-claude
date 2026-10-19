@@ -102,7 +102,8 @@ export class NotePicker extends FuzzySuggestModal<Picked> {
   }
 
   getItemText(item: Picked): string {
-    if ('library' in item) return `${zoteroLabel(item)} — ${item.title}`;
+    // A group's work with its group, which typing the group's name finds too.
+    if ('library' in item) return `${zoteroLabel(item)} — ${item.title}${item.library.kind === 'group' && item.library.name ? ` · ${item.library.name}` : ''}`;
     if ('id' in item) return item.title;
     return item instanceof TFolder ? `${item.path}/` : item.path;
   }
