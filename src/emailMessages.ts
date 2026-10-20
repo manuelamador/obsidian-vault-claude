@@ -1,3 +1,5 @@
+import { codexGmailMessages, codexGmailTool, gmailBody, gmailResult } from './gmailAdapter';
+
 // The messages in what Claude Code's Gmail tools return (a search, a thread, a message), for the
 // chat to show them as cards (see emailCards.ts). Read from the tool results only: the plugin itself
 // asks Gmail for nothing. Kept free of `obsidian` imports so the tests can use it.
@@ -59,12 +61,12 @@ const GMAIL_READ = /^mcp__.*gmail.*__(search_threads|get_thread|get_message)$/i;
 
 /** Whether tool `name` reads mail (see GMAIL_READ). */
 export function readsMail(name: string): boolean {
-  return GMAIL_READ.test(name);
+  return GMAIL_READ.test(name) || ['read_email', 'read_email_thread', 'search_emails', 'batch_read_email', 'batch_read_email_threads'].includes(codexGmailTool(name) ?? '');
 }
 
 /** Whether tool `name` reads a whole thread, whose messages the chat shows together (see renderEmailThread). */
 export function readsThread(name: string): boolean {
-  return readsMail(name) && /__get_thread$/i.test(name);
+  return (readsMail(name) && /__get_thread$/i.test(name)) || codexGmailTool(name) === 'read_email_thread';
 }
 
 interface RawMessage {
@@ -131,14 +133,10 @@ function message(raw: RawMessage, count?: number): EmailMessage {
  * the message asked for, or, for a search, each thread by its last message. Null for another tool,
  * or a result that is not the tool's JSON (an error, say).
  */
-export function emailMessages(name: string, text: string): EmailMessage[] | null {
+export function emailMessages(name: string, text: string, structured?: unknown): EmailMessage[] | null {
   if (!readsMail(name)) return null;
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    return null;
-  }
+  const data = gmailResult(text, structured);
+  if (codexGmailTool(name)) return data ? codexGmailMessages(data).map(each => message(each)) : null;
   if (!data || typeof data !== 'object') return null;
   const value = data as { threads?: unknown; messages?: unknown; messageCount?: unknown };
   if (Array.isArray(value.threads)) {
@@ -162,6 +160,8 @@ export function resultText(content: unknown): string {
 
 /** A draft Claude wrote or changed with the Gmail connector, as its card shows it: what the call set, and where Gmail opens it. */
 export interface EmailDraft {
+  /** Connector whose native draft ID and tools this card uses. */
+  connector?: 'codex';
   /** Gmail's id for the draft. */
   id: string;
   /** The message it replies to, when it is a reply (as written; a draft updated since does not say). */
@@ -181,8 +181,8 @@ const GMAIL_DRAFT_END = /^mcp__.*gmail.*__(send_message|send_draft|delete_draft)
 
 /** The draft tool `name` sent or deleted, by the `draftId` in its `input`; null for another tool or call. */
 export function draftEnded(name: string, input: Record<string, unknown>): { id: string; outcome: 'sent' | 'deleted' } | null {
-  const kind = GMAIL_DRAFT_END.exec(name)?.[1];
-  const id = str(input.draftId);
+  const kind = GMAIL_DRAFT_END.exec(name)?.[1] ?? (codexGmailTool(name) === 'send_draft' ? 'send_draft' : undefined);
+  const id = str(input.draftId) || (codexGmailTool(name) ? str(input.draft_id) : '');
   if (!kind || !id) return null;
   return { id, outcome: kind.toLowerCase() === 'delete_draft' ? 'deleted' : 'sent' };
 }
@@ -191,29 +191,26 @@ export function draftEnded(name: string, input: Record<string, unknown>): { id: 
 const GMAIL_DRAFT = /^mcp__.*gmail.*__(create_draft|update_draft)$/i;
 
 /** The draft tool `name` wrote, from its `input` and its result `text`; null for another tool or a failed call. */
-export function emailDraft(name: string, input: Record<string, unknown>, text: string): EmailDraft | null {
-  const kind = GMAIL_DRAFT.exec(name)?.[1];
+export function emailDraft(name: string, input: Record<string, unknown>, text: string, structured?: unknown): EmailDraft | null {
+  const codex = codexGmailTool(name);
+  const kind = GMAIL_DRAFT.exec(name)?.[1] ?? (codex === 'create_draft' || codex === 'update_draft' ? codex : undefined);
   if (!kind) return null;
-  let result: { viewUrl?: unknown; id?: unknown; threadId?: unknown } = {};
-  try {
-    result = JSON.parse(text) as typeof result;
-  } catch {
-    return null;
-  }
-  if (!result || typeof result !== 'object' || result.id === undefined) return null;
+  const result = gmailResult(text, structured) as { viewUrl?: unknown; id?: unknown; threadId?: unknown; message?: { thread_id?: unknown } } | null;
+  if (!result || typeof result !== 'object' || typeof result.id !== 'string' || !result.id) return null;
   const list = (value: unknown) => (Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : typeof value === 'string' && value ? [value] : []);
   const url = str(result.viewUrl);
   const replyTo = str(input.replyToMessageId);
-  const threadId = str(result.threadId);
+  const threadId = str(result.threadId) || str(result.message?.thread_id);
   return {
-    id: String(result.id),
+    id: result.id,
+    ...(codex ? { connector: 'codex' as const } : {}),
     ...(replyTo ? { replyTo } : {}),
     ...(threadId ? { threadId } : {}),
     updated: kind.toLowerCase() === 'update_draft',
     to: list(input.to),
     cc: list(input.cc),
     ...(typeof input.subject === 'string' ? { subject: input.subject } : {}),
-    ...(typeof input.body === 'string' ? { body: input.body.replace(/\r\n?/g, '\n').trim() } : {}),
+    ...(codex && input.payload ? { body: decodeEntities(gmailBody(input.payload)) } : typeof input.body === 'string' ? { body: input.body.replace(/\r\n?/g, '\n').trim() } : {}),
     ...(url ? { url } : {}),
   };
 }

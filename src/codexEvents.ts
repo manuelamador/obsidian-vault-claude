@@ -128,7 +128,7 @@ export function codexItemCompleted(sessionId: string, item: CodexItem): DrawnMes
       return (item.changes ?? []).map((change, i) => toolResult(sessionId, `${item.id}:${i}`, change.diff, failed, failed ? undefined : { structuredPatch: diffHunks(change.diff, change.kind.type), type: change.kind.type === 'add' ? 'create' : 'update' }));
     }
     case 'mcpToolCall': {
-      const failed = item.status === 'failed' || Boolean(item.error);
+      const failed = item.status === 'failed' || Boolean(item.error) || (item.result !== null && typeof item.result === 'object' && (item.result as { isError?: unknown }).isError === true);
       const text = item.error?.message ?? (typeof item.result === 'string' ? item.result : JSON.stringify(item.result ?? ''));
       return [toolResult(sessionId, item.id, text, failed)];
     }

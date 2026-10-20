@@ -7190,13 +7190,13 @@ export class ChatView extends ItemView {
     if (!entry) return;
     if (!isError && entry.status === 'running') {
       this.renderEdit(entry.name, entry.input, structured, saved);
-      const mail = text && this.plugin.settings.gmailFeatures;
-      const draft = mail ? emailDraft(entry.name, entry.input, text) : null;
+      const mail = this.plugin.settings.gmailFeatures && Boolean(text || structured);
+      const draft = mail ? emailDraft(entry.name, entry.input, text, structured) : null;
       if (draft) {
         // A Send button only where Claude may send mail (Mail: drafts only off), and after you confirm.
         renderEmailDraft(this.container(), draft, {
           ...(this.plugin.settings.mailDraftsOnly ? {} : { send: (each: EmailDraft) => this.confirmSendDraft(each) }),
-          edit: (each, subject, body) => this.requestDraftEdit(each, subject, body),
+          ...(draft.connector === 'codex' ? {} : { edit: (each: EmailDraft, subject: string, body: string) => this.requestDraftEdit(each, subject, body) }),
         });
         // Its earlier cards are of versions since replaced; a draft sent or deleted already (an earlier
         // turn drawn after the later ones, say) has none to act on.
@@ -7210,7 +7210,7 @@ export class ChatView extends ItemView {
         this.draftsGone.set(ended.id, ended.outcome);
         settleDraftCards(this.messagesEl, ended.id, ended.outcome);
       }
-      const messages = mail ? emailMessages(entry.name, text) : null;
+      const messages = mail ? emailMessages(entry.name, text, structured) : null;
       if (messages) this.renderEmails(messages, readsThread(entry.name));
     }
     entry.status = isError ? 'error' : 'done';
@@ -7260,10 +7260,11 @@ export class ChatView extends ItemView {
     const start = draft.body ? ` “${draft.body.length > 300 ? `${draft.body.slice(0, 300)}…` : draft.body}”` : '';
     const what = `${to ? `To ${to}` : 'To the recipients set in the draft'}${draft.subject ? `, “${draft.subject}”` : ''}.${start} Sent mail cannot be taken back.`;
     const request = (archive: boolean) => {
+      const sendTool = draft.connector === 'codex' ? 'gmail_send_draft with draft_id' : 'send_message with draftId';
       const thread = draft.threadId ? ` thread ${draft.threadId}` : ' its thread';
       const then = archive ? ` Then archive${thread} (take it out of the inbox, keeping it in All Mail).` : '';
       this.sendOrDraft(
-        `Send the Gmail draft ${draft.id} now, exactly as it is: send the draft itself by its id (send_message with draftId), not a copy of its text, so that its recipients, text, attachments and thread go as they are. Gmail removes the draft as it sends it: there is nothing to delete.${then} Say whether it was sent.`,
+        `Send the Gmail draft ${draft.id} now, exactly as it is: send the draft itself by its id (${sendTool}), not a copy of its text, so that its recipients, text, attachments and thread go as they are. Gmail removes the draft as it sends it: there is nothing to delete.${then} Say whether it was sent.`,
         'Send request added below your draft: send it when ready',
       );
     };

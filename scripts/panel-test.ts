@@ -1628,6 +1628,33 @@ async function main(): Promise<void> {
       if (!draftOk) process.exitCode = 1;
     }
 
+    // Codex Gmail structured results reach the same cards; native draft IDs settle them after send.
+    {
+      const mailView = view as unknown as { newChat(): void; addTool(id: string, name: string, input: Record<string, unknown>): void; finishTool(id: string, error: boolean, structured?: unknown, saved?: boolean, text?: string): void; messagesEl: HTMLElement };
+      const drawing = (view as unknown as { draw: Record<string, unknown> }).draw;
+      const drawingBefore = { ...drawing };
+      const previous = plugin.settings.gmailFeatures;
+      const display = plugin.settings.toolDisplay;
+      plugin.settings.toolDisplay = 'hidden';
+      plugin.settings.gmailFeatures = true;
+      const args = { to: 'self@example.com', subject: 'Codex test', payload: { mime_type: 'text/html', body: { content: '<p>Draft body</p>' } } };
+      mailView.addTool('gmail-create', 'mcp__codex_apps__gmail.create_draft', args);
+      mailView.finishTool('gmail-create', false, undefined, false, JSON.stringify({ content: [{ type: 'text', text: 'Action completed.' }], structuredContent: { id: 'r-codex-test', message: { thread_id: 't-test' } } }));
+      const card = mailView.messagesEl.querySelector('[data-draft="r-codex-test"]');
+      const drawn = card?.textContent?.includes('Codex test') && card.textContent.includes('Draft body');
+      const noUnsafeEdit = !card?.querySelector('[aria-label="Edit the subject and text here"]');
+      mailView.addTool('gmail-send', 'mcp__codex_apps__gmail.send_draft', { draft_id: 'r-codex-test' });
+      mailView.finishTool('gmail-send', false, undefined, false, 'Action completed.');
+      const settled = card?.querySelector('.vc-email-badge')?.textContent === 'Sent';
+      const ok = drawn && noUnsafeEdit && settled;
+      console.log(`Codex Gmail draft cards: drawn ${drawn}; no unsafe MIME edit ${noUnsafeEdit}; native draft send settled ${settled} -> ${ok}`);
+      if (!ok) process.exitCode = 1;
+      Object.assign(drawing, drawingBefore);
+      card?.closest('.vc-email-cards')?.remove();
+      plugin.settings.toolDisplay = display;
+      plugin.settings.gmailFeatures = previous;
+    }
+
     // A connector's request in a Codex chat: its whole message as text, the values Allow sends, and
     // Decline as a refusal; a link opened only from the card, Done only after.
     {
