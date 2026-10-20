@@ -82,6 +82,8 @@ const MAX_CHAT_RECORDS = 500;
 const FINISHED_TASKS = 20;
 /** How long the history waits for Codex's list of threads (see refreshCodexStamps); a read cut off is tried again at the next listing. */
 const CODEX_LIST_MS = 3_000;
+/** The Codex chats named in the dialog offering them back (see offerCodexChatsBack); the rest counted. */
+const CODEX_OFFER_SHOWN = 8;
 const TASK_TAIL_BYTES = 8 * 1024;
 /** How many sent messages ↑ in the input can bring back from any chat, and the longest one kept (see recordPrompt). */
 const PROMPT_HISTORY = 100;
@@ -2179,13 +2181,18 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Records again the threads the panel started that have no record (lost, or dropped), as Codex lists them; whether any were. */
   private recoverCodexRecords(threads: CodexThreadSummary[]): boolean {
-    const known = new Set([...this.chats.map((chat) => chat.id), ...this.deletedCodex, ...this.sideSessions, ...(this.scratch ? [this.scratch.id] : [])]);
-    // Archived threads are not recovered: the panel archives the scratch chats it lets go of, and every chat when its threads are kept out of Codex's lists.
-    const found = threads.filter((thread) => thread.fromPanel && !thread.archived && !known.has(thread.id));
+    const found = this.unrecordedCodexThreads(threads);
     if (found.length === 0) return false;
     this.chats.push(...found.map((thread) => ({ id: thread.id, title: chatTitle(thread.title), engine: 'codex' as const, at: thread.updatedAt })));
     log('codex chats recorded from codex', { count: found.length });
     return true;
+  }
+
+  /** The threads the panel started, saved and not archived, that no record, deletion, side chat or scratch chat accounts for. */
+  private unrecordedCodexThreads(threads: CodexThreadSummary[]): CodexThreadSummary[] {
+    const known = new Set([...this.chats.map((chat) => chat.id), ...this.deletedCodex, ...this.sideSessions, ...(this.scratch ? [this.scratch.id] : [])]);
+    // Archived threads are left out: the panel archives the scratch chats it lets go of, and every chat when its threads are kept out of Codex's lists.
+    return threads.filter((thread) => thread.fromPanel && !thread.archived && !known.has(thread.id));
   }
 
   /** The Codex chats' last activity (ChatRecord.at) as Codex records it, where later than the panel's own; whether any changed. */
@@ -2204,15 +2211,17 @@ export default class VaultClaudePlugin extends Plugin {
 
   /**
    * Records again every panel chat the history lists from its session alone: Claude chats the Agent
-   * SDK started (see listHistory), and, run by hand, Codex threads the panel started (see
-   * applyCodexThreads); and gives Claude chats still named after their first prompt Claude Code's
+   * SDK started (see listHistory), and, run by hand, Codex threads the panel started, once confirmed
+   * (see offerCodexChatsBack); and gives Claude chats still named after their first prompt Claude Code's
    * title. Recorded, they keep their place among the panel's chats, the most recent first and at most
    * MAX_CHAT_RECORDS of them. `quiet`: no notice when nothing changed, as when run after an update
    * (see rebuildChatListOnUpdate).
    */
   async rebuildChatList(quiet = false): Promise<void> {
+    // By hand: the panel's Codex threads with no record are offered back, asking first, since one may
+    // have been deleted in the panel before deletions were remembered.
     const before = new Set(this.chats.map((chat) => chat.id));
-    if (!quiet) this.codexRecoverAll = true;
+    if (!quiet) await this.offerCodexChatsBack();
     this.codexReadFailedAt = 0;
     this.listedAt = 0;
     const items = await this.listChats();
@@ -2245,6 +2254,27 @@ export default class VaultClaudePlugin extends Plugin {
     const said = [added > 0 ? `${added} chat${added === 1 ? '' : 's'} recorded again` : '', retitled > 0 ? `${retitled} renamed with Claude Code's title` : ''].filter(Boolean);
     if (said.length > 0) new Notice(`${quiet ? 'Vault Claude, chat list: ' : ''}${said.join('; ')}.`);
     else if (!quiet) new Notice('Every chat in the history was already recorded and named.');
+  }
+
+  /**
+   * The Codex threads the panel started that have no record, offered back: listed in a dialog, and
+   * recorded again if confirmed (see recoverCodexRecords). Nothing is asked when there are none, or
+   * Codex cannot be read.
+   */
+  private async offerCodexChatsBack(): Promise<void> {
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return;
+    const threads = await this.readCodexThreadsWithin(launch);
+    if (!threads) return;
+    const missing = this.unrecordedCodexThreads(threads);
+    if (missing.length === 0) return;
+    const shown = missing.slice(0, CODEX_OFFER_SHOWN).map((thread) => `“${chatTitle(thread.title)}”`);
+    const more = missing.length > shown.length ? `, and ${missing.length - shown.length} more` : '';
+    const what = missing.length === 1 ? 'A Codex chat started in the panel is' : `${missing.length} Codex chats started in the panel are`;
+    const message = `${what} not in the history: ${shown.join(', ')}${more}. ${missing.length === 1 ? 'It' : 'They'} may have been deleted here before Vault Claude remembered deletions. Restore ${missing.length === 1 ? 'it' : 'them'}?`;
+    if (!(await this.confirm('Restore Codex chats', message, 'Restore'))) return;
+    this.recoverCodexRecords(threads);
+    this.listedAt = 0;
   }
 
   /** Codex chat `id` was active now: the history sorts it by this (see ChatRecord.at). */

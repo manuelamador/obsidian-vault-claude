@@ -75,3 +75,31 @@ test('with records, the panel\'s Codex threads with none are not recorded again:
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('rebuilding by hand offers the Codex chats with no record back, and restores them only when confirmed', async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-offer-`);
+  const p = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
+  p.saveSettings = async () => undefined;
+  p.vaultRoot = () => null;
+  p.listChats = async () => [];
+  const asked: string[] = [];
+  let answer = false;
+  (p as unknown as { confirm(heading: string, message: string): Promise<boolean> }).confirm = async (_heading, message) => (asked.push(message), answer);
+  p.chats = [{ id: 'p1', title: 'First', engine: 'codex', at: 0 }];
+  try {
+    p.codexLaunch = () => launchIn(dir, 'threads');
+    await p.rebuildChatList();
+    assert.equal(asked.length, 1);
+    assert.match(asked[0], /A Codex chat started in the panel is not in the history: “Second”/);
+    assert.deepEqual(p.chats.map((chat) => chat.id), ['p1']);
+    answer = true;
+    await p.rebuildChatList();
+    assert.deepEqual(p.chats.map((chat) => chat.id).sort(), ['p1', 'p2']);
+    // Quietly, after an update: not asked.
+    await p.rebuildChatList(true);
+    assert.equal(asked.length, 2);
+  } finally {
+    stopCodexReader();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
