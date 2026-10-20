@@ -2308,6 +2308,29 @@ export class ChatView extends ItemView {
     if (entry) await this.attachBackground(entry);
   }
 
+  /** What keeps chat `id` running in this panel's background, if it runs there (see closeBackgroundOf). */
+  backgroundChat(id: string): { busy: boolean; tasks: number; approvals: number; onPhone: boolean } | null {
+    const entry = [...this.background].find((candidate) => candidate.chatId === id);
+    return entry ? { busy: entry.busy, tasks: entry.tasks.size, approvals: entry.approvals.length, onPhone: entry.remoteUrl !== null } : null;
+  }
+
+  /** Ends chat `id`'s process if it runs in this panel's background, taking it off the phone; whether it did. */
+  closeBackgroundOf(id: string): boolean {
+    const entries = [...this.background].filter((entry) => entry.chatId === id);
+    for (const entry of entries) this.dropBackground(entry);
+    if (entries.length === 0) return false;
+    log('background chat closed from the history', { id });
+    this.updateBackgroundIndicator();
+    this.updatePhoneButton();
+    return true;
+  }
+
+  /** This panel's chats on the phone: the one on screen and those in its background. */
+  phoneChatIds(): string[] {
+    const onScreen = this.chatId ?? this.resumeId;
+    return [...(this.remoteUrl && onScreen ? [onScreen] : []), ...[...this.background].flatMap((entry) => (entry.remoteUrl && entry.chatId ? [entry.chatId] : []))];
+  }
+
   /** Status labels for the history: the chat on screen here and this panel's background chats. */
   chatStatuses(): Map<string, string> {
     const statuses = new Map<string, string>();
@@ -3041,6 +3064,7 @@ export class ChatView extends ItemView {
         remove: (item) => (item.scratch ? this.plugin.clearScratchChat().then(() => true) : this.plugin.deleteChat(item.id)),
         searchText: (item) => this.plugin.chatSearchText(item.id),
         stopTasks: (item) => void this.plugin.stopChatTasks(item.id),
+        close: (item) => this.plugin.closeBackgroundChat(item.id),
         noteLinks: () => ({ changed: this.plugin.noteChats, sent: this.plugin.noteRefs, mentioned: this.plugin.noteMentions }),
         openNote: (path) => void this.openNoteLink(path, '', 'tab'),
         projectOf: (folder) => this.plugin.projectOfFolder(folder)?.path ?? null,
@@ -3082,9 +3106,12 @@ export class ChatView extends ItemView {
     }
     const pinned = new Set(this.plugin.pinned);
     const withTasks = this.plugin.chatsWithTasks();
+    const onPhone = this.plugin.phoneChats();
     for (const item of items) {
       item.pinned = pinned.has(item.id);
       item.tasksRunning = withTasks.has(item.id);
+      item.inBackground = this.plugin.backgroundChat(item.id) !== null;
+      item.onPhone = onPhone.has(item.id);
     }
     // The scratch chat is listed under its own name, first, however Claude Code titled its session.
     if (this.plugin.settings.scratchChat) {

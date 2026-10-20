@@ -16,6 +16,8 @@ export interface HistoryActions {
   searchText(item: HistoryItem): Promise<string>;
   /** Stops the tasks a chat is running in the background. */
   stopTasks(item: HistoryItem): void;
+  /** Ends the process of a chat running in a panel's background; resolves to whether it was ended. */
+  close?(item: HistoryItem): Promise<boolean>;
   /** The notes chats are linked to: those that changed each note, those it was sent to, and those that mentioned it. */
   noteLinks(): { changed: NoteChats; sent: NoteChats; mentioned: NoteChats };
   /** Opens a note. */
@@ -307,8 +309,13 @@ export class HistoryModal extends SuggestModal<Match> {
     else if (item.pinned) setIcon(title.createSpan({ cls: 'vc-history-pin' }), 'pin');
     title.appendText(item.title);
     const meta = body.createDiv({ cls: 'vc-muted' });
-    // Open and In the background say where a chat is; the rest say it is doing something.
-    if (item.status) {
+    if (item.onPhone) {
+      const phone = meta.createSpan({ cls: 'vc-history-phone', attr: { 'aria-label': 'On your phone' } });
+      setIcon(phone, 'smartphone');
+    }
+    // Open and In the background say where a chat is; the rest say it is doing something. On the
+    // phone is the icon before it.
+    if (item.status && item.status !== 'On your phone') {
       const quiet = item.status === 'Open' || item.status === 'In the background';
       meta.createSpan({ cls: `vc-history-status${quiet ? ' is-quiet' : ''}`, text: `${quiet ? '○' : '●'} ${item.status} · ` });
     }
@@ -336,6 +343,19 @@ export class HistoryModal extends SuggestModal<Match> {
         this.actions.stopTasks(item);
         item.tasksRunning = false;
         this.refresh();
+      });
+    }
+    const { close } = this.actions;
+    if (item.inBackground && close) {
+      this.addButton(buttons, 'x', item.onPhone ? 'Close: end its process and take it off the phone' : 'Close: end its process (the chat is kept)', () => {
+        void close(item).then((closed) => {
+          if (!closed) return;
+          item.inBackground = false;
+          item.status = undefined;
+          item.onPhone = false;
+          item.tasksRunning = false;
+          this.refresh();
+        });
       });
     }
     // Offered unless the chat on screen links to it already, or is it.

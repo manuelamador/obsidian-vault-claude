@@ -1151,18 +1151,8 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Whether stopping Codex's shared app-server, and with it the turns of `working` Codex chats, is confirmed. */
   private confirmStopWorkingCodex(working: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      let confirmed = false;
-      const what = working === 1 ? 'A Codex chat is' : `${working} Codex chats are`;
-      const modal = new ConfirmModal(this.app, 'Turn off Codex on the phone', `${what} working through Codex's shared app-server. Stopping it ends what they are doing; the conversations are kept.`, 'Stop', () => (confirmed = true));
-      const close = modal.onClose.bind(modal);
-      modal.onClose = () => {
-        close();
-        // After the button's own handler: Stop closes the dialog before it confirms.
-        void Promise.resolve().then(() => resolve(confirmed));
-      };
-      modal.open();
-    });
+    const what = working === 1 ? 'A Codex chat is' : `${working} Codex chats are`;
+    return this.confirm('Turn off Codex on the phone', `${what} working through Codex's shared app-server. Stopping it ends what they are doing; the conversations are kept.`, 'Stop');
   }
 
 
@@ -2354,6 +2344,52 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** Stops a chat's background tasks in whichever panel holds it. */
+  /** What keeps chat `id` running in a panel's background, if it runs in one (see ChatView.backgroundChat). */
+  backgroundChat(id: string): ReturnType<ChatView['backgroundChat']> {
+    for (const view of this.chatViews()) {
+      const running = view.backgroundChat(id);
+      if (running) return running;
+    }
+    return null;
+  }
+
+  /**
+   * Ends chat `id`'s process where it runs in a panel's background, taking it off the phone; first
+   * asks, when that would end a reply, its background tasks or a question waiting for you. Resolves
+   * to whether it was ended. The chat is kept, and resumes from its session when opened.
+   */
+  async closeBackgroundChat(id: string): Promise<boolean> {
+    const running = this.backgroundChat(id);
+    if (!running) return false;
+    const ends = [
+      running.busy ? 'the reply it is writing' : '',
+      running.tasks > 0 ? (running.tasks === 1 ? 'its background task' : `its ${running.tasks} background tasks`) : '',
+      running.approvals > 0 ? 'what it is waiting for you to answer' : '',
+    ].filter(Boolean);
+    if (ends.length > 0 && !(await this.confirm('Close this chat', `Closing it ends ${ends.join(', ')}. The conversation is kept.`, 'Close'))) return false;
+    return this.chatViews().some((view) => view.closeBackgroundOf(id));
+  }
+
+  /** Whether the dialog `heading`, `message`, with button `action`, was confirmed. */
+  private confirm(heading: string, message: string, action: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      let confirmed = false;
+      const modal = new ConfirmModal(this.app, heading, message, action, () => (confirmed = true));
+      const close = modal.onClose.bind(modal);
+      modal.onClose = () => {
+        close();
+        // After the button's own handler: the button closes the dialog before it confirms.
+        void Promise.resolve().then(() => resolve(confirmed));
+      };
+      modal.open();
+    });
+  }
+
+  /** The chats on the phone, in any panel (see ChatView.phoneChatIds). */
+  phoneChats(): Set<string> {
+    return new Set(this.chatViews().flatMap((view) => view.phoneChatIds()));
+  }
+
   stopChatTasks(id: string): void {
     for (const view of this.chatViews()) if (view.stopTasksOf(id)) return;
   }

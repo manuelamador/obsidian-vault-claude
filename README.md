@@ -241,7 +241,7 @@ mjx-container.MathJax { font-size: calc(113.1% * 1.05) !important; }
 <details>
 <summary>History, branches and background tasks</summary>
 
-- The clock icon opens history. Each row has pin, rename and delete controls; ⌘↵ or ⌘-click opens a chat in a new tab.
+- The clock icon opens history. A chat on the phone shows a blue phone icon. A chat running in the background (on the phone, or kept for its tasks) has a **✕** that ends its process and takes it off the phone; the conversation is kept. Each row has pin, rename and delete controls; ⌘↵ or ⌘-click opens a chat in a new tab.
 
   <img src="docs/history-button.png" width="265" alt="The clock button at the top right of the panel, with its tooltip “Chat history”">
 

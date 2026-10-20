@@ -102,6 +102,18 @@
   background: var(--interactive-accent);
 }
 
+.vc-history-phone {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-right: 6px;
+  color: var(--color-blue);
+}
+
+.vc-history-phone svg {
+  width: 14px;
+  height: 14px;
+}
+
 .vc-history-status {
   color: var(--interactive-accent);
 }

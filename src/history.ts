@@ -31,6 +31,10 @@ export interface HistoryItem {
   fromPanel: boolean;
   /** Set for chats still running in the background, e.g. "Working". */
   status?: string;
+  /** Its process runs in a panel's background (see ChatView.backgroundChat): it can be closed from the history. */
+  inBackground?: boolean;
+  /** On the phone (Remote Control for its session): marked with a phone icon rather than a status. */
+  onPhone?: boolean;
   /** Pinned chats are listed first. */
   pinned?: boolean;
   /** The scratch chat: listed first of all, opened in place, and cleared rather than deleted. */
