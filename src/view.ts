@@ -1798,9 +1798,10 @@ export class ChatView extends ItemView {
     menu.showAtMouseEvent(evt);
   }
 
-  /** Every Claude chat of this panel that is running, put on the phone (see setChatRemote), quietly: Claude Code on the phone was turned on. */
+  /** Every Claude chat of this panel that is running, and the one on screen if only open, put on the phone (see setChatRemote), quietly: Claude Code on the phone was turned on. */
   async putChatsOnPhone(): Promise<void> {
-    if (this.engine !== 'codex' && !this.scratch && this.session && !this.remoteUrl) await this.setChatRemote(true, true);
+    // The chat on screen, running or only open (whose process starts for it).
+    if (this.engine !== 'codex' && !this.scratch && (this.session || this.chatId) && !this.remoteUrl) await this.setChatRemote(true, true);
     for (const entry of this.background) {
       if (entry.remoteUrl || entry.scratch || entry.session instanceof CodexSession) continue;
       try {
@@ -3227,6 +3228,12 @@ export class ChatView extends ItemView {
       const link = end.createSpan({ cls: 'vc-welcome-link', text: 'Open that copy' });
       link.addEventListener('click', () => void this.openChat(latest));
       end.appendText('. New messages here start another copy; the original session is unchanged.');
+    }
+    // Claude Code on the phone: a chat of the panel is reachable from it as soon as it is open, its
+    // process started for it, not only once a message is sent. Not a copy yet to be made, nor a branch.
+    if (this.plugin.settings.phoneClaude && this.engine !== 'codex' && !this.scratch && item.fromPanel && !branch && !this.remoteRequested) {
+      this.remoteRequested = true;
+      void this.setChatRemote(true, true);
     }
     const beforeDraft = performance.now();
     this.restoreDraft();
