@@ -66,6 +66,9 @@ export function codexDaemonIdentity(env: Record<string, string | undefined>): st
   }
 }
 
+/** How many times, and how far apart, the vault's Remote Control server is tried again when the folder is served already (see onRemoteChange). */
+const REMOTE_RETRIES = 6;
+const REMOTE_RETRY_MS = 10_000;
 /** How long Codex chats letting go of the shared app-server are given before it is stopped: past a hidden chat's archiving (2 s) and its socket's close (1 s). */
 const CODEX_RELEASE_MS = 5_000;
 /** How many Codex chats' conversations are kept as read (see loadAnyChat). */
@@ -965,6 +968,7 @@ export default class VaultClaudePlugin extends Plugin {
     // The Codex app-server kept for reads (see CodexReader).
     stopCodexReader();
     if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
+    window.clearTimeout(this.remoteRetryTimer);
     this.remote.stop();
     void this.flushSave();
   }
@@ -1010,6 +1014,10 @@ export default class VaultClaudePlugin extends Plugin {
     return null;
   }
 
+  /** Tries of the vault's Remote Control server refused as the folder was served already (see onRemoteChange), and the next one's timer. */
+  private remoteRetries = 0;
+  private remoteRetryTimer = 0;
+
   startRemote(): void {
     const launch = this.launchOrNotice();
     if (!launch) return;
@@ -1024,6 +1032,8 @@ export default class VaultClaudePlugin extends Plugin {
    */
   async setPhoneClaude(on: boolean): Promise<void> {
     this.settings.phoneClaude = on;
+    this.remoteRetries = 0;
+    window.clearTimeout(this.remoteRetryTimer);
     await this.saveSettings();
     if (on) {
       if (!this.remote.isRunning()) this.startRemote();
@@ -1107,6 +1117,20 @@ export default class VaultClaudePlugin extends Plugin {
 
   private onRemoteChange(): void {
     const { state, error } = this.remote.status;
+    // Refused because the folder is served already: most often the server of before a reload of the
+    // plugin, still shutting down. Tried again for a while before it is reported; a server started in
+    // a terminal stays, and is reported once the tries are used up.
+    if (state === 'error' && /already served/i.test(error ?? '') && this.settings.phoneClaude && this.remoteRetries < REMOTE_RETRIES) {
+      this.remoteRetries++;
+      log('remote control: folder served already; trying again', { attempt: this.remoteRetries });
+      window.clearTimeout(this.remoteRetryTimer);
+      this.remoteRetryTimer = window.setTimeout(() => {
+        if (this.settings.phoneClaude && !this.remote.isRunning()) this.startRemote();
+      }, REMOTE_RETRY_MS);
+      for (const view of this.chatViews()) view.updatePhoneButton();
+      return;
+    }
+    if (state === 'connected') this.remoteRetries = 0;
     if (state === 'connected' && this.lastRemoteState !== 'connected') {
       new Notice(`Phone access on. In the Claude app, open Code and choose "${this.phoneAccessName()}".`);
     } else if (state === 'error' && this.lastRemoteState !== 'error') {
