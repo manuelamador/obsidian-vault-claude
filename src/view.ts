@@ -49,10 +49,10 @@ import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { DoneTabs, type DoneTab } from './doneTabs';
-import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, threadMarkdown } from './emailCards';
+import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, settleDraftCards, threadMarkdown } from './emailCards';
 import { ReplyModal } from './replyModal';
 import { TodoModal } from './todoModal';
-import { emailDraft, emailMessages, readsThread, resultText, type EmailDraft, type EmailMessage } from './emailMessages';
+import { draftEnded, emailDraft, emailMessages, readsThread, resultText, type EmailDraft, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -246,7 +246,8 @@ interface Mention {
 
 const APPEND_SYSTEM_PROMPT =
   'The user is chatting with you from a sidebar panel inside Obsidian; the working directory is their vault. ' +
-  'Replies render as Obsidian Markdown: [[wikilinks]] to notes are clickable, and callouts and $…$ / $$…$$ math render.';
+  'Replies render as Obsidian Markdown: [[wikilinks]] to notes are clickable, and callouts and $…$ / $$…$$ math render. ' +
+  'Gmail drafts you write and messages you read through the Gmail connector show in the panel as cards (recipients, subject, text), so do not repeat them in your reply: say only what the cards do not.';
 /** Added for a side chat (see SideChat); `seen`: it has a copy of the chat it was opened beside. */
 function sideChatPrompt(seen: boolean): string {
   const where = seen
@@ -601,6 +602,8 @@ export class ChatView extends ItemView {
   private tasks = new Set<string>();
   /** Ids of the messages sent from this panel in the chat on screen, to tell its replies from other turns. */
   private sentIds = new Set<string>();
+  /** Drafts sent or deleted by calls drawn in this panel (see settleDraftCards), by id: any card of theirs drawn later has nothing to act on. */
+  private readonly draftsGone = new Map<string, 'sent' | 'deleted'>();
   /** The last turn drawn from a chat's saved messages while it is still running (see renderHistory). */
   private unfinishedTurn: HTMLElement | null = null;
   /** The messages the turn in progress answers, as sent here or named by its first reply frame; empty between turns, or when not known. */
@@ -2340,6 +2343,17 @@ export class ChatView extends ItemView {
     if ((this.chatId ?? this.resumeId) !== id || !this.remoteUrl) return false;
     await this.setChatRemote(false);
     return true;
+  }
+
+  /**
+   * Obsidian is quitting, and does not close panels as it does: every Claude Code or Codex process of
+   * this panel is ended now, the chat on screen's and those in its background, with their background
+   * tasks; else one still working, or with tasks, outlives the app (shown as running in the background).
+   */
+  endAllAtQuit(): void {
+    for (const entry of this.background) entry.session.close();
+    this.session?.close();
+    this.sideChat?.close();
   }
 
   /** This panel's chats on the phone: the one on screen and those in its background. */
@@ -7184,7 +7198,17 @@ export class ChatView extends ItemView {
           ...(this.plugin.settings.mailDraftsOnly ? {} : { send: (each: EmailDraft) => this.confirmSendDraft(each) }),
           edit: (each, subject, body) => this.requestDraftEdit(each, subject, body),
         });
+        // Its earlier cards are of versions since replaced; a draft sent or deleted already (an earlier
+        // turn drawn after the later ones, say) has none to act on.
+        settleDraftCards(this.messagesEl, draft.id, 'updated');
+        const gone = this.draftsGone.get(draft.id);
+        if (gone) settleDraftCards(this.messagesEl, draft.id, gone);
         this.scrollToBottom();
+      }
+      const ended = mail ? draftEnded(entry.name, entry.input) : null;
+      if (ended) {
+        this.draftsGone.set(ended.id, ended.outcome);
+        settleDraftCards(this.messagesEl, ended.id, ended.outcome);
       }
       const messages = mail ? emailMessages(entry.name, text) : null;
       if (messages) this.renderEmails(messages, readsThread(entry.name));

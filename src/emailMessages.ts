@@ -176,6 +176,17 @@ export interface EmailDraft {
   url?: string;
 }
 
+/** The Gmail tools that end a draft: sending it by its id, or deleting it. */
+const GMAIL_DRAFT_END = /^mcp__.*gmail.*__(send_message|send_draft|delete_draft)$/i;
+
+/** The draft tool `name` sent or deleted, by the `draftId` in its `input`; null for another tool or call. */
+export function draftEnded(name: string, input: Record<string, unknown>): { id: string; outcome: 'sent' | 'deleted' } | null {
+  const kind = GMAIL_DRAFT_END.exec(name)?.[1];
+  const id = str(input.draftId);
+  if (!kind || !id) return null;
+  return { id, outcome: kind.toLowerCase() === 'delete_draft' ? 'deleted' : 'sent' };
+}
+
 /** The Gmail tools that write drafts. */
 const GMAIL_DRAFT = /^mcp__.*gmail.*__(create_draft|update_draft)$/i;
 

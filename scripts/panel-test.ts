@@ -1615,9 +1615,16 @@ async function main(): Promise<void> {
       (card.querySelector('.vc-email-edit-body') as HTMLTextAreaElement).value = 'Thrown away';
       card.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       const cancelled = !card.hasClass('is-editing') && card.querySelector('.vc-email-subject')?.textContent === 'Hello again' && edits.length === 1;
+      // A later version's card leaves the earlier one nothing to act on; sending it, none at all.
+      const { settleDraftCards } = await import('../src/emailCards');
+      const later = renderEmailDraft(host, { id: 'd1', updated: true, to: ['a@example.com'], cc: [], subject: 'Hello again', body: 'Line one\nLine three' }, { edit: () => undefined, send: () => undefined });
+      settleDraftCards(host, 'd1', 'updated');
+      const superseded = card.hasClass('is-settled') && !card.querySelector('.vc-email-actions') && !later.hasClass('is-settled') && !!later.querySelector('.vc-email-actions');
+      settleDraftCards(host, 'd1', 'sent');
+      const sent = later.querySelector('.vc-email-badge')?.textContent === 'Sent' && !later.querySelector('.vc-email-actions');
       host.remove();
-      const draftOk = formShown && saved && cancelled && edits[0] === 'Hello again|Line one\nLine three';
-      console.log(`draft card edit: form ${formShown}; saved ${saved}; Esc ${cancelled}; handed on ${JSON.stringify(edits)} -> ${draftOk}`);
+      const draftOk = formShown && saved && cancelled && edits[0] === 'Hello again|Line one\nLine three' && superseded && sent;
+      console.log(`draft card edit: form ${formShown}; saved ${saved}; Esc ${cancelled}; handed on ${JSON.stringify(edits)}; earlier version settled ${superseded}; sent ${sent} -> ${draftOk}`);
       if (!draftOk) process.exitCode = 1;
     }
 

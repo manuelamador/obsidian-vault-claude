@@ -3973,3 +3973,8 @@ a.vc-email-attachment:hover {
   margin-top: 4px;
   font-size: var(--font-ui-smaller);
 }
+
+/* A draft card with nothing left to act on: sent, deleted, or replaced by a later version. */
+.vc-email-draft.is-settled {
+  opacity: 0.7;
+}

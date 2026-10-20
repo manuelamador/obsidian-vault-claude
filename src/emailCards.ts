@@ -170,9 +170,39 @@ export interface DraftActions {
  * A card for draft `draft` in `parent`: to whom, its subject and the start of its text (all of it on
  * a click), to open in Gmail, edit on the card, or send (see DraftActions).
  */
-export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft, actions: DraftActions = {}): void {
-  const card = parent.createDiv({ cls: 'vc-email-cards' }).createDiv({ cls: 'vc-email-card vc-email-draft' });
+export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft, actions: DraftActions = {}): HTMLElement {
+  const card = parent.createDiv({ cls: 'vc-email-cards' }).createDiv({ cls: 'vc-email-card vc-email-draft', attr: { 'data-draft': draft.id } });
   drawDraft(card, draft, actions);
+  return card;
+}
+
+/** What became of a draft whose card is no longer to act on (see settleDraftCards). */
+export type DraftOutcome = 'sent' | 'deleted' | 'updated';
+
+const OUTCOME_SAID: Record<DraftOutcome, [string, string]> = {
+  sent: ['Sent', 'Sent: the draft is gone from Gmail.'],
+  deleted: ['Deleted', 'Deleted from Gmail.'],
+  updated: ['Earlier version', 'Updated since: the card below has the draft as it is now.'],
+};
+
+/**
+ * Draft `id`'s cards in `root`, all of them, or for `updated` all but the last: no longer to send or
+ * edit, since the draft was sent, deleted, or changed by a later call whose card is the one kept.
+ */
+export function settleDraftCards(root: HTMLElement, id: string, outcome: DraftOutcome): void {
+  const cards = [...root.querySelectorAll<HTMLElement>('.vc-email-draft')].filter((card) => card.dataset.draft === id);
+  for (const card of outcome === 'updated' ? cards.slice(0, -1) : cards) {
+    if (card.dataset.outcome === outcome) continue;
+    card.dataset.outcome = outcome;
+    card.addClass('is-settled');
+    card.removeClass('is-editing');
+    card.querySelectorAll('.vc-email-actions, .vc-email-edit-buttons, .vc-email-note').forEach((el) => el.remove());
+    card.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((el) => (el.disabled = true));
+    const [badge, note] = OUTCOME_SAID[outcome];
+    const badgeEl = card.querySelector('.vc-email-badge');
+    if (badgeEl) badgeEl.setText(badge);
+    card.createDiv({ cls: 'vc-email-note vc-muted', text: note });
+  }
 }
 
 /** Draws `draft` in `card`, in place of what it held: as read, or, from its Edit button, as a form. */

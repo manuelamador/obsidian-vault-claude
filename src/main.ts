@@ -561,6 +561,8 @@ export default class VaultClaudePlugin extends Plugin {
       this.app.workspace.on('quit', () => {
         this.quitting = true;
         this.stopCodexDaemonAtQuit();
+        // Obsidian does not close the panels as it quits: their chats' processes are ended here.
+        for (const view of this.chatViews()) view.endAllAtQuit();
         // Obsidian does not unload plugins when it quits, and `claude remote-control` does not end
         // when its input closes: stopped here, or it outlives the app and holds the vault.
         this.remote.stop();

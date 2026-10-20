@@ -83,3 +83,11 @@ test("a message's attachments are kept by name and type; a message without any h
   assert.equal(without.attachments, undefined);
   assert.deepEqual(['application/pdf', 'image/jpeg', 'text/calendar', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'].map(attachmentKind), ['PDF', 'image', 'calendar', 'Word', 'zip']);
 });
+
+test('a draft sent or deleted by its id is told apart from other Gmail calls', async () => {
+  const { draftEnded } = await import('../src/emailMessages');
+  assert.deepEqual(draftEnded('mcp__claude_ai_Gmail__send_message', { draftId: 'r-1' }), { id: 'r-1', outcome: 'sent' });
+  assert.deepEqual(draftEnded('mcp__claude_ai_Gmail__delete_draft', { draftId: 'r-1' }), { id: 'r-1', outcome: 'deleted' });
+  assert.equal(draftEnded('mcp__claude_ai_Gmail__send_message', { to: ['a@example.com'] }), null);
+  assert.equal(draftEnded('mcp__claude_ai_Gmail__get_draft', { draftId: 'r-1' }), null);
+});
