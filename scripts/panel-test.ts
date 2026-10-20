@@ -3117,6 +3117,26 @@ async function main(): Promise<void> {
     console.log(`process kept for background tasks: on a switch ${keptOnSwitch}; after the reply ${keptAfterReply}; closed after the last task's turn ${closedAfterTasks}; idle chat still closed ${idleClosed} -> ${bgOk}`);
     if (!bgOk) process.exitCode = 1;
 
+    // On the phone in the background: a reply to a message sent from the phone leaves no tab (it is
+    // read there); one to a message sent from the panel does. Sent while Claude was idle, so not queued.
+    const phoneView = view as unknown as { remoteUrl: string | null; sentIds: Set<string>; doneTabList(): { id: string }[]; closeBackgroundChat(id: string): boolean };
+    bgView.session = fakeSession();
+    bgView.chatId = 'phone-chat';
+    bgView.busy = true;
+    phoneView.remoteUrl = 'https://claude.ai/code/phone';
+    phoneView.sentIds.add('from-panel');
+    view.newChat();
+    const phoneReply = (ids: string[]) => (handlers as { onMessage(message: unknown): void } | null)?.onMessage({ ...result, user_message_uuids: ids });
+    phoneReply(['from-phone']);
+    const tabAfterPhone = phoneView.doneTabList().some((tab) => tab.id === 'phone-chat');
+    phoneReply(['from-panel']);
+    const tabAfterPanel = phoneView.doneTabList().some((tab) => tab.id === 'phone-chat');
+    const stillRunning = [...bgView.background].some((entry) => (entry as { chatId: string | null }).chatId === 'phone-chat');
+    phoneView.closeBackgroundChat('phone-chat');
+    const phoneOk = !tabAfterPhone && tabAfterPanel && stillRunning;
+    console.log(`phone chat in the background: tab after a phone message ${tabAfterPhone}; after a panel message ${tabAfterPanel}; kept running ${stillRunning} -> ${phoneOk}`);
+    if (!phoneOk) process.exitCode = 1;
+
     // The messages a turn answers (a side chat's fork ends before them) go with a chat to the
     // background, follow a turn that starts there, and come back with it.
     const carry = view as unknown as {

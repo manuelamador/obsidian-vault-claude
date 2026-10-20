@@ -340,6 +340,11 @@ interface BackgroundChat {
   /** Queued messages not yet taken up when the chat went to the background. */
   pendingIds: Set<string>;
   waitedForQueue: boolean;
+  /**
+   * A reply to a message sent from the panel that ended while background tasks ran, not yet said done
+   * (see announceDone): whether it succeeded. Said when the chat is next done, with that outcome.
+   */
+  doneOwed?: boolean;
   mode: PermissionMode;
   modelOverride: string | undefined;
   effortOverride: EffortLevel | undefined;
@@ -2534,10 +2539,10 @@ export class ChatView extends ItemView {
           if (entry.chatId && this.plugin.awaitsReport(entry.chatId)) this.plugin.reportDone(entry.chatId, entry.lastText, message.is_error);
           entry.busy = false;
           entry.turnPrompts = [];
-          // Whether the turn answered a message sent from the panel, rather than one from the phone.
-          // Older Claude Code names none: then, whether any was waiting.
+          // Whether the turn answered a message sent from the panel, rather than one from the phone. Older
+          // Claude Code names none: then taken as sent here, as before.
           const answered = message.user_message_uuids;
-          const sentHere = answered ? answered.some((id) => entry.pendingIds.has(id)) : entry.pendingIds.size > 0;
+          const sentHere = answered ? answered.some((id) => entry.sentIds.has(id) || entry.pendingIds.has(id)) : true;
           for (const id of message.user_message_uuids ?? []) entry.pendingIds.delete(id);
           if (entry.pendingIds.size > 0 && !entry.waitedForQueue) {
             // A queued message not taken up by this turn runs as the next one.
@@ -2548,15 +2553,17 @@ export class ChatView extends ItemView {
           // Queued messages still listed have had their own turn without being reported back.
           entry.pendingIds.clear();
           entry.waitedForQueue = false;
-          const succeeded = message.subtype === 'success' && !message.is_error;
-          // A reply to a message sent from the phone is read there: no notification here.
-          const fromPhone = entry.remoteUrl !== null && !sentHere;
+          // With a reply owed from a turn that ended while tasks ran: said with the worse of the two outcomes.
+          const succeeded = message.subtype === 'success' && !message.is_error && entry.doneOwed !== false;
+          // A reply to a message sent from the phone is read there: no notification here, unless one is owed.
+          const fromPhone = entry.remoteUrl !== null && !sentHere && entry.doneOwed === undefined;
           if (!fromPhone && message.duration_ms >= this.plugin.settings.notifyAfterSeconds * 1000) {
             this.systemNotify(succeeded ? 'Claude finished' : 'Claude stopped with an error', entry.title ?? 'A chat', () => void this.showChat(entry));
           }
           if (entry.tasks.size > 0) {
             // With background tasks running: kept for them, and Claude takes up their results in a
-            // turn of its own; said done when it ends (see finishBackground).
+            // turn of its own; said done when the chat next is (owed until then).
+            if (!fromPhone) entry.doneOwed = succeeded;
             this.updateBackgroundIndicator();
             return;
           }
@@ -2718,6 +2725,9 @@ export class ChatView extends ItemView {
 
   /** A background chat's reply is done, whether its process ends (finishBackground) or is kept (on the phone, or for its tasks): the history marks it, and its tab on the margin says so. */
   private announceDone(entry: BackgroundChat, succeeded: boolean): void {
+    // An earlier reply's failure, owed since its tasks ran (see BackgroundChat.doneOwed), is not hidden by a later success.
+    if (entry.doneOwed === false) succeeded = false;
+    entry.doneOwed = undefined;
     if (!this.isOnScreen()) this.unseen = succeeded ? 'done' : 'error';
     // In the background, so not seen whether or not this panel is visible.
     if (entry.chatId) {

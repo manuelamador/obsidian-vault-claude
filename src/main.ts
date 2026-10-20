@@ -82,6 +82,8 @@ const MAX_CHAT_RECORDS = 500;
 const FINISHED_TASKS = 20;
 /** How long the history waits for Codex's list of threads (see refreshCodexStamps); a read cut off is tried again at the next listing. */
 const CODEX_LIST_MS = 3_000;
+/** How long a read of Codex's threads stands for the listings after it (see refreshCodexStamps). */
+const CODEX_FRESH_MS = 10_000;
 /** The Codex chats named in the dialog offering them back (see offerCodexChatsBack); the rest counted. */
 const CODEX_OFFER_SHOWN = 8;
 const TASK_TAIL_BYTES = 8 * 1024;
@@ -500,8 +502,8 @@ export default class VaultClaudePlugin extends Plugin {
   deletedCodex: string[] = [];
   /**
    * The panel's Codex chats with no record are to be recorded again from Codex's store (see
-   * applyCodexThreads): when the records were found empty at start (lost, or a first start), or the
-   * chat list is rebuilt by hand. Not otherwise: before 0.36.0 a Codex chat deleted in the panel left
+   * applyCodexThreads): when the records were found empty at start (lost, or a first start). Rebuilt
+   * by hand, the chat list offers them back, asking first (see offerCodexChatsBack). Not otherwise: before 0.36.0 a Codex chat deleted in the panel left
    * its thread in Codex's store with nothing to say it was deleted, and would come back.
    */
   private codexRecoverAll = false;
@@ -509,6 +511,8 @@ export default class VaultClaudePlugin extends Plugin {
   private codexRead: Promise<void> | null = null;
   /** When a read of Codex's threads last failed or ran out of time: tried again only codexRetryMs after. */
   private codexReadFailedAt = 0;
+  /** When a read of Codex's threads last succeeded: not read again within CODEX_FRESH_MS. */
+  private codexReadAt = 0;
   private codexRetryMs = 60_000;
   /** How long a read of Codex's threads is given before it counts as failed. */
   private codexReadMaxMs = 30_000;
@@ -2138,13 +2142,15 @@ export default class VaultClaudePlugin extends Plugin {
 
   /**
    * Brings the Codex chats up to date from Codex's list of threads (see applyCodexThreads): each one's
-   * last activity, and, when the records were found empty at start or the chat list is rebuilt, the
-   * panel's chats there is no record of. One read at a time; only a listing with Codex chats waits
+   * last activity, and, when the records were found empty at start, the panel's chats there is no
+   * record of. One read at a time; only a listing with Codex chats waits
    * for it, and not past CODEX_LIST_MS, while a recovery carries on after the listing.
    */
   private async refreshCodexStamps(): Promise<void> {
     const recorded = this.chats.some((chat) => chat.engine === 'codex');
-    if (!recorded && (!this.codexRecoverAll || Date.now() - this.codexReadFailedAt < this.codexRetryMs)) return;
+    if (!recorded && !this.codexRecoverAll) return;
+    // Not again soon after a failure (whose read may still be running), nor just after a read.
+    if (Date.now() - this.codexReadFailedAt < this.codexRetryMs || (!this.codexRecoverAll && Date.now() - this.codexReadAt < CODEX_FRESH_MS)) return;
     const launch = this.codexLaunch();
     if (typeof launch === 'string') return;
     this.codexRead ??= this.readCodexThreadsWithin(launch)
@@ -2171,6 +2177,7 @@ export default class VaultClaudePlugin extends Plugin {
       this.codexReadFailedAt = Date.now();
       return;
     }
+    this.codexReadAt = Date.now();
     const recovered = this.codexRecoverAll && this.recoverCodexRecords(threads);
     this.codexRecoverAll = false;
     const stamped = this.stampCodexChats(threads);
@@ -2221,19 +2228,23 @@ export default class VaultClaudePlugin extends Plugin {
     // By hand: the panel's Codex threads with no record are offered back, asking first, since one may
     // have been deleted in the panel before deletions were remembered.
     const before = new Set(this.chats.map((chat) => chat.id));
-    if (!quiet) await this.offerCodexChatsBack();
-    this.codexReadFailedAt = 0;
+    // Reading Codex and every session can take a while: said at once.
+    const working = quiet ? null : new Notice('Rebuilding the chat list…', 0);
+    try {
+      if (!quiet) await this.offerCodexChatsBack();
+    } finally {
+      working?.hide();
+    }
     this.listedAt = 0;
     const items = await this.listChats();
     await this.codexRead;
     const found = items.filter((item) => item.fromPanel && item.engine !== 'codex' && !before.has(item.id) && item.id !== this.scratch?.id && !this.sideSessions.includes(item.id));
-    // The Claude records in the history's order, newest first, those it does not list after them as they were; past MAX_CHAT_RECORDS, the oldest go.
+    // The Claude records in the history's order, newest first; past MAX_CHAT_RECORDS, the oldest go. Those
+    // it does not list (one just started, say) stay first, as they were: their age is not known.
     const rank = new Map(items.map((item, i) => [item.id, i]));
-    const claude = [...this.chats.filter((chat) => chat.engine !== 'codex'), ...found.map((item) => ({ id: item.id, title: item.title }))]
-      .map((chat, i) => ({ chat, key: rank.get(chat.id) ?? items.length + i }))
-      .sort((a, b) => a.key - b.key)
-      .slice(0, MAX_CHAT_RECORDS)
-      .map(({ chat }) => chat);
+    const records = [...this.chats.filter((chat) => chat.engine !== 'codex'), ...found.map((item) => ({ id: item.id, title: item.title }))];
+    const listed = records.filter((chat) => rank.has(chat.id)).sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+    const claude = [...records.filter((chat) => !rank.has(chat.id)), ...listed].slice(0, MAX_CHAT_RECORDS);
     this.chats = [...claude, ...this.chats.filter((chat) => chat.engine === 'codex')];
     const added = this.chats.filter((chat) => !before.has(chat.id)).length;
     // Claude chats still named after their first prompt take Claude Code's title, as a chat on screen
@@ -2266,13 +2277,19 @@ export default class VaultClaudePlugin extends Plugin {
     if (typeof launch === 'string') return;
     const threads = await this.readCodexThreadsWithin(launch);
     if (!threads) return;
+    // The read stands for the listing that follows (see refreshCodexStamps).
+    this.codexReadAt = Date.now();
+    if (this.stampCodexChats(threads)) this.saveSoon();
     const missing = this.unrecordedCodexThreads(threads);
     if (missing.length === 0) return;
     const shown = missing.slice(0, CODEX_OFFER_SHOWN).map((thread) => `“${chatTitle(thread.title)}”`);
     const more = missing.length > shown.length ? `, and ${missing.length - shown.length} more` : '';
     const what = missing.length === 1 ? 'A Codex chat started in the panel is' : `${missing.length} Codex chats started in the panel are`;
     const message = `${what} not in the history: ${shown.join(', ')}${more}. ${missing.length === 1 ? 'It' : 'They'} may have been deleted here before Vault Claude remembered deletions. Restore ${missing.length === 1 ? 'it' : 'them'}?`;
-    if (!(await this.confirm('Restore Codex chats', message, 'Restore'))) return;
+    const restore = await this.confirm('Restore Codex chats', message, 'Restore');
+    // Asked and answered: not restored behind the answer by a recovery waiting since start.
+    this.codexRecoverAll = false;
+    if (!restore) return;
     this.recoverCodexRecords(threads);
     this.listedAt = 0;
   }

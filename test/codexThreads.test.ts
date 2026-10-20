@@ -98,6 +98,13 @@ test('rebuilding by hand offers the Codex chats with no record back, and restore
     // Quietly, after an update: not asked.
     await p.rebuildChatList(true);
     assert.equal(asked.length, 2);
+    // Declined with a recovery waiting since start (records found empty): not restored behind the answer.
+    p.chats = [{ id: 'p1', title: 'First', engine: 'codex', at: 0 }];
+    answer = false;
+    (p as unknown as { codexRecoverAll: boolean }).codexRecoverAll = true;
+    await p.rebuildChatList();
+    await (p as unknown as { codexRead: Promise<void> | null }).codexRead;
+    assert.deepEqual(p.chats.map((chat) => chat.id), ['p1']);
   } finally {
     stopCodexReader();
     rmSync(dir, { recursive: true, force: true });
