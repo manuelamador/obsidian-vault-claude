@@ -8,6 +8,9 @@ import { codexGmailMessages, codexGmailTool, gmailBody, gmailResult } from './gm
 export interface EmailMessage {
   sender: string;
   to: string[];
+  /** Copied, and blind-copied (known only on mail you sent), when the tool gave them. */
+  cc?: string[];
+  bcc?: string[];
   subject: string;
   /** When it was sent, in milliseconds; NaN when the tool gave no date. */
   time: number;
@@ -69,10 +72,18 @@ export function readsThread(name: string): boolean {
   return (readsMail(name) && /__get_thread$/i.test(name)) || codexGmailTool(name) === 'read_email_thread';
 }
 
+/** A recipients field as the tool gave it: a list of addresses, or one string of them. */
+function addresses(value: unknown): string[] {
+  if (typeof value === 'string') return value ? [value] : [];
+  return Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string' && each !== '') : [];
+}
+
 interface RawMessage {
   id?: unknown;
   sender?: unknown;
   toRecipients?: unknown;
+  ccRecipients?: unknown;
+  bccRecipients?: unknown;
   subject?: unknown;
   date?: unknown;
   snippet?: unknown;
@@ -112,7 +123,9 @@ function message(raw: RawMessage, count?: number): EmailMessage {
   });
   return {
     sender: decodeEntities(str(raw.sender)) || 'Unknown sender',
-    to: Array.isArray(raw.toRecipients) ? raw.toRecipients.filter((each): each is string => typeof each === 'string') : [],
+    to: addresses(raw.toRecipients),
+    ...(addresses(raw.ccRecipients).length > 0 ? { cc: addresses(raw.ccRecipients) } : {}),
+    ...(addresses(raw.bccRecipients).length > 0 ? { bcc: addresses(raw.bccRecipients) } : {}),
     // A search asked for metadata only carries no subject at all: left empty rather than shown as
     // "(no subject)", which would say the message has none.
     subject: raw.subject === undefined ? '' : decodeEntities(str(raw.subject)) || '(no subject)',
@@ -171,6 +184,7 @@ export interface EmailDraft {
   updated: boolean;
   to: string[];
   cc: string[];
+  bcc: string[];
   subject?: string;
   body?: string;
   /** The files the call attached, by name and type: Claude's connector's `attachments`, or Codex's MIME parts with a filename. */
@@ -233,6 +247,7 @@ export function emailDraft(name: string, input: Record<string, unknown>, text: s
     updated: kind.toLowerCase() === 'update_draft',
     to: list(input.to),
     cc: list(input.cc),
+    bcc: list(input.bcc),
     ...(typeof input.subject === 'string' ? { subject: input.subject } : {}),
     ...(codex && input.payload ? { body: decodeEntities(gmailBody(input.payload)) } : typeof input.body === 'string' ? { body: input.body.replace(/\r\n?/g, '\n').trim() } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),

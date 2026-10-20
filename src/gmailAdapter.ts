@@ -77,6 +77,8 @@ function message(value: unknown): ObjectValue | null {
   return {
     id: raw.id, threadId: raw.thread_id, subject, sender,
     toRecipients: typeof header('to') === 'string' ? [header('to')] : [],
+    ccRecipients: typeof header('cc') === 'string' ? [header('cc')] : [],
+    bccRecipients: typeof header('bcc') === 'string' ? [header('bcc')] : [],
     date: header('date') ?? (raw.internal_date != null && Number.isFinite(time) && Math.abs(time) <= 8.64e15 ? new Date(time).toISOString() : undefined),
     labelIds: raw.label_ids, snippet: raw.snippet, plaintextBody: body, attachments,
   };

@@ -1603,7 +1603,7 @@ async function main(): Promise<void> {
       const { renderEmailDraft } = await import('../src/emailCards');
       const host = document.body.appendChild(document.createElement('div'));
       const edits: string[] = [];
-      renderEmailDraft(host, { id: 'd1', updated: false, to: ['a@example.com'], cc: [], subject: 'Hello', body: 'Line one\nLine two' }, { edit: (_draft, subject, body) => void edits.push(`${subject}|${body}`) });
+      renderEmailDraft(host, { id: 'd1', updated: false, to: ['a@example.com'], cc: [], bcc: [], subject: 'Hello', body: 'Line one\nLine two' }, { edit: (_draft, subject, body) => void edits.push(`${subject}|${body}`) });
       const card = host.querySelector('.vc-email-draft') as HTMLElement;
       (card.querySelector('[aria-label="Edit the subject and text here"]') as HTMLButtonElement).click();
       const formShown = card.hasClass('is-editing') && (card.querySelector('.vc-email-edit-body') as HTMLTextAreaElement).value === 'Line one\nLine two';
@@ -1617,7 +1617,7 @@ async function main(): Promise<void> {
       const cancelled = !card.hasClass('is-editing') && card.querySelector('.vc-email-subject')?.textContent === 'Hello again' && edits.length === 1;
       // A later version's card leaves the earlier one nothing to act on; sending it, none at all.
       const { settleDraftCards } = await import('../src/emailCards');
-      const later = renderEmailDraft(host, { id: 'd1', updated: true, to: ['a@example.com'], cc: [], subject: 'Hello again', body: 'Line one\nLine three' }, { edit: () => undefined, send: () => undefined });
+      const later = renderEmailDraft(host, { id: 'd1', updated: true, to: ['a@example.com'], cc: [], bcc: [], subject: 'Hello again', body: 'Line one\nLine three' }, { edit: () => undefined, send: () => undefined });
       settleDraftCards(host, 'd1', 'updated');
       const superseded = card.hasClass('is-settled') && !card.querySelector('.vc-email-actions') && !later.hasClass('is-settled') && !!later.querySelector('.vc-email-actions');
       settleDraftCards(host, 'd1', 'sent');

@@ -3978,3 +3978,10 @@ a.vc-email-attachment:hover {
 .vc-email-draft.is-settled {
   opacity: 0.7;
 }
+
+/* Who a message went to: To, Cc and Bcc on one line under the sender. */
+.vc-email-recipients {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}

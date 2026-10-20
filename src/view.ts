@@ -49,7 +49,7 @@ import { estimateTokens, formatTokens, mentionTargets, removeMentions } from './
 import { MemoModal, type MemoChoice } from './memoModal';
 import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks, memoNoteMarkdown, memoNoteName, passageNeedle, quickMemoTitle, type MemoPassage, type MemoSources } from './memos';
 import { DoneTabs, type DoneTab } from './doneTabs';
-import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, settleDraftCards, threadMarkdown } from './emailCards';
+import { emailMarkdown, recipientsLine, renderEmailCards, renderEmailDraft, renderEmailThread, settleDraftCards, threadMarkdown } from './emailCards';
 import { ReplyModal } from './replyModal';
 import { TodoModal } from './todoModal';
 import { draftEnded, emailDraft, emailMessages, mailThreadTitle, readsThread, resultText, type EmailDraft, type EmailMessage } from './emailMessages';
@@ -7261,14 +7261,14 @@ export class ChatView extends ItemView {
    * it goes exactly as it is, attachments and thread included; Gmail removes the draft as it sends it.
    */
   private confirmSendDraft(draft: EmailDraft): void {
-    const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
+    const to = recipientsLine(draft.to, draft.cc, draft.bcc);
     const start = draft.body ? ` “${draft.body.length > 300 ? `${draft.body.slice(0, 300)}…` : draft.body}”` : '';
-    const what = `${to ? `To ${to}` : 'To the recipients set in the draft'}${draft.subject ? `, “${draft.subject}”` : ''}.${start} Sent mail cannot be taken back.`;
+    const what = `${to || 'To the recipients set in the draft'}${draft.subject ? `, “${draft.subject}”` : ''}.${start} Sent mail cannot be taken back.`;
     const request = (archive: boolean) => {
       // What to do is said plainly; how (by its id, never a copy) is in the panel's standing instructions (see APPEND_SYSTEM_PROMPT).
       const name = draft.subject ? `the draft “${draft.subject}”` : 'the draft';
       const ids = `Draft ${draft.id}${archive && draft.threadId ? `, thread ${draft.threadId}` : ''}.`;
-      this.sendOrDraft(`Send ${name}${to ? ` to ${to}` : ''} by its id${archive ? ', then archive its thread' : ''}. ${ids}`, 'Send request added below your draft: send it when ready');
+      this.sendOrDraft(`Send ${name}${draft.to.length > 0 ? ` to ${draft.to.join(', ')}` : ''} by its id${archive ? ', then archive its thread' : ''}. ${ids}`, 'Send request added below your draft: send it when ready');
     };
     new ChoiceModal(this.app, 'Send this draft?', what, [
       ['Send and archive', () => request(true)],

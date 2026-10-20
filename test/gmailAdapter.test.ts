@@ -12,7 +12,7 @@ const result = { content: [{ type: 'text', text: 'Action completed.' }], structu
 
 test('Codex Gmail draft cards use structured results and the original MIME input', () => {
   const draft = emailDraft(name, input, JSON.stringify(result));
-  assert.deepEqual(draft, { id: 'r-test', connector: 'codex', updated: false, to: ['self@example.com'], cc: [], subject: input.subject, body: 'Test & review.\nNot sent.', threadId: 't-test' });
+  assert.deepEqual(draft, { id: 'r-test', connector: 'codex', updated: false, to: ['self@example.com'], cc: [], bcc: [], subject: input.subject, body: 'Test & review.\nNot sent.', threadId: 't-test' });
   assert.deepEqual(emailDraft(name, input, 'Action completed.', result.structuredContent), draft);
   assert.equal(emailDraft('mcp__other__gmail_create_draft', input, JSON.stringify(result)), null);
 });
@@ -85,4 +85,16 @@ test("a draft's attachments are listed from either connector's call", () => {
   const claude = emailDraft('mcp__claude_ai_Gmail__create_draft', { to: ['a@example.com'], subject: 'S', body: 'B', attachments: [{ filename: 'paper.pdf', mimeType: 'application/pdf', content: 'AA==' }] }, JSON.stringify({ id: 'r-1' }));
   assert.deepEqual(claude?.attachments, [{ name: 'paper.pdf', type: 'application/pdf' }]);
   assert.equal(emailDraft(name, input, JSON.stringify(result))?.attachments, undefined);
+});
+
+test('copied and blind-copied recipients are read from either connector, and shown on one line', async () => {
+  const { recipientsLine } = await import('../src/emailCards');
+  const codexMessage = { ...message, payload: { ...message.payload, headers: [...message.payload.headers, { name: 'Cc', value: 'c@example.com' }, { name: 'Bcc', value: 'b@example.com' }] } };
+  const [codexCard] = emailMessages('mcp__codex_apps__gmail.read_email', JSON.stringify({ structuredContent: codexMessage })) ?? [];
+  assert.deepEqual([codexCard.cc, codexCard.bcc], [['c@example.com'], ['b@example.com']]);
+  const [claudeCard] = emailMessages('mcp__claude_ai_Gmail__get_thread', JSON.stringify({ id: 't', messages: [{ id: 'm', threadId: 't', sender: 'a@example.com', toRecipients: ['x@example.com'], ccRecipients: ['c@example.com'], subject: 'S', snippet: 'x', plaintextBody: 'x' }] })) ?? [];
+  assert.deepEqual(claudeCard.cc, ['c@example.com']);
+  assert.equal(claudeCard.bcc, undefined);
+  assert.equal(recipientsLine(['x@example.com'], ['c@example.com', 'd@example.com'], ['b@example.com']), 'To x@example.com · Cc c@example.com, d@example.com · Bcc b@example.com');
+  assert.equal(recipientsLine([], ['c@example.com'], []), 'Cc c@example.com');
 });

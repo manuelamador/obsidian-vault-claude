@@ -60,7 +60,7 @@ test('messages carry their thread id, and get_thread reads a thread', () => {
 
 test('a draft written or changed shows what the call set, and where Gmail opens it', () => {
   const draft = emailDraft('mcp__claude_ai_Gmail__create_draft', { to: ['a@b.c'], cc: ['d@e.f'], subject: 'Visit', body: 'Dear A,\r\n\r\nYes.' }, JSON.stringify({ id: 'r-1', viewUrl: 'https://mail.google.com/x' }));
-  assert.deepEqual(draft, { id: 'r-1', updated: false, to: ['a@b.c'], cc: ['d@e.f'], subject: 'Visit', body: 'Dear A,\n\nYes.', url: 'https://mail.google.com/x' });
+  assert.deepEqual(draft, { id: 'r-1', updated: false, to: ['a@b.c'], cc: ['d@e.f'], bcc: [], subject: 'Visit', body: 'Dear A,\n\nYes.', url: 'https://mail.google.com/x' });
   assert.equal(emailDraft('mcp__claude_ai_Gmail__update_draft', { body: 'x' }, JSON.stringify({ id: 'r-1' }))?.updated, true);
   assert.equal(emailDraft('mcp__claude_ai_Gmail__create_draft', {}, 'Error'), null);
   assert.equal(emailDraft('mcp__claude_ai_Gmail__get_thread', {}, '{"id":"x"}'), null);

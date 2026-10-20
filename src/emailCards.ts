@@ -31,6 +31,18 @@ export function emailDate(message: EmailMessage): string {
   return Number.isNaN(message.time) ? '' : formatDate(message.time);
 }
 
+/** Who a message or draft goes to, on one line: `To a, b · Cc c · Bcc d`, each part only when it has someone. */
+export function recipientsLine(to: string[], cc: string[], bcc: string[]): string {
+  return [
+    ['To', to],
+    ['Cc', cc],
+    ['Bcc', bcc],
+  ]
+    .filter(([, who]) => who.length > 0)
+    .map(([label, who]) => `${label} ${(who as string[]).join(', ')}`)
+    .join(' · ');
+}
+
 /** `message` as Markdown, to quote or save: who, when and what, its attachments by name (the files stay in Gmail), then its text. */
 export function emailMarkdown(message: EmailMessage): string {
   const head = [`**${message.subject || '(no subject)'}**`, `From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`];
@@ -53,6 +65,8 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
   head.createSpan({ cls: 'vc-email-sender', text: message.sender });
   if (message.count) head.createSpan({ cls: 'vc-email-count', text: String(message.count) });
   head.createSpan({ cls: 'vc-email-date', text: emailDate(message) });
+  const recipients = recipientsLine(message.to, message.cc ?? [], message.bcc ?? []);
+  if (recipients) card.createDiv({ cls: 'vc-email-recipients', text: recipients });
   if (subject && message.subject) card.createDiv({ cls: 'vc-email-subject', text: message.subject });
   const text = message.text.length > CARD_TEXT_CHARS ? `${message.text.slice(0, CARD_TEXT_CHARS)}…` : message.text;
   const textEl = text ? card.createDiv({ cls: 'vc-email-text', text }) : null;
@@ -212,8 +226,7 @@ function drawDraft(card: HTMLElement, draft: EmailDraft, actions: DraftActions, 
   card.removeAttribute('title');
   const head = card.createDiv({ cls: 'vc-email-head' });
   head.createSpan({ cls: 'vc-email-badge', text: draft.updated ? 'Draft updated' : 'Draft' });
-  const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
-  head.createSpan({ cls: 'vc-email-sender', text: to ? `To ${to}` : '' });
+  head.createSpan({ cls: 'vc-email-sender', text: recipientsLine(draft.to, draft.cc, draft.bcc) });
   if (draft.subject) card.createDiv({ cls: 'vc-email-subject', text: draft.subject });
   if (draft.body) {
     const body = draft.body;
@@ -274,8 +287,7 @@ function drawDraftForm(card: HTMLElement, draft: EmailDraft, actions: DraftActio
   card.removeAttribute('title');
   const head = card.createDiv({ cls: 'vc-email-head' });
   head.createSpan({ cls: 'vc-email-badge', text: 'Editing draft' });
-  const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
-  head.createSpan({ cls: 'vc-email-sender', text: to ? `To ${to}` : '' });
+  head.createSpan({ cls: 'vc-email-sender', text: recipientsLine(draft.to, draft.cc, draft.bcc) });
   const subject = card.createEl('input', { cls: 'vc-email-edit-subject', attr: { type: 'text', placeholder: 'Subject', 'aria-label': 'Subject' } });
   subject.value = draft.subject ?? '';
   const body = card.createEl('textarea', { cls: 'vc-email-edit-body', attr: { 'aria-label': 'Text', rows: String(Math.min(20, Math.max(6, (draft.body ?? '').split('\n').length + 2))) } });
