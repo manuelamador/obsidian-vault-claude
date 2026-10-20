@@ -205,9 +205,19 @@ export class CodexSession {
     this.withdrawApprovals();
     const connection = this.connection;
     if (!connection) return this.markEnded();
+    // Archived after its last reply, or being archived now (see archiveAfterTurn): stopped once that is done.
+    if (this.hidesThread() && this.archiving) {
+      const stop = () => connection.stop();
+      const timer = setTimeout(stop, 2000);
+      void this.archiving.finally(() => {
+        clearTimeout(timer);
+        stop();
+      });
+      return;
+    }
     // Hidden from Codex's lists: archived as it is let go of (given a moment, then stopped regardless),
     // unless its last reply left it so (see archiveAfterTurn).
-    if (this.hidesThread() && !(this.archivedAfterTurn && !this.archiving)) {
+    if (this.hidesThread() && !this.archivedAfterTurn) {
       const stop = () => connection.stop();
       const timer = setTimeout(stop, 2000);
       void connection.request('thread/archive', { threadId: this.sessionId }).catch((error: unknown) => log('archiving the codex thread failed', error)).finally(() => {
