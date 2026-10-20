@@ -7200,7 +7200,8 @@ export class ChatView extends ItemView {
         // A Send button only where Claude may send mail (Mail: drafts only off), and after you confirm.
         renderEmailDraft(this.container(), draft, {
           ...(this.plugin.settings.mailDraftsOnly ? {} : { send: (each: EmailDraft) => this.confirmSendDraft(each) }),
-          ...(draft.connector === 'codex' ? {} : { edit: (each: EmailDraft, subject: string, body: string) => this.requestDraftEdit(each, subject, body) }),
+          // Not for Codex's (its update takes a MIME payload), nor one with attachments, which Gmail's update would drop.
+          ...(draft.connector === 'codex' || draft.attachments ? {} : { edit: (each: EmailDraft, subject: string, body: string) => this.requestDraftEdit(each, subject, body) }),
         });
         // Its earlier cards are of versions since replaced; a draft sent or deleted already (an earlier
         // turn drawn after the later ones, say) has none to act on.

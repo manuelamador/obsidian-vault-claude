@@ -78,3 +78,11 @@ test('the name Codex scripts use for the same tool is taken too, and no other se
   assert.equal(codexGmailTool('mcp__other__gmail.create_draft'), null);
   assert.equal(codexGmailTool('mcp__codex_apps__gmailXcreate_draft'), null);
 });
+
+test("a draft's attachments are listed from either connector's call", () => {
+  const codex = emailDraft(name, { ...input, payload: { mime_type: 'multipart/mixed', parts: [input.payload, { mime_type: 'text/plain', filename: 'notes.txt', content_disposition: 'attachment', body: { content: 'x' } }] } }, JSON.stringify(result));
+  assert.deepEqual(codex?.attachments, [{ name: 'notes.txt', type: 'text/plain' }]);
+  const claude = emailDraft('mcp__claude_ai_Gmail__create_draft', { to: ['a@example.com'], subject: 'S', body: 'B', attachments: [{ filename: 'paper.pdf', mimeType: 'application/pdf', content: 'AA==' }] }, JSON.stringify({ id: 'r-1' }));
+  assert.deepEqual(claude?.attachments, [{ name: 'paper.pdf', type: 'application/pdf' }]);
+  assert.equal(emailDraft(name, input, JSON.stringify(result))?.attachments, undefined);
+});

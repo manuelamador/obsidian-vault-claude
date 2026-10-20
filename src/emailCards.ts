@@ -232,6 +232,16 @@ function drawDraft(card: HTMLElement, draft: EmailDraft, actions: DraftActions, 
       };
     }
   }
+  // The files it carries, by name and type: they are sent with it (see confirmSendDraft), opened from the draft in Gmail.
+  if (draft.attachments) {
+    const line = card.createDiv({ cls: 'vc-email-attachments' });
+    for (const file of draft.attachments) {
+      const chip = draft.url ? line.createEl('a', { cls: 'vc-email-attachment', href: draft.url, attr: { 'aria-label': 'Open the draft in Gmail, with its attachments' } }) : line.createSpan({ cls: 'vc-email-attachment' });
+      setIcon(chip.createSpan({ cls: 'vc-email-attachment-icon' }), 'paperclip');
+      chip.createSpan({ text: file.name });
+      if (file.type) chip.createSpan({ cls: 'vc-email-attachment-kind', text: attachmentKind(file.type) });
+    }
+  }
   if (note) card.createDiv({ cls: 'vc-email-note vc-muted', text: note });
   const { send, edit } = actions;
   if (!draft.url && !send && !edit) return;

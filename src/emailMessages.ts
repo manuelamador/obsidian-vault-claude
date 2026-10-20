@@ -173,7 +173,30 @@ export interface EmailDraft {
   cc: string[];
   subject?: string;
   body?: string;
+  /** The files the call attached, by name and type: Claude's connector's `attachments`, or Codex's MIME parts with a filename. */
+  attachments?: { name: string; type: string }[];
   url?: string;
+}
+
+/** The files a draft call attached (see EmailDraft.attachments), none when it attached none. */
+function draftAttachments(input: Record<string, unknown>): { name: string; type: string }[] {
+  const found: { name: string; type: string }[] = [];
+  // Claude's connector: an `attachments` list, each with its filename and mimeType.
+  if (Array.isArray(input.attachments)) {
+    for (const each of input.attachments) {
+      const file = each && typeof each === 'object' ? (each as { filename?: unknown; mimeType?: unknown }) : {};
+      if (typeof file.filename === 'string' && file.filename) found.push({ name: file.filename, type: typeof file.mimeType === 'string' ? file.mimeType : '' });
+    }
+  }
+  // Codex's: MIME parts of its payload that have a filename, however deep.
+  const walk = (part: unknown, depth: number): void => {
+    if (depth > 20 || !part || typeof part !== 'object') return;
+    const { filename, mime_type: type, parts } = part as { filename?: unknown; mime_type?: unknown; parts?: unknown };
+    if (typeof filename === 'string' && filename) found.push({ name: filename, type: typeof type === 'string' ? type : '' });
+    if (Array.isArray(parts)) for (const child of parts) walk(child, depth + 1);
+  };
+  walk(input.payload, 0);
+  return found;
 }
 
 /** The Gmail tools that end a draft: sending it by its id, or deleting it. */
@@ -201,6 +224,7 @@ export function emailDraft(name: string, input: Record<string, unknown>, text: s
   const url = str(result.viewUrl);
   const replyTo = str(input.replyToMessageId);
   const threadId = str(result.threadId) || str(result.message?.thread_id);
+  const attachments = draftAttachments(input);
   return {
     id: result.id,
     ...(codex ? { connector: 'codex' as const } : {}),
@@ -211,6 +235,7 @@ export function emailDraft(name: string, input: Record<string, unknown>, text: s
     cc: list(input.cc),
     ...(typeof input.subject === 'string' ? { subject: input.subject } : {}),
     ...(codex && input.payload ? { body: decodeEntities(gmailBody(input.payload)) } : typeof input.body === 'string' ? { body: input.body.replace(/\r\n?/g, '\n').trim() } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
     ...(url ? { url } : {}),
   };
 }
