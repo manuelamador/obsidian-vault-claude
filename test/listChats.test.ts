@@ -36,6 +36,16 @@ test('the chats as last listed are kept for the history; listings at once share 
     await second;
     assert.equal(await p.deleteChat(ids[0]), true);
     assert.deepEqual(p.listedChats()?.map((item) => item.id), [ids[1]]);
+    // Written again with nothing newer (as the phone server restores a chat started on the phone): still
+    // left out; carried on since: back.
+    const restored = `${dir}/${ids[0]}.jsonl`;
+    const said = (when: number) => JSON.stringify({ type: 'user', uuid: randomUUID(), parentUuid: null, sessionId: ids[0], cwd: root, timestamp: new Date(when).toISOString(), message: { role: 'user', content: 'hello' } });
+    writeFileSync(restored, `${said(Date.now() - 60_000)}\n`);
+    assert.deepEqual((await p.listChats()).map((item) => item.id), [ids[1]]);
+    writeFileSync(restored, `${said(Date.now() - 60_000)}\n${said(Date.now() + 60_000)}\n`);
+    assert.ok((await p.listChats()).some((item) => item.id === ids[0]));
+    rmSync(restored);
+    await p.listChats();
     // A chat being deleted is left out of a listing already running, even while its file is there.
     const running = p.listChats();
     (p as unknown as { unlist(id: string): void }).unlist(ids[1]);

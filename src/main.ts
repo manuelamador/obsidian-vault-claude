@@ -281,7 +281,7 @@ type RecordsData = Pick<
   | 'frontmatterGuidance'
   | 'reportTo'
   | 'chatReports'
-> & { deletedCodex?: string[] };
+> & { deletedCodex?: string[]; deletedSessions?: Record<string, number> };
 
 /**
  * Reads JSON file `file`, or its backup (`.bak`) when it is empty or cannot be read; a file read
@@ -541,6 +541,12 @@ export default class VaultClaudePlugin extends Plugin {
   })();
   /** Codex chats deleted in the panel, whose threads stay in Codex's store: not recorded from it again. */
   deletedCodex: string[] = [];
+  /**
+   * Claude chats deleted, by id, with when: a session Claude Code writes again with nothing newer (one
+   * started from the phone, restored from claude.ai as the phone server reconnects) stays out of the
+   * history; one carried on since comes back.
+   */
+  deletedSessions: Record<string, number> = {};
   /**
    * The panel's Codex chats with no record are to be recorded again from Codex's store (see
    * applyCodexThreads): when the records were found empty at start (lost, or a first start). Rebuilt
@@ -1018,8 +1024,10 @@ export default class VaultClaudePlugin extends Plugin {
         const listed = [...(await listHistory(dir, this.chats, this.settings.historyIncludesAllSessions, new Set(this.sideSessions))), ...codex].sort((a, b) => b.updatedAt - a.updatedAt);
         // A chat deleted while this listing ran, or whose file is still there, is not listed again.
         const found = new Set(listed.map((item) => item.id));
-        for (const id of this.unlisted) if (!found.has(id)) this.unlisted.delete(id);
-        const items = listed.filter((item) => !this.unlisted.has(item.id));
+        // Once deleted, it is left out by when (see deletedSessions), so that one carried on since comes back.
+        for (const id of this.unlisted) if (!found.has(id) || id in this.deletedSessions) this.unlisted.delete(id);
+        // Nor one deleted that came back with nothing newer (see deletedSessions).
+        const items = listed.filter((item) => !this.unlisted.has(item.id) && !(item.updatedAt <= (this.deletedSessions[item.id] ?? -Infinity)));
         // Search texts only of chats the history can still show: these, and the scratch chat, which
         // the history lists whether or not this listing has it.
         const searchable = new Set(items.flatMap((item) => [item.id, ...(item.copies ?? []).map((copy) => copy.id)]));
@@ -4201,7 +4209,10 @@ export default class VaultClaudePlugin extends Plugin {
         this.unlist(id);
         // Not listed again from Codex's store (see refreshCodexStamps).
         if (!this.deletedCodex.includes(id)) this.deletedCodex.push(id);
-      } else await this.deleteWhenEnded(id);
+      } else {
+        await this.deleteWhenEnded(id);
+        this.deletedSessions[id] = Date.now();
+      }
     } catch (error) {
       log('deleting a chat failed', error);
       new Notice(`Could not delete the chat: ${errorText(error)}`);
@@ -4474,6 +4485,8 @@ export default class VaultClaudePlugin extends Plugin {
     // The chat records, in a file of their own since 0.36.0 (see RECORDS_FILE); before, in data.json.
     const chats = raw.chats;
     this.deletedCodex = Array.isArray(records.deletedCodex) ? records.deletedCodex.filter((id): id is string => typeof id === 'string') : [];
+    this.deletedSessions =
+      records.deletedSessions && typeof records.deletedSessions === 'object' ? Object.fromEntries(Object.entries(records.deletedSessions).filter(([, at]) => typeof at === 'number')) : {};
     // No records at all: lost, or a first start, and Codex's store is all there is of the Codex chats.
     this.codexRecoverAll = !Array.isArray(chats) || chats.length === 0;
     // Up to 0.21.1 each record also held when it was made and last used, which nothing read.
@@ -4584,6 +4597,7 @@ export default class VaultClaudePlugin extends Plugin {
     return {
       chats: this.chats,
       deletedCodex: this.deletedCodex,
+      deletedSessions: this.deletedSessions,
       scratch: this.scratch ?? undefined,
       pinned: this.pinned,
       ticks: this.ticks,
