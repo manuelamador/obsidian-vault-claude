@@ -93,6 +93,9 @@ export class CodexSession {
   private sending: Promise<void> = Promise.resolve();
   /** The approval cards shown, withdrawn when the turn or the session ends. */
   private readonly approvals = new Set<AbortController>();
+  /** A hidden chat's thread archived after its last reply, and the archiving under way (see archiveAfterTurn). */
+  private archivedAfterTurn = false;
+  private archiving: Promise<void> | null = null;
   /** Connectors' requests waiting on their cards, by request id (see onElicitation). */
   private readonly elicitations = new Map<string, AbortController>();
   /** Context given to go with the next message (see addContext): a project's notes, included chats. */
@@ -163,6 +166,15 @@ export class CodexSession {
             log('codex took no context apart; sent with the message', error);
           }
         }
+        // Hidden from Codex's lists, and archived after its last reply (see archiveAfterTurn): listed again to take a turn.
+        if (this.hidesThread() && this.sessionId) {
+          const threadId = this.sessionId;
+          await this.archiving;
+          if (this.archivedAfterTurn) {
+            await unarchiveQuietly((method, params) => this.request(method, params), threadId);
+            this.archivedAfterTurn = false;
+          }
+        }
         const started = (await this.request('turn/start', { threadId: this.sessionId, input: turnInput, ...choice, ...access, ...client, ...tier })) as { turn?: { id?: string } };
         this.turnId ??= started.turn?.id ?? null;
         delivered();
@@ -188,8 +200,9 @@ export class CodexSession {
     this.withdrawApprovals();
     const connection = this.connection;
     if (!connection) return this.markEnded();
-    // Hidden from Codex's lists: archived as it is let go of (given a moment, then stopped regardless).
-    if (this.config.hidden && this.sessionId && !this.config.readOnly && connection.open) {
+    // Hidden from Codex's lists: archived as it is let go of (given a moment, then stopped regardless),
+    // unless its last reply left it so (see archiveAfterTurn).
+    if (this.hidesThread() && !(this.archivedAfterTurn && !this.archiving)) {
       const stop = () => connection.stop();
       const timer = setTimeout(stop, 2000);
       void connection.request('thread/archive', { threadId: this.sessionId }).catch((error: unknown) => log('archiving the codex thread failed', error)).finally(() => {
@@ -199,6 +212,31 @@ export class CodexSession {
       return;
     }
     connection.stop();
+  }
+
+  /** Whether this chat's thread is kept out of Codex's lists (see CodexSessionConfig.hidden): one of its own, saved, on a live connection. */
+  private hidesThread(): boolean {
+    return this.config.hidden === true && !this.config.readOnly && this.sessionId !== null && this.connection?.open === true;
+  }
+
+  /**
+   * A hidden chat's thread archived as each reply ends, not only as the chat is let go of (see close):
+   * so that one open when Obsidian quits, which waits for nothing (see VaultClaudePlugin's quit), is
+   * archived already. Unarchived again before the next turn (see send).
+   */
+  private archiveAfterTurn(): void {
+    if (!this.hidesThread() || !this.sessionId) return;
+    const threadId = this.sessionId;
+    this.archiving = this.request('thread/archive', { threadId })
+      .then(
+        () => {
+          this.archivedAfterTurn = true;
+        },
+        (error: unknown) => log('archiving the codex thread failed', error),
+      )
+      .finally(() => {
+        this.archiving = null;
+      });
   }
 
   /** The usage limits of the account, read through this session's own app-server (see readCodexLimits). */
@@ -425,6 +463,7 @@ export class CodexSession {
       }
       case 'turn/completed': {
         this.endCompaction();
+        this.archiveAfterTurn();
         const turn = (params.turn ?? {}) as { status: string; error?: { message?: string } | null; durationMs?: number | null };
         this.turnId = null;
         this.withdrawApprovals();

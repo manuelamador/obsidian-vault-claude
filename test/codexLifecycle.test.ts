@@ -295,3 +295,27 @@ test("a Codex message's context goes to the model apart, so the message reads as
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a chat kept out of Codex\'s lists is archived as each reply ends, listed again for the next, and not archived again as it is let go of', async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  const methods = () => (existsSync(`${dir}/methods.log`) ? readFileSync(`${dir}/methods.log`, 'utf8').trim().split('\n') : []);
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  const handlers = { onMessage: () => undefined, onEnd: () => undefined, onPermission: async () => ({ behavior: 'deny', message: '' }) };
+  const session = new CodexSession({ ...launchIn(dir, 'turns'), hidden: true }, handlers as never);
+  try {
+    session.send('one');
+    await until(() => methods().includes('thread/archive'));
+    session.send('two');
+    await until(() => methods().filter((method) => method === 'thread/archive').length === 2);
+    const turnMethods = methods().filter((method) => ['turn/start', 'thread/archive', 'thread/unarchive'].includes(method));
+    assert.deepEqual(turnMethods, ['turn/start', 'thread/archive', 'thread/unarchive', 'turn/start', 'thread/archive']);
+    session.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(methods().filter((method) => method === 'thread/archive').length, 2);
+  } finally {
+    session.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, promises as fsPromises } from 'fs';
 import { execFile, spawn } from 'child_process';
 import { homedir } from 'os';
 import type { TaskInfo } from './backgroundTasks';
-import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type Tasks, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
+import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
 import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { EffortLevel, ModelInfo, SessionMessage, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
@@ -558,9 +558,9 @@ export default class VaultClaudePlugin extends Plugin {
     });
     await this.loadSettings();
     this.registerEvent(
-      this.app.workspace.on('quit', (tasks?: Tasks) => {
+      this.app.workspace.on('quit', () => {
         this.quitting = true;
-        this.stopCodexDaemonAtQuit(tasks);
+        this.stopCodexDaemonAtQuit();
         // Obsidian does not unload plugins when it quits, and `claude remote-control` does not end
         // when its input closes: stopped here, or it outlives the app and holds the vault.
         this.remote.stop();
@@ -1773,24 +1773,24 @@ export default class VaultClaudePlugin extends Plugin {
 
   /**
    * Obsidian is quitting (its quit event, not a reload of the plugin): a shared app-server the panel
-   * started stops with it, once the Codex chats using it have let go (a hidden one is archived as it
-   * does), and is then left to finish on its own.
+   * started stops with it, a moment after, by a command left to finish on its own.
    */
-  private stopCodexDaemonAtQuit(tasks: Tasks | undefined): void {
+  private stopCodexDaemonAtQuit(): void {
     if (!this.startedCodexDaemon) return;
     const launch = this.codexLaunch();
     if (typeof launch === 'string') return;
     this.codexDaemonStarted = null;
     this.saveSoon();
-    const closing = this.chatViews().flatMap((view) => view.releaseSharedCodex());
-    const stop = async () => {
-      await Promise.race([Promise.all(closing), new Promise((resolve) => setTimeout(resolve, CODEX_RELEASE_MS))]);
-      const child = spawn(launch.codexPath, ['app-server', 'daemon', 'stop'], { env: launch.env, detached: true, stdio: 'ignore' });
-      child.on('error', (error) => log('stopping codex at quit failed', error));
-      child.unref();
-    };
-    if (tasks) tasks.add(stop);
-    else void stop();
+    // The Codex chats let go of it, as they can in the moment left; then it is stopped by a command that
+    // outlives Obsidian, a second later. Nothing is waited for: a quit task makes Obsidian cancel the
+    // quit, run it, and only close the window, which leaves the app running on macOS (Obsidian 1.14).
+    for (const view of this.chatViews()) void view.releaseSharedCodex();
+    const child =
+      process.platform === 'win32'
+        ? spawn(launch.codexPath, ['app-server', 'daemon', 'stop'], { env: launch.env, detached: true, stdio: 'ignore' })
+        : spawn('/bin/sh', ['-c', 'sleep 1; exec "$0" app-server daemon stop', launch.codexPath], { env: launch.env, detached: true, stdio: 'ignore' });
+    child.on('error', (error) => log('stopping codex at quit failed', error));
+    child.unref();
   }
 
   /** Codex on the phone was switched: the panels' phone buttons and idle Codex chats follow. */
