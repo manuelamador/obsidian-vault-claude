@@ -3944,3 +3944,32 @@ a.vc-email-attachment:hover {
   margin: 4px 0 0;
   padding-left: 18px;
 }
+
+/* A draft edited on its card: the subject and the whole text, then Save and Cancel. */
+.vc-email-draft.is-editing {
+  cursor: default;
+}
+
+.vc-email-edit-subject,
+.vc-email-edit-body {
+  width: 100%;
+  margin-top: 6px;
+  font: inherit;
+}
+
+.vc-email-edit-body {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.vc-email-edit-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.vc-email-note {
+  margin-top: 4px;
+  font-size: var(--font-ui-smaller);
+}

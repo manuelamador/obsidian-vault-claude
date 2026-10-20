@@ -7180,7 +7180,10 @@ export class ChatView extends ItemView {
       const draft = mail ? emailDraft(entry.name, entry.input, text) : null;
       if (draft) {
         // A Send button only where Claude may send mail (Mail: drafts only off), and after you confirm.
-        renderEmailDraft(this.container(), draft, this.plugin.settings.mailDraftsOnly ? undefined : (each) => this.confirmSendDraft(each));
+        renderEmailDraft(this.container(), draft, {
+          ...(this.plugin.settings.mailDraftsOnly ? {} : { send: (each: EmailDraft) => this.confirmSendDraft(each) }),
+          edit: (each, subject, body) => this.requestDraftEdit(each, subject, body),
+        });
         this.scrollToBottom();
       }
       const messages = mail ? emailMessages(entry.name, text) : null;
@@ -7244,6 +7247,19 @@ export class ChatView extends ItemView {
       ['Send and archive', () => request(true)],
       ['Send', () => request(false)],
     ]).open();
+  }
+
+  /**
+   * Draft `draft` as edited on its card (see renderEmailDraft): Claude is asked to write the subject and
+   * text to it as they are, recipients kept. Gmail's update drops a draft's attachments unless they are
+   * given again, which Claude cannot do: one with attachments is left, for editing in Gmail.
+   */
+  private requestDraftEdit(draft: EmailDraft, subject: string, body: string): void {
+    const text =
+      `Update the Gmail draft ${draft.id} with the Gmail connector's draft update tool (update_draft), keeping its recipients: set its subject and its text to these JSON strings' values, exactly, with no rewording and nothing added.\n` +
+      'Read the draft first (get_draft): if it has attachments, do not update it (the update would remove them); say that it has attachments and should be edited in Gmail.\n' +
+      `Subject: ${JSON.stringify(subject)}\nText: ${JSON.stringify(body)}`;
+    this.sendOrDraft(text, 'Draft edit added below your message: send it when ready');
   }
 
   /** Sends `text` as a message when the input is empty; with a draft there, adds it below for you to send (`hint` says so). */

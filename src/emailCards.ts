@@ -158,12 +158,28 @@ export function renderEmailThread(parent: HTMLElement, messages: EmailMessage[],
   else parent.createDiv({ cls: 'vc-email-cards' }).appendChild(frame);
 }
 
+/** What a draft card does beyond opening in Gmail (see renderEmailDraft). */
+export interface DraftActions {
+  /** When sending is allowed (see the settings): its Send button, which asks first. */
+  send?: (draft: EmailDraft) => void;
+  /** Its Edit button: the subject and text as edited on the card, for Claude to write to the draft. */
+  edit?: (draft: EmailDraft, subject: string, body: string) => void;
+}
+
 /**
  * A card for draft `draft` in `parent`: to whom, its subject and the start of its text (all of it on
- * a click), to open in Gmail. `send`: when sending is allowed (see the settings), its Send button, which asks first.
+ * a click), to open in Gmail, edit on the card, or send (see DraftActions).
  */
-export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft, send?: (draft: EmailDraft) => void): void {
+export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft, actions: DraftActions = {}): void {
   const card = parent.createDiv({ cls: 'vc-email-cards' }).createDiv({ cls: 'vc-email-card vc-email-draft' });
+  drawDraft(card, draft, actions);
+}
+
+/** Draws `draft` in `card`, in place of what it held: as read, or, from its Edit button, as a form. */
+function drawDraft(card: HTMLElement, draft: EmailDraft, actions: DraftActions, note?: string): void {
+  card.empty();
+  card.removeClass('is-expandable', 'is-expanded', 'is-editing');
+  card.removeAttribute('title');
   const head = card.createDiv({ cls: 'vc-email-head' });
   head.createSpan({ cls: 'vc-email-badge', text: draft.updated ? 'Draft updated' : 'Draft' });
   const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
@@ -176,25 +192,73 @@ export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft, send?: 
     if (short !== body || body.includes('\n')) {
       card.addClass('is-expandable');
       card.setAttr('title', 'Show the whole draft');
-      card.addEventListener('click', (evt) => {
-        if ((evt.target as HTMLElement).closest('.vc-email-actions, a, button')) return;
+      card.onclick = (evt) => {
+        if ((evt.target as HTMLElement).closest('.vc-email-actions, a, button, input, textarea')) return;
         if (window.getSelection()?.toString()) return;
         const open = !card.hasClass('is-expanded');
         card.toggleClass('is-expanded', open);
         card.setAttr('title', open ? 'Show less' : 'Show the whole draft');
         textEl.setText(open ? body : short);
-      });
+      };
     }
   }
-  if (!draft.url && !send) return;
+  if (note) card.createDiv({ cls: 'vc-email-note vc-muted', text: note });
+  const { send, edit } = actions;
+  if (!draft.url && !send && !edit) return;
   const buttons = card.createDiv({ cls: 'vc-email-actions' });
   if (draft.url) {
     const open = buttons.createEl('a', { cls: 'clickable-icon', href: draft.url, attr: { 'aria-label': 'Open the draft in Gmail' } });
     setIcon(open, 'external-link');
+  }
+  if (edit) {
+    const button = buttons.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Edit the subject and text here' } });
+    setIcon(button, 'pencil');
+    button.addEventListener('click', () => drawDraftForm(card, draft, actions));
   }
   if (send) {
     const button = buttons.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Send this draft…' } });
     setIcon(button, 'send');
     button.addEventListener('click', () => send(draft));
   }
+}
+
+/**
+ * The draft's subject and whole text, to edit on the card: Save hands them to Claude to write to the
+ * draft (see DraftActions.edit), and the card shows them as saved; Cancel, or Esc, leaves it as it was.
+ */
+function drawDraftForm(card: HTMLElement, draft: EmailDraft, actions: DraftActions): void {
+  card.empty();
+  card.removeClass('is-expandable', 'is-expanded');
+  card.addClass('is-editing');
+  card.onclick = null;
+  card.removeAttribute('title');
+  const head = card.createDiv({ cls: 'vc-email-head' });
+  head.createSpan({ cls: 'vc-email-badge', text: 'Editing draft' });
+  const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
+  head.createSpan({ cls: 'vc-email-sender', text: to ? `To ${to}` : '' });
+  const subject = card.createEl('input', { cls: 'vc-email-edit-subject', attr: { type: 'text', placeholder: 'Subject', 'aria-label': 'Subject' } });
+  subject.value = draft.subject ?? '';
+  const body = card.createEl('textarea', { cls: 'vc-email-edit-body', attr: { 'aria-label': 'Text', rows: String(Math.min(20, Math.max(6, (draft.body ?? '').split('\n').length + 2))) } });
+  body.value = draft.body ?? '';
+  const buttons = card.createDiv({ cls: 'vc-email-edit-buttons' });
+  const cancel = () => drawDraft(card, draft, actions);
+  const save = () => {
+    const edited = { ...draft, subject: subject.value.trim(), body: body.value.replace(/\r\n?/g, '\n').trim() };
+    if (edited.subject === (draft.subject ?? '') && edited.body === (draft.body ?? '')) return cancel();
+    actions.edit?.(draft, edited.subject, edited.body);
+    drawDraft(card, edited, actions, 'Edited here: sent to Claude to update the draft in Gmail.');
+  };
+  buttons.createEl('button', { cls: 'mod-cta', text: 'Save' }).addEventListener('click', save);
+  buttons.createEl('button', { text: 'Cancel' }).addEventListener('click', cancel);
+  card.addEventListener('keydown', (evt) => {
+    if (evt.key === 'Escape') {
+      evt.preventDefault();
+      evt.stopPropagation();
+      cancel();
+    } else if (evt.key === 'Enter' && (evt.metaKey || evt.ctrlKey)) {
+      evt.preventDefault();
+      save();
+    }
+  });
+  body.focus();
 }

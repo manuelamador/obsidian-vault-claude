@@ -1597,6 +1597,30 @@ async function main(): Promise<void> {
       if (!planOk) process.exitCode = 1;
     }
 
+    // A draft's card: Edit shows its subject and whole text in a form; Save hands them on and shows them
+    // as saved, with a note; Esc leaves it as it was.
+    {
+      const { renderEmailDraft } = await import('../src/emailCards');
+      const host = document.body.appendChild(document.createElement('div'));
+      const edits: string[] = [];
+      renderEmailDraft(host, { id: 'd1', updated: false, to: ['a@example.com'], cc: [], subject: 'Hello', body: 'Line one\nLine two' }, { edit: (_draft, subject, body) => void edits.push(`${subject}|${body}`) });
+      const card = host.querySelector('.vc-email-draft') as HTMLElement;
+      (card.querySelector('[aria-label="Edit the subject and text here"]') as HTMLButtonElement).click();
+      const formShown = card.hasClass('is-editing') && (card.querySelector('.vc-email-edit-body') as HTMLTextAreaElement).value === 'Line one\nLine two';
+      (card.querySelector('.vc-email-edit-subject') as HTMLInputElement).value = 'Hello again';
+      (card.querySelector('.vc-email-edit-body') as HTMLTextAreaElement).value = 'Line one\nLine three';
+      ([...card.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLButtonElement).click();
+      const saved = card.querySelector('.vc-email-subject')?.textContent === 'Hello again' && !!card.querySelector('.vc-email-note');
+      (card.querySelector('[aria-label="Edit the subject and text here"]') as HTMLButtonElement).click();
+      (card.querySelector('.vc-email-edit-body') as HTMLTextAreaElement).value = 'Thrown away';
+      card.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      const cancelled = !card.hasClass('is-editing') && card.querySelector('.vc-email-subject')?.textContent === 'Hello again' && edits.length === 1;
+      host.remove();
+      const draftOk = formShown && saved && cancelled && edits[0] === 'Hello again|Line one\nLine three';
+      console.log(`draft card edit: form ${formShown}; saved ${saved}; Esc ${cancelled}; handed on ${JSON.stringify(edits)} -> ${draftOk}`);
+      if (!draftOk) process.exitCode = 1;
+    }
+
     // A connector's request in a Codex chat: its whole message as text, the values Allow sends, and
     // Decline as a refusal; a link opened only from the card, Done only after.
     {
