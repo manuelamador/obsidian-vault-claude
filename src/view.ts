@@ -387,6 +387,18 @@ interface ChatStart {
   notes: string[];
 }
 
+/**
+ * What closing the last panel says it ended: `stopped` chats that were working (with `tasks`
+ * background tasks among them), and `offPhone` idle chats kept running only for the phone, which
+ * are taken off it with nothing lost. Null when there was neither.
+ */
+export function closedNotice(stopped: number, tasks: number, offPhone: number): string | null {
+  const off = `took ${offPhone === 1 ? 'a chat' : `${offPhone} chats`} off your phone`;
+  if (stopped > 0) return `Closing the panel stopped ${chatsAndTasks(stopped, tasks)}${offPhone > 0 ? `, and ${off}` : ''}. The conversations are saved: reopen one from the history to carry on.`;
+  if (offPhone > 0) return `Closing the panel ${off}. ${offPhone === 1 ? 'It was' : 'They were'} idle, so nothing was lost: reopen ${offPhone === 1 ? 'it' : 'one'} from the history to carry on.`;
+  return null;
+}
+
 /** A background chat with nothing left to keep its process for: not working, no tasks, not on the phone, nothing waiting on you. */
 function isIdle(entry: BackgroundChat): boolean {
   return !entry.busy && entry.tasks.size === 0 && !entry.remoteUrl && entry.approvals.length === 0;
@@ -1437,10 +1449,13 @@ export class ChatView extends ItemView {
    */
   private reportStopped(): void {
     const background = [...this.background];
-    const chats = background.length + (this.busy || this.tasks.size > 0 ? 1 : 0);
-    if (chats === 0) return;
+    // Chats kept running only for the phone, idle: taken off it, with nothing of theirs stopped.
+    const phoneIdle = background.filter((entry) => entry.remoteUrl && !entry.busy && entry.tasks.size === 0 && entry.approvals.length === 0).length;
+    const phoneOnly = phoneIdle + (this.remoteUrl && !this.busy && this.tasks.size === 0 ? 1 : 0);
+    const chats = background.length - phoneIdle + (this.busy || this.tasks.size > 0 ? 1 : 0);
     const tasks = this.tasks.size + background.reduce((sum, entry) => sum + entry.tasks.size, 0);
-    new Notice(`Closing the panel stopped ${chatsAndTasks(chats, tasks)}. The conversations are saved: reopen one from the history to carry on.`);
+    const said = closedNotice(chats, tasks, phoneOnly);
+    if (said) new Notice(said);
   }
 
   newChat(): void {
