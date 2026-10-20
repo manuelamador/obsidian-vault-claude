@@ -838,14 +838,37 @@ export async function readCodexThread(launch: CodexLaunch, threadId: string): Pr
  * kind: those in Codex's lists and those kept out of them (archived; see CodexSessionConfig.hidden).
  * Turns written elsewhere (Codex's app, the phone) count, which the panel's own records do not see.
  */
-export async function readCodexThreadStamps(launch: CodexLaunch, limit = 100): Promise<Map<string, number>> {
+/** A thread the panel started (`originator` vault-claude, see CodexConnection), saved and not archived. */
+export interface CodexPanelThread {
+  id: string;
+  /** Its name in Codex's lists, else the start of its first message. */
+  title: string;
+  updatedAt: number;
+}
+
+/**
+ * When each of the vault's Codex threads last changed (ms), and those of them the panel started:
+ * which lists the panel's Codex chats from Codex's own store, should the plugin's records be lost.
+ * Archived threads are only stamped: the panel archives the scratch chats it lets go of, and every
+ * chat when its threads are kept out of Codex's lists.
+ */
+export async function readCodexThreadStamps(launch: CodexLaunch, limit = 100): Promise<{ stamps: Map<string, number>; panel: CodexPanelThread[] }> {
   return withAppServer(launch, async (request) => {
     const stamps = new Map<string, number>();
+    const panel: CodexPanelThread[] = [];
     for (const archived of [false, true]) {
-      const page = (await request('thread/list', { cwd: launch.cwd, archived, sortKey: 'updated_at', limit })) as { data?: { id?: unknown; updatedAt?: unknown }[] };
-      for (const thread of page.data ?? []) if (typeof thread.id === 'string' && typeof thread.updatedAt === 'number') stamps.set(thread.id, thread.updatedAt * 1000);
+      const page = (await request('thread/list', { cwd: launch.cwd, archived, sortKey: 'updated_at', limit })) as {
+        data?: { id?: unknown; updatedAt?: unknown; originator?: unknown; ephemeral?: unknown; name?: unknown; preview?: unknown }[];
+      };
+      for (const thread of page.data ?? []) {
+        if (typeof thread.id !== 'string' || typeof thread.updatedAt !== 'number') continue;
+        stamps.set(thread.id, thread.updatedAt * 1000);
+        if (archived || thread.originator !== 'vault-claude' || thread.ephemeral === true) continue;
+        const title = typeof thread.name === 'string' && thread.name.trim() ? thread.name : typeof thread.preview === 'string' ? thread.preview : '';
+        panel.push({ id: thread.id, title, updatedAt: thread.updatedAt * 1000 });
+      }
     }
-    return stamps;
+    return { stamps, panel };
   });
 }
 

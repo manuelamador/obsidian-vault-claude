@@ -85,10 +85,10 @@ export async function eachInParallel<T>(items: T[], work: (item: T) => Promise<v
 }
 
 /**
- * SDK sessions the plugin has no record of, by id: the title when the first prompt shows the
- * session was a panel chat, else false. A session's first prompt does not change, so each is read
- * once; on 2026-09-25 these reads were 18 of the vault's 115 sessions and 140 ms of the 300 ms
- * the history took to list.
+ * SDK sessions the plugin has no record of, by id: the title when the session was a panel chat (see
+ * sessionEntrypoint), else false. A session's first prompt does not change, so each is read once; on
+ * 2026-09-25 these reads were 18 of the vault's 115 sessions and 140 ms of the 300 ms the history
+ * took to list.
  */
 const unrecorded = new Map<string, string | false>();
 
@@ -117,11 +117,31 @@ const firstPrompts = new Map<string, { stamp: string; prompt: string | null }>()
 /** How far into a session file its first prompt is looked for: in the vault's 122, it was at most 600 KB in. */
 const FIRST_PROMPT_BYTES = 1024 * 1024;
 
+/** How far into a session file its entrypoint is looked for: it is on the first rows with a message. */
+const ENTRYPOINT_BYTES = 64 * 1024;
+
+/**
+ * What started session `id`, as Claude Code records it on its rows (`"entrypoint":"sdk-ts"` for
+ * the panel's chats, `cli` for the terminal, `claude-desktop` for the desktop app); null if none is
+ * found near its start.
+ */
+async function sessionEntrypoint(id: string, dir: string): Promise<string | null> {
+  const file = await fs.open(sessionFile(id, dir), 'r').catch(() => null);
+  if (!file) return null;
+  try {
+    const buffer = Buffer.alloc(ENTRYPOINT_BYTES);
+    const { bytesRead } = await file.read(buffer, 0, ENTRYPOINT_BYTES, 0);
+    return /"entrypoint":"([^"]+)"/.exec(buffer.toString('utf8', 0, bytesRead))?.[1] ?? null;
+  } finally {
+    await file.close();
+  }
+}
+
 /**
  * Sessions for the vault directory, newest first; panel chats only unless `includeAll`.
- * A session counts as a panel chat when the plugin recorded it, or when it is an SDK
- * session whose first prompt starts with the panel's context block (chats from before
- * recording began; ones sent without a note open cannot be told apart and are left out).
+ * A session counts as a panel chat when the plugin recorded it, or when the Agent SDK started it
+ * (see sessionEntrypoint) and it is not a side chat: so the panel's chats are listed from their
+ * session files alone, should the plugin's records be lost (as on 2026-10-20).
  */
 export async function listHistory(dir: string, records: ChatRecord[], includeAll: boolean, sideSessions: ReadonlySet<string> = new Set()): Promise<HistoryItem[]> {
   const [sessions, interactive] = await Promise.all([
@@ -143,7 +163,7 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
   await eachInParallel(unread, async ({ sessionId }) => {
     const first = await firstUserText(sessionId, dir);
     if (first === null) empty.add(sessionId);
-    else unrecorded.set(sessionId, /^<(obsidian_context|project_context|linked_chats)>/.test(first) ? chatTitle(first) : false);
+    else unrecorded.set(sessionId, !interactiveIds.has(sessionId) && (await sessionEntrypoint(sessionId, dir)) === 'sdk-ts' ? chatTitle(first) : false);
   });
   const listed: { item: HistoryItem; stamp: string }[] = [];
   for (const session of sessions) {
@@ -151,10 +171,10 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
     const record = byId.get(session.sessionId);
     let title = record?.title;
     let fromPanel = record !== undefined;
-    const panelTitle = fromPanel || interactiveIds.has(session.sessionId) ? false : unrecorded.get(session.sessionId);
+    const panelTitle = fromPanel || interactiveIds.has(session.sessionId) || sideSessions.has(session.sessionId) ? false : unrecorded.get(session.sessionId);
     if (panelTitle) {
       fromPanel = true;
-      title = panelTitle;
+      title = session.customTitle ? chatTitle(session.customTitle) : panelTitle;
     }
     if (!fromPanel && !includeAll) continue;
     listed.push({

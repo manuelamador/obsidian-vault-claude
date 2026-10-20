@@ -21,6 +21,8 @@ test('the chats as last listed are kept for the history; listings at once share 
   const p = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
   p.saveSettings = async () => undefined;
   p.vaultRoot = () => root;
+  // No Codex: the listing would otherwise read the real one's threads (see refreshCodexStamps).
+  p.codexLaunch = () => 'no Codex in tests';
   p.settings = { ...p.settings, historyIncludesAllSessions: true };
   (p as unknown as { app: unknown }).app = { workspace: { getLeavesOfType: () => [] } };
   try {

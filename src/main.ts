@@ -7,7 +7,7 @@ import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { EffortLevel, ModelInfo, SessionMessage, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
-import { deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
+import { chatTitle, deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
 import { codexTranscript, type CodexItem } from './codexEvents';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
@@ -215,6 +215,47 @@ export interface ContextReading {
   model?: string;
 }
 
+/** The chat records' file, beside data.json: a reset of the settings, or of the records, leaves the other. */
+const RECORDS_FILE = 'chats.json';
+
+interface RecordsData {
+  chats?: ChatRecord[];
+  deletedCodex?: string[];
+}
+
+/**
+ * Reads JSON file `file`, or its backup (`.bak`) when it is empty or cannot be read; a file read
+ * whole is copied to the backup. Obsidian's own loadData returns null for both, and the defaults
+ * saved over it then lost every chat record (2026-10-20, a file left empty by an app quit in the
+ * middle of a write).
+ */
+async function readWhole(file: string): Promise<unknown> {
+  const read = async (path: string): Promise<unknown> => {
+    const text = await fsPromises.readFile(path, 'utf8').catch(() => null);
+    if (text === null || !text.trim()) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  };
+  const data = await read(file);
+  if (data !== null) {
+    await fsPromises.copyFile(file, `${file}.bak`).catch((error: unknown) => log('backing up the plugin data failed', error));
+    return data;
+  }
+  const backup = await read(`${file}.bak`);
+  if (existsSync(file) || backup !== null) log('plugin data empty or unreadable', { file, backup: backup !== null });
+  return backup;
+}
+
+/** Writes `data` to `file` whole or not at all: to a temporary file, then renamed over it. */
+async function writeWhole(file: string, data: unknown): Promise<void> {
+  const temporary = `${file}.tmp`;
+  await fsPromises.writeFile(temporary, JSON.stringify(data, null, 2));
+  await fsPromises.rename(temporary, file);
+}
+
 interface PluginData {
   settings?: Partial<VaultClaudeSettings>;
   codexThreadsNamed?: boolean;
@@ -399,6 +440,10 @@ export default class VaultClaudePlugin extends Plugin {
   scratch: { id: string; usedAt: number; engine?: 'codex'; codex?: CodexChoices; claude?: ClaudeChoices } | null = null;
   /** Side chats' sessions not deleted yet: those open now, and any left when Obsidian last quit. */
   sideSessions: string[] = [];
+  /** Codex chats deleted in the panel, whose threads stay in Codex's store: not recorded from it again. */
+  deletedCodex: string[] = [];
+  /** Codex's store was read for the panel's chats since the plugin loaded (see refreshCodexStamps). */
+  private codexLooked = false;
   /** A save waiting to cover a burst of changes (see saveSoon). */
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   /** The last write of data.json asked for, and whether it waits to start (see saveSettings). */
@@ -475,6 +520,7 @@ export default class VaultClaudePlugin extends Plugin {
       name: 'Chat history',
       callback: async () => (await this.activateView())?.openHistory(),
     });
+    this.addCommand({ id: 'rebuild-chat-list', name: 'Rebuild chat list from sessions', callback: () => void this.rebuildChatList() });
     this.addCommand({ id: 'pick-up', name: 'Pick up where you left off', callback: () => void this.openPickUp() });
     this.addCommand({
       id: 'draft-email-from-note',
@@ -2014,12 +2060,23 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** The Codex chats' last activity (ChatRecord.at) as Codex records it, where later than the panel's own. */
   private async refreshCodexStamps(): Promise<void> {
-    if (!this.chats.some((chat) => chat.engine === 'codex')) return;
+    // With no Codex chat recorded, Codex is asked once per start: for chats whose records were lost.
+    if (!this.chats.some((chat) => chat.engine === 'codex') && this.codexLooked) return;
     const launch = this.codexLaunch();
     if (typeof launch === 'string') return;
-    const stamps = await Promise.race([readCodexThreadStamps(launch).catch((error: unknown) => (log('reading codex thread stamps failed', error), null)), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000))]);
-    if (!stamps) return;
+    this.codexLooked = true;
+    const read = await Promise.race([readCodexThreadStamps(launch).catch((error: unknown) => (log('reading codex thread stamps failed', error), null)), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000))]);
+    if (!read) return;
+    const { stamps } = read;
     let changed = false;
+    // Threads the panel started with no record (lost, or dropped): recorded again, as Codex lists them.
+    const known = new Set([...this.chats.map((chat) => chat.id), ...this.deletedCodex, ...this.sideSessions, ...(this.scratch ? [this.scratch.id] : [])]);
+    const found = read.panel.filter((thread) => !known.has(thread.id));
+    if (found.length > 0) {
+      this.chats.push(...found.map((thread) => ({ id: thread.id, title: chatTitle(thread.title), engine: 'codex' as const, at: thread.updatedAt })));
+      log('codex chats recorded from codex', { count: found.length });
+      changed = true;
+    }
     for (const chat of this.chats) {
       const at = chat.engine === 'codex' ? stamps.get(chat.id) : undefined;
       if (at !== undefined && at > (chat.at ?? 0)) {
@@ -2028,6 +2085,25 @@ export default class VaultClaudePlugin extends Plugin {
       }
     }
     if (changed) this.saveSoon();
+  }
+
+  /**
+   * Records again every panel chat the history lists from its session alone: Claude chats the Agent
+   * SDK started (see listHistory) and Codex threads the panel started (see refreshCodexStamps). The
+   * history lists them without records; recorded, they keep their place among the panel's chats.
+   */
+  async rebuildChatList(): Promise<void> {
+    const before = this.chats.length;
+    this.codexLooked = false;
+    this.listedAt = 0;
+    const items = await this.listChats();
+    const known = new Set(this.chats.map((chat) => chat.id));
+    const found = items.filter((item) => item.fromPanel && item.engine !== 'codex' && !known.has(item.id) && item.id !== this.scratch?.id && !this.sideSessions.includes(item.id));
+    this.chats.push(...found.map((item) => ({ id: item.id, title: item.title })));
+    await this.saveSettings();
+    const added = this.chats.length - before;
+    log('chat list rebuilt', { added });
+    new Notice(added === 0 ? 'Every chat in the history was already recorded.' : `${added} chat${added === 1 ? '' : 's'} recorded again.`);
   }
 
   /** Codex chat `id` was active now: the history sorts it by this (see ChatRecord.at). */
@@ -3831,8 +3907,11 @@ export default class VaultClaudePlugin extends Plugin {
     }
     try {
       // A Codex chat goes from the panel's records and listings; its session stays in Codex's own store.
-      if (this.isCodexChat(id)) this.unlist(id);
-      else await this.deleteWhenEnded(id);
+      if (this.isCodexChat(id)) {
+        this.unlist(id);
+        // Not listed again from Codex's store (see refreshCodexStamps).
+        if (!this.deletedCodex.includes(id)) this.deletedCodex.push(id);
+      } else await this.deleteWhenEnded(id);
     } catch (error) {
       log('deleting a chat failed', error);
       new Notice(`Could not delete the chat: ${errorText(error)}`);
@@ -4052,47 +4131,23 @@ export default class VaultClaudePlugin extends Plugin {
     return this.probe;
   }
 
-  /** data.json's path on disk, or null for a vault not on the local file system. */
-  private dataPath(): string | null {
-    const root = this.vaultRoot();
-    return root && this.manifest.dir ? joinPath(root, this.manifest.dir, 'data.json') : null;
+  /** File `name` in the plugin's folder on disk, or null for a vault not on the local file system. */
+  private pluginFile(name: string): string | null {
+    const adapter = this.app?.vault?.adapter;
+    const root = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
+    return root && this.manifest?.dir ? joinPath(root, this.manifest.dir, name) : null;
   }
 
-  /**
-   * Reads data.json, or its backup when it is empty or cannot be read. Obsidian's own loadData
-   * returns null for both, and the defaults saved over it then lost every chat record (2026-10-20,
-   * a file left empty by an app quit in the middle of a write). A file read whole is copied to
-   * data.json.bak.
-   */
+  /** data.json, or its backup when it is empty or cannot be read (see readWhole). */
   async loadData(): Promise<unknown> {
-    const file = this.dataPath();
-    if (!file) return super.loadData();
-    const read = async (path: string): Promise<unknown> => {
-      const text = await fsPromises.readFile(path, 'utf8').catch(() => null);
-      if (text === null || !text.trim()) return null;
-      try {
-        return JSON.parse(text);
-      } catch {
-        return null;
-      }
-    };
-    const data = await read(file);
-    if (data !== null) {
-      await fsPromises.copyFile(file, `${file}.bak`).catch((error: unknown) => log('backing up the plugin data failed', error));
-      return data;
-    }
-    const backup = await read(`${file}.bak`);
-    if (existsSync(file) || backup !== null) log('plugin data empty or unreadable', { backup: backup !== null });
-    return backup;
+    const file = this.pluginFile('data.json');
+    return file ? readWhole(file) : super.loadData();
   }
 
-  /** Writes data.json whole or not at all: to a temporary file, then renamed over it. */
+  /** Writes data.json whole or not at all (see writeWhole). */
   async saveData(data: unknown): Promise<void> {
-    const file = this.dataPath();
-    if (!file) return super.saveData(data);
-    const temporary = `${file}.tmp`;
-    await fsPromises.writeFile(temporary, JSON.stringify(data, null, 2));
-    await fsPromises.rename(temporary, file);
+    const file = this.pluginFile('data.json');
+    return file ? writeWhole(file, data) : super.saveData(data);
   }
 
   async loadSettings(): Promise<void> {
@@ -4120,9 +4175,14 @@ export default class VaultClaudePlugin extends Plugin {
     }
     // Up to 0.13.0 a panel-wide switch, on by default; notes are now attached per chat, and none to start with.
     delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
+    // The chat records, in a file of their own since 0.36.0 (see RECORDS_FILE); before, in data.json.
+    const recordsFile = this.pluginFile(RECORDS_FILE);
+    const records = ((recordsFile ? await readWhole(recordsFile) : null) ?? {}) as RecordsData;
+    const chats = Array.isArray(records.chats) ? records.chats : raw.chats;
+    this.deletedCodex = Array.isArray(records.deletedCodex) ? records.deletedCodex.filter((id): id is string => typeof id === 'string') : [];
     // Up to 0.21.1 each record also held when it was made and last used, which nothing read.
-    this.chats = Array.isArray(raw.chats)
-      ? raw.chats.map(({ id, title, copyOf, engine, at, codex, claude }) => {
+    this.chats = Array.isArray(chats)
+      ? chats.map(({ id, title, copyOf, engine, at, codex, claude }) => {
           const choices = engine === 'codex' ? readCodexChoices(codex) : undefined;
           const claudeChoices = engine === 'codex' ? undefined : readClaudeChoices(claude);
           return { id, title, ...(typeof copyOf === 'string' ? { copyOf } : {}), ...(engine === 'codex' ? { engine } : {}), ...(typeof at === 'number' ? { at } : {}), ...(choices ? { codex: choices } : {}), ...(claudeChoices ? { claude: claudeChoices } : {}) };
@@ -4191,20 +4251,24 @@ export default class VaultClaudePlugin extends Plugin {
       this.saveWaiting = false;
       // Logged here, as well as passed on: most callers do not wait for it, and a failed write has
       // no stack of the plugin's for the log's handler of unhandled errors to know it by.
-      await this.saveData(this.dataToSave()).catch((error: unknown) => {
+      const records = this.pluginFile(RECORDS_FILE);
+      try {
+        if (records) await writeWhole(records, { chats: this.chats, deletedCodex: this.deletedCodex } satisfies RecordsData);
+        await this.saveData(this.dataToSave(records === null));
+      } catch (error) {
         log('saving the plugin data failed', error);
         throw error;
-      });
+      }
     };
     this.saving = this.saving.then(write, write);
     return this.saving;
   }
 
   /** The plugin's data as data.json holds it. */
-  private dataToSave(): PluginData {
+  private dataToSave(withRecords = true): PluginData {
     return {
       settings: this.settings,
-      chats: this.chats,
+      ...(withRecords ? { chats: this.chats } : {}),
       scratch: this.scratch ?? undefined,
       noteChats: this.noteChats,
       noteRefs: this.noteRefs,
