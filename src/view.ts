@@ -341,10 +341,11 @@ interface BackgroundChat {
   pendingIds: Set<string>;
   waitedForQueue: boolean;
   /**
-   * A reply to a message sent from the panel that ended while background tasks ran, not yet said done
-   * (see announceDone): whether it succeeded. Said when the chat is next done, with that outcome.
+   * Replies ended in the background and not yet said done (see sayDone): whether all succeeded, and
+   * whether any ran long enough for a system notification. A reply on the phone to a message sent
+   * there is not owed: it is read there.
    */
-  doneOwed?: boolean;
+  doneOwed?: { ok: boolean; long: boolean };
   mode: PermissionMode;
   modelOverride: string | undefined;
   effortOverride: EffortLevel | undefined;
@@ -2553,24 +2554,20 @@ export class ChatView extends ItemView {
           // Queued messages still listed have had their own turn without being reported back.
           entry.pendingIds.clear();
           entry.waitedForQueue = false;
-          // With a reply owed from a turn that ended while tasks ran: said with the worse of the two outcomes.
-          const succeeded = message.subtype === 'success' && !message.is_error && entry.doneOwed !== false;
-          // A reply to a message sent from the phone is read there: no notification here, unless one is owed.
-          const fromPhone = entry.remoteUrl !== null && !sentHere && entry.doneOwed === undefined;
-          if (!fromPhone && message.duration_ms >= this.plugin.settings.notifyAfterSeconds * 1000) {
-            this.systemNotify(succeeded ? 'Claude finished' : 'Claude stopped with an error', entry.title ?? 'A chat', () => void this.showChat(entry));
-          }
+          const succeeded = message.subtype === 'success' && !message.is_error;
+          const long = message.duration_ms >= this.plugin.settings.notifyAfterSeconds * 1000;
+          // Owed until said done (see sayDone), with any earlier reply owed: unless sent from the phone, where it is read.
+          if (entry.remoteUrl === null || sentHere) entry.doneOwed = { ok: (entry.doneOwed?.ok ?? true) && succeeded, long: (entry.doneOwed?.long ?? false) || long };
           if (entry.tasks.size > 0) {
             // With background tasks running: kept for them, and Claude takes up their results in a
-            // turn of its own; said done when the chat next is (owed until then).
-            if (!fromPhone) entry.doneOwed = succeeded;
+            // turn of its own; said done when the chat next is.
             this.updateBackgroundIndicator();
             return;
           }
           if (entry.remoteUrl) {
-            // On the phone: kept running so it can be continued there. A reply to a message sent
-            // from the panel is done all the same, and said so as for a chat that ends.
-            if (!fromPhone) this.announceDone(entry, succeeded);
+            // On the phone: kept running so it can be continued there. What is owed is said done all
+            // the same, as for a chat that ends.
+            if (entry.doneOwed) this.sayDone(entry, succeeded);
             this.updateBackgroundIndicator();
             return;
           }
@@ -2719,15 +2716,24 @@ export class ChatView extends ItemView {
     this.background.delete(entry);
     this.closeSession(entry.session);
     if (entry.chatId && entry.session instanceof CodexSession) this.plugin.touchCodexChat(entry.chatId);
-    this.announceDone(entry, succeeded);
+    this.sayDone(entry, succeeded);
     this.updateBackgroundIndicator();
+  }
+
+  /**
+   * Says what a background chat owes done (see BackgroundChat.doneOwed), or, with nothing owed, that
+   * it is done as `succeeded` says: a system notification for a reply that ran long, and announceDone.
+   * Once: what is owed is cleared.
+   */
+  private sayDone(entry: BackgroundChat, succeeded: boolean): void {
+    const { ok, long } = entry.doneOwed ?? { ok: succeeded, long: false };
+    entry.doneOwed = undefined;
+    if (long) this.systemNotify(ok ? 'Claude finished' : 'Claude stopped with an error', entry.title ?? 'A chat', () => void this.showChat(entry));
+    this.announceDone(entry, ok);
   }
 
   /** A background chat's reply is done, whether its process ends (finishBackground) or is kept (on the phone, or for its tasks): the history marks it, and its tab on the margin says so. */
   private announceDone(entry: BackgroundChat, succeeded: boolean): void {
-    // An earlier reply's failure, owed since its tasks ran (see BackgroundChat.doneOwed), is not hidden by a later success.
-    if (entry.doneOwed === false) succeeded = false;
-    entry.doneOwed = undefined;
     if (!this.isOnScreen()) this.unseen = succeeded ? 'done' : 'error';
     // In the background, so not seen whether or not this panel is visible.
     if (entry.chatId) {

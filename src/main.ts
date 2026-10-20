@@ -507,8 +507,8 @@ export default class VaultClaudePlugin extends Plugin {
    * its thread in Codex's store with nothing to say it was deleted, and would come back.
    */
   private codexRecoverAll = false;
-  /** The read of Codex's threads under way, which a second listing shares (see refreshCodexStamps). */
-  private codexRead: Promise<void> | null = null;
+  /** The read of Codex's threads under way, which every caller shares (see readCodexShared). */
+  private codexRead: Promise<CodexThreadSummary[] | null> | null = null;
   /** When a read of Codex's threads last failed or ran out of time: tried again only codexRetryMs after. */
   private codexReadFailedAt = 0;
   /** When a read of Codex's threads last succeeded: not read again within CODEX_FRESH_MS. */
@@ -2153,31 +2153,36 @@ export default class VaultClaudePlugin extends Plugin {
     if (Date.now() - this.codexReadFailedAt < this.codexRetryMs || (!this.codexRecoverAll && Date.now() - this.codexReadAt < CODEX_FRESH_MS)) return;
     const launch = this.codexLaunch();
     if (typeof launch === 'string') return;
-    this.codexRead ??= this.readCodexThreadsWithin(launch)
-      .then((threads) => this.applyCodexThreads(threads))
-      .finally(() => {
-        this.codexRead = null;
-      });
+    const read = this.readCodexShared(launch).then((threads) => this.applyCodexThreads(threads));
     if (!recorded) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([this.codexRead, new Promise<void>((resolve) => (timer = setTimeout(resolve, CODEX_LIST_MS)))]).finally(() => clearTimeout(timer));
+    await Promise.race([read, new Promise<void>((resolve) => (timer = setTimeout(resolve, CODEX_LIST_MS)))]).finally(() => clearTimeout(timer));
   }
 
-  /** The vault's Codex threads (see readCodexThreads), or null when the read fails or takes longer than codexReadMaxMs. */
-  private readCodexThreadsWithin(launch: CodexLaunch): Promise<CodexThreadSummary[] | null> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), this.codexReadMaxMs)));
-    const read = readCodexThreads(launch).catch((error: unknown) => (log('reading codex threads failed', error), null));
-    return Promise.race([read, late]).finally(() => clearTimeout(timer));
+  /**
+   * The vault's Codex threads (see readCodexThreads), or null when the read fails or takes longer than
+   * codexReadMaxMs. One read at a time, which every caller shares (the listing's, a rebuild's); it
+   * alone notes when a read last succeeded or failed (see refreshCodexStamps).
+   */
+  private readCodexShared(launch: CodexLaunch): Promise<CodexThreadSummary[] | null> {
+    this.codexRead ??= (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), this.codexReadMaxMs)));
+      const read = readCodexThreads(launch).catch((error: unknown) => (log('reading codex threads failed', error), null));
+      const threads = await Promise.race([read, late]).finally(() => clearTimeout(timer));
+      if (threads) this.codexReadAt = Date.now();
+      else this.codexReadFailedAt = Date.now();
+      return threads;
+    })().finally(() => {
+      this.codexRead = null;
+    });
+    return this.codexRead;
   }
 
-  /** What a read of Codex's threads brings (see refreshCodexStamps): a failed one is tried again after codexRetryMs. */
+  /** What a read of Codex's threads brings to the records (see refreshCodexStamps). */
   private applyCodexThreads(threads: CodexThreadSummary[] | null): void {
-    if (!threads) {
-      this.codexReadFailedAt = Date.now();
-      return;
-    }
-    this.codexReadAt = Date.now();
+    if (!threads) return;
+    // Read while a rebuild by hand asks about these chats: left to its answer (see offerCodexChatsBack).
     const recovered = this.codexRecoverAll && this.recoverCodexRecords(threads);
     this.codexRecoverAll = false;
     const stamped = this.stampCodexChats(threads);
@@ -2227,24 +2232,28 @@ export default class VaultClaudePlugin extends Plugin {
   async rebuildChatList(quiet = false): Promise<void> {
     // By hand: the panel's Codex threads with no record are offered back, asking first, since one may
     // have been deleted in the panel before deletions were remembered.
-    const before = new Set(this.chats.map((chat) => chat.id));
-    // Reading Codex and every session can take a while: said at once.
+    // Reading Codex and every session can take a while: said at once, until done.
     const working = quiet ? null : new Notice('Rebuilding the chat list…', 0);
     try {
-      if (!quiet) await this.offerCodexChatsBack();
+      await this.rebuildChatListNow(quiet);
     } finally {
       working?.hide();
     }
+  }
+
+  private async rebuildChatListNow(quiet: boolean): Promise<void> {
+    const before = new Set(this.chats.map((chat) => chat.id));
+    if (!quiet) await this.offerCodexChatsBack();
     this.listedAt = 0;
     const items = await this.listChats();
     await this.codexRead;
     const found = items.filter((item) => item.fromPanel && item.engine !== 'codex' && !before.has(item.id) && item.id !== this.scratch?.id && !this.sideSessions.includes(item.id));
-    // The Claude records in the history's order, newest first; past MAX_CHAT_RECORDS, the oldest go. Those
-    // it does not list (one just started, say) stay first, as they were: their age is not known.
+    // The Claude records in the history's order, newest first, then those it does not list (most often
+    // of sessions deleted since) as they were; past MAX_CHAT_RECORDS, the last go.
     const rank = new Map(items.map((item, i) => [item.id, i]));
     const records = [...this.chats.filter((chat) => chat.engine !== 'codex'), ...found.map((item) => ({ id: item.id, title: item.title }))];
     const listed = records.filter((chat) => rank.has(chat.id)).sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
-    const claude = [...records.filter((chat) => !rank.has(chat.id)), ...listed].slice(0, MAX_CHAT_RECORDS);
+    const claude = [...listed, ...records.filter((chat) => !rank.has(chat.id))].slice(0, MAX_CHAT_RECORDS);
     this.chats = [...claude, ...this.chats.filter((chat) => chat.engine === 'codex')];
     const added = this.chats.filter((chat) => !before.has(chat.id)).length;
     // Claude chats still named after their first prompt take Claude Code's title, as a chat on screen
@@ -2275,10 +2284,13 @@ export default class VaultClaudePlugin extends Plugin {
   private async offerCodexChatsBack(): Promise<void> {
     const launch = this.codexLaunch();
     if (typeof launch === 'string') return;
-    const threads = await this.readCodexThreadsWithin(launch);
+    // Asked by hand: tried at once whatever an earlier failure, and the answer, not a recovery waiting
+    // since start, decides (a read under way when the dialog opens restores nothing).
+    this.codexRecoverAll = false;
+    this.codexReadFailedAt = 0;
+    const threads = await this.readCodexShared(launch);
     if (!threads) return;
     // The read stands for the listing that follows (see refreshCodexStamps).
-    this.codexReadAt = Date.now();
     if (this.stampCodexChats(threads)) this.saveSoon();
     const missing = this.unrecordedCodexThreads(threads);
     if (missing.length === 0) return;
@@ -2286,10 +2298,7 @@ export default class VaultClaudePlugin extends Plugin {
     const more = missing.length > shown.length ? `, and ${missing.length - shown.length} more` : '';
     const what = missing.length === 1 ? 'A Codex chat started in the panel is' : `${missing.length} Codex chats started in the panel are`;
     const message = `${what} not in the history: ${shown.join(', ')}${more}. ${missing.length === 1 ? 'It' : 'They'} may have been deleted here before Vault Claude remembered deletions. Restore ${missing.length === 1 ? 'it' : 'them'}?`;
-    const restore = await this.confirm('Restore Codex chats', message, 'Restore');
-    // Asked and answered: not restored behind the answer by a recovery waiting since start.
-    this.codexRecoverAll = false;
-    if (!restore) return;
+    if (!(await this.confirm('Restore Codex chats', message, 'Restore'))) return;
     this.recoverCodexRecords(threads);
     this.listedAt = 0;
   }
