@@ -2534,6 +2534,7 @@ export class ChatView extends ItemView {
     clearSettle(entry);
     this.background.delete(entry);
     this.closeSession(entry.session);
+    if (entry.chatId && entry.session instanceof CodexSession) this.plugin.touchCodexChat(entry.chatId);
     if (!this.isOnScreen()) this.unseen = succeeded ? 'done' : 'error';
     // In the background, so not seen whether or not this panel is visible.
     if (entry.chatId) {
@@ -2550,7 +2551,7 @@ export class ChatView extends ItemView {
   private notifyBackground(entry: BackgroundChat, what: string, persist: boolean): void {
     entry.notice?.hide();
     const fragment = createFragment((frag) => {
-      frag.appendText(`Claude ${what} in “${entry.title ?? 'a chat'}”. `);
+      frag.appendText(`${entry.session instanceof CodexSession ? 'Codex' : 'Claude'} ${what} in “${entry.title ?? 'a chat'}”. `);
       // A chat that ended before Claude Code assigned it an id has nothing to reopen.
       if (!entry.chatId && !this.background.has(entry)) return;
       const open = frag.createEl('a', { text: 'Open', href: '#' });
@@ -6673,7 +6674,11 @@ export class ChatView extends ItemView {
     }
     this.pending.clear();
     if (error) {
-      this.renderNotice(`Claude Code stopped: ${error.message}${stderrTail ? `\n\n${stderrTail}` : ''}`);
+      // Codex lets one process write a thread at a time: one the ChatGPT app has open (written in there,
+      // or from the phone through it) cannot be written here until it lets go.
+      const held = this.engine === 'codex' && /already has an active writer/.test(error.message);
+      if (held) this.renderNotice('This chat is open in the ChatGPT app, which holds it while it is open there (a message written in the app, or from the phone through it, opens it). Close the chat in the ChatGPT app, or quit the app, then send again.');
+      else this.renderNotice(`${this.engine === 'codex' ? 'Codex' : 'Claude Code'} stopped: ${error.message}${stderrTail ? `\n\n${stderrTail}` : ''}`);
     }
     this.endTurn();
   }

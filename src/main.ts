@@ -13,7 +13,7 @@ import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
-import { findCodex, listCodexModels, readCodexLimits, readCodexThread, readCodexThreadStamp, archiveCodexThread, nameCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
+import { findCodex, listCodexModels, readCodexLimits, readCodexThread, readCodexThreadStamp, readCodexThreadStamps, archiveCodexThread, nameCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel } from './codexSession';
 import type { DoneTab } from './doneTabs';
 import { ConfirmModal, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
@@ -841,7 +841,9 @@ export default class VaultClaudePlugin extends Plugin {
     this.listing ??= (async () => {
       const started = performance.now();
       try {
-        // Codex chats are listed from their records: their sessions are in Codex's own store.
+        // Codex chats are listed from their records: their sessions are in Codex's own store, which says
+        // when each last changed, turns written outside the panel included (given a moment, not waited on long).
+        await this.refreshCodexStamps();
         const codex: HistoryItem[] = this.chats.filter((chat) => chat.engine === 'codex').map((chat) => ({ id: chat.id, title: chat.title, updatedAt: chat.at ?? 0, fromPanel: true, engine: 'codex' }));
         const listed = [...(await listHistory(dir, this.chats, this.settings.historyIncludesAllSessions, new Set(this.sideSessions))), ...codex].sort((a, b) => b.updatedAt - a.updatedAt);
         // A chat deleted while this listing ran, or whose file is still there, is not listed again.
@@ -1947,6 +1949,24 @@ export default class VaultClaudePlugin extends Plugin {
     if (chosen?.[1] === 'claude') return { engine: 'claude', model: chosen[2] || chatModel(this.settings.model) };
     if (this.settings.smallJobEngine === 'codex') return { engine: 'codex', model: this.settings.smallJobCodexModel || this.settings.codexModel || undefined };
     return { engine: 'claude', model: this.smallJobModel() };
+  }
+
+  /** The Codex chats' last activity (ChatRecord.at) as Codex records it, where later than the panel's own. */
+  private async refreshCodexStamps(): Promise<void> {
+    if (!this.chats.some((chat) => chat.engine === 'codex')) return;
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return;
+    const stamps = await Promise.race([readCodexThreadStamps(launch).catch((error: unknown) => (log('reading codex thread stamps failed', error), null)), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000))]);
+    if (!stamps) return;
+    let changed = false;
+    for (const chat of this.chats) {
+      const at = chat.engine === 'codex' ? stamps.get(chat.id) : undefined;
+      if (at !== undefined && at > (chat.at ?? 0)) {
+        chat.at = at;
+        changed = true;
+      }
+    }
+    if (changed) this.saveSoon();
   }
 
   /** Codex chat `id` was active now: the history sorts it by this (see ChatRecord.at). */

@@ -8,7 +8,7 @@ import { chmodSync, writeFileSync } from 'node:fs';
  * thread has started; `ask`, having started a turn, asks the panel a question and finishes the turn
  * only once it is answered (or refused).
  */
-export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' = 'exit'): string {
+export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' = 'exit'): string {
   const file = `${dir}/codex`;
   writeFileSync(
     file,
@@ -31,6 +31,12 @@ process.stdin.on('data', (chunk) => {
     }
     if (message.method) require('fs').appendFileSync(${JSON.stringify(`${dir}/methods.log`)}, message.method + '\\n');
     if (message.id === undefined) continue;
+    // The panel's answer to the confirmation asked in 'elicit' mode: kept, and the turn ends.
+    if (!message.method && message.id === 'e1') {
+      require('fs').writeFileSync(${JSON.stringify(`${dir}/answer.json`)}, JSON.stringify(message.result ?? message.error));
+      setTimeout(() => process.exit(0), 20);
+      continue;
+    }
     const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
     if (message.method === 'initialize') reply({});
     else if (mode === 'silent') continue;
@@ -40,7 +46,8 @@ process.stdin.on('data', (chunk) => {
     } else if (message.method === 'turn/start') {
       require('fs').writeFileSync(${JSON.stringify(`${dir}/turn.json`)}, JSON.stringify(message.params));
       reply({ turn: { id: 'turn1' } });
-      if (mode === 'ask') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'q1', method: 'item/tool/requestUserInput', params: { threadId: 't1' } }) + '\\n');
+      if (mode === 'elicit') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'e1', method: 'mcpServer/elicitation/request', params: { threadId: 't1', serverName: 'gmail', mode: 'form', message: 'Send this email?', requestedSchema: { type: 'object', properties: { note: { type: 'string', default: 'ok' } } } } }) + '\\n');
+      else if (mode === 'ask') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'q1', method: 'item/tool/requestUserInput', params: { threadId: 't1' } }) + '\\n');
       else setTimeout(() => process.exit(0), 20);
     } else reply({});
   }
@@ -52,6 +59,6 @@ process.stdin.on('data', (chunk) => {
 }
 
 /** How to run the stand-in: node found on PATH by its first line, this one's folder first. */
-export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask') {
+export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask' | 'elicit') {
   return { codexPath: fakeCodex(dir, mode), cwd: dir, env: { ...process.env, PATH: `${process.execPath.replace(/\/node$/, '')}:${process.env.PATH ?? ''}` } };
 }

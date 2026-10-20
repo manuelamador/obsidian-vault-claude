@@ -85,6 +85,36 @@ test('a Codex chat sends its permissions with each turn (the sandbox, when it as
   }
 });
 
+test("a connector's confirmation (Gmail sending, say) reaches the approval card, and its answer goes back to Codex", async () => {
+  for (const allow of [true, false]) {
+    const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+    try {
+      let ended: () => void = () => undefined;
+      const done = new Promise<void>((resolve) => (ended = resolve));
+      const asked: { toolName: string; title?: string; input: Record<string, unknown> }[] = [];
+      const handlers = {
+        onMessage: () => undefined,
+        onEnd: () => ended(),
+        onPermission: async (request: { toolName: string; title?: string; input: Record<string, unknown> }) => {
+          asked.push(request);
+          return allow ? { behavior: 'allow' as const, updatedInput: {} } : { behavior: 'deny' as const, message: '' };
+        },
+      };
+      const session = new CodexSession(launchIn(dir, 'elicit'), handlers as never);
+      session.send('send it');
+      await done;
+      assert.equal(asked[0]?.toolName, 'mcp__gmail');
+      assert.equal(asked[0]?.title, 'gmail asks for your confirmation');
+      assert.equal(asked[0]?.input.description, 'Send this email?');
+      const answer = JSON.parse(readFileSync(`${dir}/answer.json`, 'utf8')) as Record<string, unknown>;
+      assert.deepEqual(answer, allow ? { action: 'accept', content: { note: 'ok' } } : { action: 'decline' });
+      session.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('Codex permissions: each choice as Codex takes it, and Full access only when bypass is offered', () => {
   assert.deepEqual(codexTurnAccess('readOnly'), { sandboxPolicy: { type: 'readOnly' }, approvalPolicy: 'on-request', approvalsReviewer: 'user' });
   assert.equal(codexTurnAccess('default').approvalPolicy, 'on-request');

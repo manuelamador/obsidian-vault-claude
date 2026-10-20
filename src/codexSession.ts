@@ -432,6 +432,7 @@ export class CodexSession {
 
   /** Codex asks to run a command or change files: the panel's approval card answers. */
   private async onServerRequest(requestId: number | string, method: string, params: Record<string, unknown>): Promise<void> {
+    if (method === 'mcpServer/elicitation/request') return this.onElicitation(requestId, params);
     const command = method === 'item/commandExecution/requestApproval' || method === 'execCommandApproval';
     const files = method === 'item/fileChange/requestApproval' || method === 'applyPatchApproval';
     if (!command && !files) {
@@ -463,6 +464,36 @@ export class CodexSession {
     } catch (error) {
       log('answering codex failed', error);
       if (!controller.signal.aborted) this.respond(requestId, { decision: decision(false) });
+    } finally {
+      this.approvals.delete(controller);
+    }
+  }
+
+  /**
+   * A tool of an MCP server (a connector: Gmail sending a message, say) asks for a confirmation before
+   * it acts: the panel's approval card answers it. A form is accepted with its fields' defaults, as the
+   * card asks nothing more; a link asked to be opened is opened once allowed. Declined, the tool does not act.
+   */
+  private async onElicitation(requestId: number | string, params: Record<string, unknown>): Promise<void> {
+    const server = typeof params.serverName === 'string' ? params.serverName : 'a connector';
+    const message = typeof params.message === 'string' ? params.message : '';
+    const url = params.mode === 'url' && typeof params.url === 'string' ? params.url : undefined;
+    const controller = new AbortController();
+    this.approvals.add(controller);
+    try {
+      const answer = await this.handlers.onPermission({
+        toolName: `mcp__${server}`,
+        input: { description: message || `${server} asks to go ahead`, ...(url ? { url } : {}) },
+        signal: controller.signal,
+        title: url ? `${server} asks you to open a link` : `${server} asks for your confirmation`,
+      });
+      if (controller.signal.aborted) return;
+      if (answer.behavior !== 'allow') return this.respond(requestId, { action: 'decline' });
+      if (url) window.open(url);
+      this.respond(requestId, url ? { action: 'accept' } : { action: 'accept', content: elicitationDefaults(params.requestedSchema) });
+    } catch (error) {
+      log('answering a codex elicitation failed', error);
+      if (!controller.signal.aborted) this.respond(requestId, { action: 'cancel' });
     } finally {
       this.approvals.delete(controller);
     }
@@ -688,6 +719,18 @@ export async function archiveCodexThread(launch: CodexLaunch, threadId: string):
   await withAppServer(launch, (request) => request('thread/archive', { threadId }));
 }
 
+/** A form's answer from its fields' defaults (an MCP elicitation's `requestedSchema`): empty for a plain confirmation. */
+export function elicitationDefaults(schema: unknown): Record<string, unknown> {
+  const properties = schema && typeof schema === 'object' ? (schema as { properties?: unknown }).properties : undefined;
+  const content: Record<string, unknown> = {};
+  if (!properties || typeof properties !== 'object') return content;
+  for (const [name, field] of Object.entries(properties as Record<string, unknown>)) {
+    const value = field && typeof field === 'object' ? (field as { default?: unknown }).default : undefined;
+    if (value !== undefined && value !== null) content[name] = value;
+  }
+  return content;
+}
+
 /** Codex threads being copied now (see CodexSession.start), how many copies, and whether one of them unarchived it. */
 const forksUnderWay = new Map<string, { count: number; unarchived: boolean; archiving?: Promise<void> }>();
 
@@ -786,6 +829,22 @@ export async function readCodexThread(launch: CodexLaunch, threadId: string): Pr
 }
 
 /** When Codex thread `threadId` last changed, read without its turns: whether a copy read before still holds (see loadAnyChat). */
+/**
+ * When the vault's Codex threads last changed (ms), by id, the most recently changed `limit` of each
+ * kind: those in Codex's lists and those kept out of them (archived; see CodexSessionConfig.hidden).
+ * Turns written elsewhere (Codex's app, the phone) count, which the panel's own records do not see.
+ */
+export async function readCodexThreadStamps(launch: CodexLaunch, limit = 100): Promise<Map<string, number>> {
+  return withAppServer(launch, async (request) => {
+    const stamps = new Map<string, number>();
+    for (const archived of [false, true]) {
+      const page = (await request('thread/list', { cwd: launch.cwd, archived, sortKey: 'updated_at', limit })) as { data?: { id?: unknown; updatedAt?: unknown }[] };
+      for (const thread of page.data ?? []) if (typeof thread.id === 'string' && typeof thread.updatedAt === 'number') stamps.set(thread.id, thread.updatedAt * 1000);
+    }
+    return stamps;
+  });
+}
+
 export async function readCodexThreadStamp(launch: CodexLaunch, threadId: string): Promise<number | undefined> {
   return withAppServer(launch, async (request) => {
     const read = (await request('thread/read', { threadId, includeTurns: false })) as { thread?: { updatedAt?: unknown } };
