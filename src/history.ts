@@ -64,10 +64,24 @@ export function stripContext(text: string): string {
   return text.replace(CONTEXT_BLOCK, '');
 }
 
-export function chatTitle(text: string): string {
-  const flat = stripContext(text).replace(/\s+/g, ' ').trim();
+/** A note or folder mentioned in a prompt (`@[[Research Projects/Swaps/]]`), as a title names it: `@Swaps`. */
+const MENTION = /@\[\[(?:[^\]]*\/)?([^\]/]+)\/?\]\]/g;
+
+export function chatTitle(text: string, mentions = true): string {
+  const stripped = stripContext(text);
+  const flat = (mentions ? stripped.replace(MENTION, '@$1') : stripped).replace(/\s+/g, ' ').trim();
   if (!flat) return 'Untitled chat';
   return flat.length > 80 ? `${flat.slice(0, 79)}…` : flat;
+}
+
+/**
+ * The titles session `id` would have been given from its first prompt (as now, and as before
+ * mentions were shortened), or none: to tell a chat still named after its first prompt from one
+ * renamed or named by Claude Code.
+ */
+export async function firstPromptTitles(id: string, dir: string): Promise<string[]> {
+  const first = await firstUserText(id, dir).catch(() => null);
+  return first === null ? [] : [chatTitle(first), chatTitle(first, false)];
 }
 
 export function formatDate(ms: number): string {
@@ -178,7 +192,8 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
     const panelTitle = fromPanel || interactiveIds.has(session.sessionId) || sideSessions.has(session.sessionId) ? false : unrecorded.get(session.sessionId);
     if (panelTitle) {
       fromPanel = true;
-      title = session.customTitle ? chatTitle(session.customTitle) : panelTitle;
+      // Claude Code's title (a /rename, else the one it generates), which is the first prompt until it has one.
+      title = session.customTitle || session.summary ? chatTitle(session.customTitle ?? session.summary) : panelTitle;
     }
     if (!fromPanel && !includeAll) continue;
     listed.push({

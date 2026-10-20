@@ -7,7 +7,7 @@ import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { EffortLevel, ModelInfo, SessionMessage, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
-import { chatTitle, deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
+import { chatTitle, firstPromptTitles, sessionTitle, deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
 import { codexTranscript, type CodexItem } from './codexEvents';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
@@ -2113,10 +2113,26 @@ export default class VaultClaudePlugin extends Plugin {
     const known = new Set(this.chats.map((chat) => chat.id));
     const found = items.filter((item) => item.fromPanel && item.engine !== 'codex' && !known.has(item.id) && item.id !== this.scratch?.id && !this.sideSessions.includes(item.id));
     this.chats.push(...found.map((item) => ({ id: item.id, title: item.title })));
-    await this.saveSettings();
     const added = this.chats.length - before;
-    log('chat list rebuilt', { added });
-    new Notice(added === 0 ? 'Every chat in the history was already recorded.' : `${added} chat${added === 1 ? '' : 's'} recorded again.`);
+    // Claude chats still named after their first prompt take Claude Code's title, as a chat on screen
+    // does after its first reply (see ChatView.refreshTitle); renamed ones keep theirs.
+    let retitled = 0;
+    const dir = this.vaultRoot();
+    if (dir) {
+      await eachInParallel(
+        this.chats.filter((chat) => chat.engine !== 'codex'),
+        async (chat) => {
+          const [title, fromPrompt] = await Promise.all([sessionTitle(chat.id, dir).catch(() => null), firstPromptTitles(chat.id, dir)]);
+          if (!title || title === chat.title || !fromPrompt.includes(chat.title)) return;
+          this.renameChat(chat.id, title);
+          retitled += 1;
+        },
+      );
+    }
+    await this.saveSettings();
+    log('chat list rebuilt', { added, retitled });
+    const said = [added > 0 ? `${added} chat${added === 1 ? '' : 's'} recorded again` : '', retitled > 0 ? `${retitled} renamed with Claude Code's title` : ''].filter(Boolean);
+    new Notice(said.length === 0 ? 'Every chat in the history was already recorded and named.' : `${said.join('; ')}.`);
   }
 
   /** Codex chat `id` was active now: the history sorts it by this (see ChatRecord.at). */
