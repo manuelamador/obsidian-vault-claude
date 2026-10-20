@@ -41,6 +41,8 @@ test('a Codex read that fails is tried again later, and recovers the chats then,
     await internals.codexRead;
     assert.equal(p.chats.length, 0);
     p.codexLaunch = () => launchIn(answering, 'threads');
+    // Time enough to start the stand-in: only the silent one is meant to run out.
+    internals.codexReadMaxMs = 10_000;
     await internals.refreshCodexStamps();
     await internals.codexRead;
     assert.deepEqual(

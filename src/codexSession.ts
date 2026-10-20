@@ -25,6 +25,11 @@ export interface CodexSessionConfig extends CodexLaunch {
   readOnly?: boolean;
   /** Kept out of Codex's own lists (the app, the phone): archived when the session ends, unarchived before it resumes. */
   hidden?: boolean;
+  /**
+   * The connector requests allowed for the rest of a chat (see ConnectorRequest.allowKey), by thread:
+   * kept by the panel, so that they outlive this process (one let go of when idle, say).
+   */
+  connectorAllowances?: { allowed(threadId: string, key: string): boolean; allow(threadId: string, key: string): void };
   /** Hidden, the thread copied (see fork) is archived again once copied, when this says nothing else has it open. */
   forkLetGo?: () => boolean;
   /** Instructions added to Codex's own (as the panel's system prompt addition is for Claude). */
@@ -533,8 +538,15 @@ export class CodexSession {
       log('codex elicitation for another thread refused', { threadId: params.threadId });
       return reply('cancel');
     }
-    const server = typeof params.serverName === 'string' ? params.serverName : 'a connector';
     const { connector, content } = readElicitation(params);
+    // Named by the app it is for ("Allow Gmail to run tool …"), else by its server (codex_apps).
+    const server = connectorApp(connector.message) ?? (typeof params.serverName === 'string' ? params.serverName : 'a connector');
+    // Allowed for this chat already: answered without a card.
+    const allowances = this.config.connectorAllowances;
+    if (connector.allowKey && !connector.cannotAnswer && !connector.url && this.sessionId && allowances?.allowed(this.sessionId, connector.allowKey)) {
+      log('codex elicitation allowed for this chat', { key: connector.allowKey });
+      return reply('accept', content);
+    }
     const controller = new AbortController();
     const key = String(requestId);
     this.elicitations.set(key, controller);
@@ -549,7 +561,11 @@ export class CodexSession {
       });
       // Resolved elsewhere (see serverRequest/resolved): nothing to answer.
       if (!this.elicitations.has(key)) return;
-      if (answer.behavior === 'allow' && !connector.cannotAnswer) reply('accept', connector.url ? null : content);
+      if (answer.behavior === 'allow' && !connector.cannotAnswer) {
+        // "Allow for this chat": the same request goes through without a card from now on in this chat.
+        if (answer.decisionClassification === 'user_permanent' && connector.allowKey && this.sessionId) allowances?.allow(this.sessionId, connector.allowKey);
+        reply('accept', connector.url ? null : content);
+      }
       else reply(answer.behavior === 'deny' && answer.message === CONNECTOR_DECLINED ? 'decline' : 'cancel');
     } catch (error) {
       log('answering a codex elicitation failed', error);
@@ -780,6 +796,17 @@ export async function archiveCodexThread(launch: CodexLaunch, threadId: string):
   await withAppServer(launch, (request) => request('thread/archive', { threadId }));
 }
 
+/** The app a connector's request is for, from its message ("Allow Gmail to run tool …"); undefined when it does not say. */
+function connectorApp(message: string): string | undefined {
+  return /^Allow (.+?) to run tool\b/.exec(message)?.[1];
+}
+
+/** What "Allow for this chat" allows for a request (see ConnectorRequest.allowKey): the tool it names, else its whole message. */
+function allowKeyOf(message: string): string | undefined {
+  const tool = /\brun tool "([^"]+)"/.exec(message)?.[1];
+  return tool ? `tool:${tool}` : message.trim() ? `message:${message.trim()}` : undefined;
+}
+
 /** The ways a connector asks with a form (see readElicitation), as Codex's app-server names them. */
 const FORM_MODES = new Set(['form', 'openai/form', 'openaiForm']);
 
@@ -799,7 +826,8 @@ function shownValue(value: unknown): string {
 export function readElicitation(params: Record<string, unknown>): { connector: ConnectorRequest; content: Record<string, unknown> } {
   const message = typeof params.message === 'string' ? params.message : '';
   const mode = typeof params.mode === 'string' ? params.mode : 'form';
-  const connector: ConnectorRequest = { message, fields: [] };
+  const allowKey = allowKeyOf(message);
+  const connector: ConnectorRequest = { message, fields: [], ...(allowKey ? { allowKey } : {}) };
   const content: Record<string, unknown> = {};
   if (mode === 'url') {
     const url = typeof params.url === 'string' ? params.url : '';

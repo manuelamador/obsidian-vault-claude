@@ -47,6 +47,8 @@ export interface ConnectorRequest {
   url?: string;
   /** Why it cannot be answered from the panel: the card offers only Cancel. */
   cannotAnswer?: string;
+  /** What "Allow for this chat" allows (the tool it asks to run, say): offered when there is one. */
+  allowKey?: string;
 }
 
 /** The connector card's Decline (see ConnectorRequest): a refusal, which every other way of not answering (Cancel, Esc, a closed chat) is not. */

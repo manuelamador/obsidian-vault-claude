@@ -319,3 +319,24 @@ test('a chat kept out of Codex\'s lists is archived as each reply ends, listed a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a connector's request allowed for the chat is answered without a card", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  try {
+    let ended: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => (ended = resolve));
+    const asked: PermissionRequest[] = [];
+    const allowed: string[] = [];
+    const handlers = { onMessage: () => undefined, onEnd: () => ended(), onPermission: async (request: PermissionRequest) => (asked.push(request), { behavior: 'deny' as const, message: '' }) };
+    const connectorAllowances = { allowed: (threadId: string, key: string) => (allowed.push(`${threadId} ${key}`), true), allow: () => undefined };
+    const session = new CodexSession({ ...launchIn(dir, 'elicit'), connectorAllowances }, handlers as never);
+    session.send('send it');
+    await done;
+    assert.equal(asked.length, 0);
+    assert.deepEqual(allowed, ['t1 message:Send this email?']);
+    assert.deepEqual(JSON.parse(readFileSync(`${dir}/answer.json`, 'utf8')), { action: 'accept', content: { note: 'ok' }, _meta: null });
+    session.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

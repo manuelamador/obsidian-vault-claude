@@ -247,7 +247,11 @@ interface Mention {
 const APPEND_SYSTEM_PROMPT =
   'The user is chatting with you from a sidebar panel inside Obsidian; the working directory is their vault. ' +
   'Replies render as Obsidian Markdown: [[wikilinks]] to notes are clickable, and callouts and $…$ / $$…$$ math render. ' +
-  'Gmail drafts you write and messages you read through the Gmail connector show in the panel as cards (recipients, subject, text), so do not repeat them in your reply: say only what the cards do not.';
+  'Gmail drafts you write, update or send and messages you read through a Gmail connector show in the panel as cards (recipients, subject, text). ' +
+  'After such a call, reply in a sentence or two saying what was done; never restate the recipients, subject or text, which the card shows. ' +
+  'A request to send a Gmail draft by its id means sending the draft itself with the connector\'s send tool given that id (Claude\'s Gmail: send_message with draftId; Codex\'s Gmail: send_draft with draft_id), never a copy of its text; Gmail removes the draft as it sends it, so there is nothing to delete. ' +
+  'To archive a thread is to take it out of the inbox (remove its INBOX label), keeping it in All Mail. ' +
+  'A request to update a draft to a given subject and text means writing them exactly as given, keeping its recipients; read the draft first, and if it has attachments, do not update it (the update would remove them): say so, for it to be edited in Gmail.';
 /** Added for a side chat (see SideChat); `seen`: it has a copy of the chat it was opened beside. */
 function sideChatPrompt(seen: boolean): string {
   const where = seen
@@ -5214,7 +5218,7 @@ export class ChatView extends ItemView {
     const token = {};
     this.sessionToken = token;
     this.session = new CodexSession(
-      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, fast: this.fastMode, hidden: this.plugin.settings.codexHidden, denyRules: sessionDenyRules(this.plugin.settings) },
+      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, fast: this.fastMode, hidden: this.plugin.settings.codexHidden, denyRules: sessionDenyRules(this.plugin.settings), connectorAllowances: this.plugin.connectorAllowances },
       this.foregroundHandlers(token),
     );
     return this.session;
@@ -7260,13 +7264,10 @@ export class ChatView extends ItemView {
     const start = draft.body ? ` “${draft.body.length > 300 ? `${draft.body.slice(0, 300)}…` : draft.body}”` : '';
     const what = `${to ? `To ${to}` : 'To the recipients set in the draft'}${draft.subject ? `, “${draft.subject}”` : ''}.${start} Sent mail cannot be taken back.`;
     const request = (archive: boolean) => {
-      const sendTool = draft.connector === 'codex' ? 'gmail_send_draft with draft_id' : 'send_message with draftId';
-      const thread = draft.threadId ? ` thread ${draft.threadId}` : ' its thread';
-      const then = archive ? ` Then archive${thread} (take it out of the inbox, keeping it in All Mail).` : '';
-      this.sendOrDraft(
-        `Send the Gmail draft ${draft.id} now, exactly as it is: send the draft itself by its id (${sendTool}), not a copy of its text, so that its recipients, text, attachments and thread go as they are. Gmail removes the draft as it sends it: there is nothing to delete.${then} Say whether it was sent.`,
-        'Send request added below your draft: send it when ready',
-      );
+      // What to do is said plainly; how (by its id, never a copy) is in the panel's standing instructions (see APPEND_SYSTEM_PROMPT).
+      const name = draft.subject ? `the draft “${draft.subject}”` : 'the draft';
+      const ids = `Draft ${draft.id}${archive && draft.threadId ? `, thread ${draft.threadId}` : ''}.`;
+      this.sendOrDraft(`Send ${name}${to ? ` to ${to}` : ''} by its id${archive ? ', then archive its thread' : ''}. ${ids}`, 'Send request added below your draft: send it when ready');
     };
     new ChoiceModal(this.app, 'Send this draft?', what, [
       ['Send and archive', () => request(true)],
@@ -7280,11 +7281,8 @@ export class ChatView extends ItemView {
    * given again, which Claude cannot do: one with attachments is left, for editing in Gmail.
    */
   private requestDraftEdit(draft: EmailDraft, subject: string, body: string): void {
-    const text =
-      `Update the Gmail draft ${draft.id} with the Gmail connector's draft update tool (update_draft), keeping its recipients: set its subject and its text to these JSON strings' values, exactly, with no rewording and nothing added.\n` +
-      'Read the draft first (get_draft): if it has attachments, do not update it (the update would remove them); say that it has attachments and should be edited in Gmail.\n' +
-      `Subject: ${JSON.stringify(subject)}\nText: ${JSON.stringify(body)}`;
-    this.sendOrDraft(text, 'Draft edit added below your message: send it when ready');
+    // How (exactly, recipients kept, not with attachments) is in the panel's standing instructions (see APPEND_SYSTEM_PROMPT).
+    this.sendOrDraft(`Update draft ${draft.id} to this subject and text, exactly as written:\n\nSubject: ${subject}\n\n${body}`, 'Draft edit added below your message: send it when ready');
   }
 
   /** Sends `text` as a message when the input is empty; with a draft there, adds it below for you to send (`hint` says so). */
@@ -7578,6 +7576,7 @@ export class ChatView extends ItemView {
       button('Cancel', cancel);
     } else {
       button('Allow', () => finish({ behavior: 'allow', updatedInput: input }, 'Allowed'), true);
+      if (connector.allowKey) button('Allow for this chat', () => finish({ behavior: 'allow', updatedInput: input, decisionClassification: 'user_permanent' }, 'Allowed for this chat'));
       button('Decline', () => finish({ behavior: 'deny', message: CONNECTOR_DECLINED }, 'Declined'));
     }
   }

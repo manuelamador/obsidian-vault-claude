@@ -6,7 +6,7 @@ test('an empty form is a plain confirmation, its message whole and as written', 
   // The sample request of a bug report (2026-10-20), with markup in its message left as text.
   const message = 'Send the attached test PDF to recipient@example.com?\n<b>Two attachments</b>';
   const { connector, content } = readElicitation({ threadId: 't', turnId: 'u', serverName: 'gmail', mode: 'form', message, requestedSchema: { type: 'object', properties: {} } });
-  assert.deepEqual(connector, { message, fields: [] });
+  assert.deepEqual(connector, { message, fields: [], allowKey: `message:${message}` });
   assert.deepEqual(content, {});
 });
 
@@ -36,4 +36,9 @@ test('a link is offered only if http or https; another way of asking cannot be a
   assert.equal(unsafe.url, undefined);
   assert.equal(unsafe.cannotAnswer, 'It asks to open a link the panel does not open: javascript:alert(1)');
   assert.equal(readElicitation({ mode: 'openai/userVerification', message: 'Verify' }).connector.cannotAnswer, 'It asks in a way the panel does not support (openai/userVerification).');
+});
+
+test('a request naming the tool it runs is allowed for a chat by that tool', () => {
+  const { connector } = readElicitation({ mode: 'form', message: 'Allow Gmail to run tool "gmail.send_draft"?', requestedSchema: { type: 'object', properties: {} } });
+  assert.equal(connector.allowKey, 'tool:gmail.send_draft');
 });

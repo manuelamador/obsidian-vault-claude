@@ -527,6 +527,18 @@ export default class VaultClaudePlugin extends Plugin {
   scratch: { id: string; usedAt: number; engine?: 'codex'; codex?: CodexChoices; claude?: ClaudeChoices } | null = null;
   /** Side chats' sessions not deleted yet: those open now, and any left when Obsidian last quit. */
   sideSessions: string[] = [];
+  /**
+   * Connector requests allowed for the rest of a Codex chat ("Allow for this chat" on its card, see
+   * CodexSession.onElicitation), by thread. Kept while Obsidian runs, not saved: a chat opened after a
+   * restart asks again.
+   */
+  readonly connectorAllowances = (() => {
+    const byThread = new Map<string, Set<string>>();
+    return {
+      allowed: (threadId: string, key: string) => byThread.get(threadId)?.has(key) === true,
+      allow: (threadId: string, key: string) => void (byThread.get(threadId) ?? byThread.set(threadId, new Set()).get(threadId))?.add(key),
+    };
+  })();
   /** Codex chats deleted in the panel, whose threads stay in Codex's store: not recorded from it again. */
   deletedCodex: string[] = [];
   /**
