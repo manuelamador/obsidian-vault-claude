@@ -155,6 +155,8 @@ const MOD_CLICK = Platform.isMacOS ? '⌘-click' : 'Ctrl-click';
  */
 const ALT_CLICK = Platform.isMacOS ? '⌥-click' : 'Alt-click';
 const LONG_MESSAGE_CHARS = 700;
+/** How often the Codex chat on screen is checked for turns written elsewhere (see followCodexChat). */
+const CODEX_FOLLOW_MS = 5_000;
 const MAX_PREVIEW_LINES = 60;
 const PLAN_USAGE_INTERVAL_MS = 60_000;
 
@@ -936,6 +938,8 @@ export class ChatView extends ItemView {
     this.register(() => {
       if (this.notesCountTimer !== null) window.clearTimeout(this.notesCountTimer);
     });
+    // A Codex chat on screen follows turns written elsewhere (Codex's app, the phone).
+    this.registerInterval(window.setInterval(() => void this.followCodexChat(), CODEX_FOLLOW_MS));
     // The time left until each window resets counts down between readings.
     this.registerInterval(
       window.setInterval(() => {
@@ -1452,6 +1456,7 @@ export class ChatView extends ItemView {
     this.codexAccess = this.plugin.settings.codexAccess;
     this.unseen = null;
     this.lastSent = null;
+    this.heldBy = null;
     this.historyAt = null;
     this.reportTo = null;
     this.lastReplyText = '';
@@ -1635,6 +1640,111 @@ export class ChatView extends ItemView {
     const sessions = [this.session, ...[...this.background].map((entry) => entry.session)].filter((session): session is CodexSession => session instanceof CodexSession && session.shared);
     for (const session of sessions) session.close();
     return sessions.map((session) => session.ended);
+  }
+
+  /** The Codex chat on screen, open in another Codex app that holds it (see holdCodexChat): its id. */
+  private heldBy: string | null = null;
+  /** A follow of the chat on screen under way (see followCodexChat). */
+  private following = false;
+
+  /**
+   * The Codex chat on screen could not be written: another Codex app (the ChatGPT app, written in
+   * there or from the phone through it) holds it while it is open there, which nothing here can make it
+   * give up. The message goes back to the input, marked not sent on screen, and is never sent by
+   * itself: Try again reads what was written there first, so it can be changed before sending.
+   */
+  private holdCodexChat(): void {
+    const id = this.chatId ?? this.resumeId;
+    if (!id) return;
+    this.heldBy = id;
+    const users = this.messagesEl.querySelectorAll<HTMLElement>('.vc-user');
+    const last = users[users.length - 1];
+    if (last && !last.hasClass('is-unsent')) {
+      last.addClass('is-unsent');
+      last.createDiv({ cls: 'vc-queued-label', text: 'Not sent: the chat is open in the ChatGPT app' });
+    }
+    if (this.lastSent && !this.inputEl.value.includes(this.lastSent)) this.restoreUnsent(this.lastSent, [], new Set());
+    this.renderHeldNotice(id);
+  }
+
+  /** The note under a held chat (see holdCodexChat), with what can be done. */
+  private renderHeldNotice(id: string): void {
+    const el = this.container().createDiv({ cls: 'vc-notice vc-notice-error vc-held' });
+    el.appendText('This chat is open in the ChatGPT app, which holds it while it is open there (a message written in the app, or from the phone through it, opens it). Your message is back in the input. Close the chat in the ChatGPT app, or quit the app, then ');
+    const retry = el.createEl('a', { text: 'try again', href: '#' });
+    retry.addEventListener('click', (evt) => {
+      evt.preventDefault();
+      void this.retryHeldChat(id);
+    });
+    el.appendText(', or ');
+    const copy = el.createEl('a', { text: 'continue in a copy', href: '#' });
+    copy.addEventListener('click', (evt) => {
+      evt.preventDefault();
+      void this.continueHeldInCopy(id);
+    });
+    el.appendText('.');
+    this.scrollToBottom();
+  }
+
+  /** Try again on a held chat: what was written elsewhere read first, the message left in the input to send. */
+  private async retryHeldChat(id: string): Promise<void> {
+    if ((this.chatId ?? this.resumeId) !== id) return;
+    this.heldBy = null;
+    await this.refreshCodexChat(id);
+    this.inputEl.focus();
+  }
+
+  /** A held chat carried on in a copy of it (see branchCodex), the message going with it. */
+  private async continueHeldInCopy(id: string): Promise<void> {
+    if ((this.chatId ?? this.resumeId) !== id) return;
+    const text = this.inputEl.value;
+    this.inputEl.value = '';
+    this.saveDraft();
+    const copy = await this.branchCodex(id, undefined, false, undefined, true, true);
+    if (!copy) {
+      this.inputEl.value = text;
+      this.inputEdited();
+      return;
+    }
+    this.heldBy = null;
+    this.inputEl.value = text;
+    this.inputEdited();
+    this.inputEl.focus();
+  }
+
+  /**
+   * The Codex chat on screen read again when Codex says it changed since it was read: turns written
+   * in Codex's app or from the phone appear without leaving the chat. Not while it works here or
+   * waits on you; while you type, the input keeps what is typed and where the cursor is (see refreshCodexChat).
+   */
+  private async followCodexChat(): Promise<void> {
+    const id = this.chatId ?? this.resumeId;
+    if (this.following || !id || this.engine !== 'codex' || this.scratch || !this.isOnScreen()) return;
+    if (this.busy || this.pending.size > 0 || this.tasks.size > 0 || this.openApprovals.length > 0) return;
+    this.following = true;
+    try {
+      if (!(await this.plugin.codexThreadChanged(id))) return;
+      if ((this.chatId ?? this.resumeId) !== id || this.busy) return;
+      await this.refreshCodexChat(id);
+    } finally {
+      this.following = false;
+    }
+  }
+
+  /** Draws Codex chat `id`, on screen, again as Codex has it now; the input's draft kept, a held chat's note too. */
+  private async refreshCodexChat(id: string): Promise<void> {
+    const held = this.heldBy === id;
+    const typing = document.activeElement === this.inputEl ? { start: this.inputEl.selectionStart, end: this.inputEl.selectionEnd } : null;
+    this.plugin.forgetCodexRead(id);
+    await this.showSavedChat({ id, title: this.chatName ?? this.plugin.chatTitleOf(id), updatedAt: Date.now(), fromPanel: this.plugin.isPanelChat(id) });
+    if (typing) {
+      this.inputEl.focus();
+      this.inputEl.setSelectionRange(typing.start, typing.end);
+    }
+    if (held && (this.chatId ?? this.resumeId) === id) {
+      this.heldBy = id;
+      this.renderHeldNotice(id);
+    }
   }
 
   /** Codex's shared app-server is being started (see VaultClaudePlugin.setPhoneCodex). */
@@ -6598,6 +6708,7 @@ export class ChatView extends ItemView {
         break;
       case 'result': {
         if (this.engine === 'codex' && this.chatId) {
+          this.heldBy = null;
           this.plugin.touchCodexChat(this.chatId);
           this.releaseCodexWhenIdle();
         }
@@ -6676,7 +6787,7 @@ export class ChatView extends ItemView {
       // Codex lets one process write a thread at a time: one the ChatGPT app has open (written in there,
       // or from the phone through it) cannot be written here until it lets go.
       const held = this.engine === 'codex' && /already has an active writer/.test(error.message);
-      if (held) this.renderNotice('This chat is open in the ChatGPT app, which holds it while it is open there (a message written in the app, or from the phone through it, opens it). Close the chat in the ChatGPT app, or quit the app, then send again.');
+      if (held) this.holdCodexChat();
       else this.renderNotice(`${this.engine === 'codex' ? 'Codex' : 'Claude Code'} stopped: ${error.message}${stderrTail ? `\n\n${stderrTail}` : ''}`);
     }
     this.endTurn();

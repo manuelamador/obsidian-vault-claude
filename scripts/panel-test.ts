@@ -4613,6 +4613,52 @@ async function main(): Promise<void> {
     }
 
     {
+      // A Codex chat on screen follows turns written elsewhere (the phone), and one held by another Codex app keeps the message.
+      const { codexTranscript } = await import('../src/codexEvents');
+      const host = plugin as unknown as Record<string, unknown>;
+      const was = { isCodexChat: host.isCodexChat, isPanelChat: host.isPanelChat, codexThreadChanged: host.codexThreadChanged };
+      const followView = view as unknown as {
+        readForOpening: unknown;
+        openChat(item: unknown): Promise<boolean>;
+        followCodexChat(): Promise<void>;
+        holdCodexChat(): void;
+        renderUserBubble(text: string, chips: unknown[], parent?: HTMLElement, uuid?: string): HTMLElement;
+        lastSent: string | null;
+        messagesEl: HTMLElement;
+        inputEl: HTMLTextAreaElement;
+      };
+      const turn = (n: number, text: string) => ({ items: [{ type: 'userMessage', id: `u${n}`, content: [{ type: 'text', text: `prompt ${n}` }] }, { type: 'agentMessage', id: `a${n}`, text }] });
+      let turns = [turn(1, 'first reply')];
+      let changed = false;
+      host.isCodexChat = (id: string) => id === 'cx-follow';
+      host.isPanelChat = () => true;
+      host.codexThreadChanged = async () => changed;
+      followView.readForOpening = async () => ({ chat: codexTranscript('cx-follow', turns as never, '/tmp'), readMs: 0 });
+      await followView.openChat({ id: 'cx-follow', title: 'Followed', updatedAt: 0, fromPanel: true });
+      turns = [...turns, turn(2, 'reply written on the phone')];
+      await followView.followCodexChat();
+      const unchangedNotRead = !followView.messagesEl.textContent?.includes('reply written on the phone');
+      changed = true;
+      await followView.followCodexChat();
+      const followed = followView.messagesEl.textContent?.includes('reply written on the phone') === true;
+      followView.lastSent = 'hey from obsidian';
+      followView.renderUserBubble('hey from obsidian', [], followView.messagesEl, 'held-1');
+      followView.holdCodexChat();
+      const heldInput = followView.inputEl.value.includes('hey from obsidian');
+      const heldNote = followView.messagesEl.querySelector('.vc-held') !== null && followView.messagesEl.querySelector('.vc-user.is-unsent') !== null;
+      turns = [...turns, turn(3, 'another phone reply')];
+      await followView.followCodexChat();
+      const heldKept = followView.messagesEl.textContent?.includes('another phone reply') === true && followView.messagesEl.querySelector('.vc-held') !== null && followView.inputEl.value.includes('hey from obsidian');
+      Object.assign(host, was);
+      delete (followView as unknown as Record<string, unknown>).readForOpening;
+      followView.inputEl.value = '';
+      view.newChat();
+      const followOk = unchangedNotRead && followed && heldInput && heldNote && heldKept;
+      console.log(`Codex chat follows and holds: unchanged not read ${unchangedNotRead}; followed ${followed}; held message back ${heldInput}; note ${heldNote}; kept through a refresh ${heldKept} -> ${followOk}`);
+      if (!followOk) process.exitCode = 1;
+    }
+
+    {
       // A Codex chat offers fast mode where its model has Codex's fast tier, and not where it has none.
       const fastView = view as unknown as { useEngine(engine: 'claude' | 'codex'): void; fastButton: HTMLElement };
       const models = plugin as unknown as { codexModels: unknown[] };

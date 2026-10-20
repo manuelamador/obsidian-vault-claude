@@ -1760,9 +1760,11 @@ export default class VaultClaudePlugin extends Plugin {
     if (kept && (await readCodexThreadStamp(launch, id).catch(() => undefined)) === kept.updatedAt) {
       this.codexReads.delete(id);
       this.codexReads.set(id, kept);
+      this.codexReadStamps.set(id, kept.updatedAt);
       return { transcript: [...kept.chat.transcript], edits: kept.chat.edits };
     }
     const read = await readCodexThread(launch, id);
+    if (read.updatedAt !== undefined) this.codexReadStamps.set(id, read.updatedAt);
     const { transcript, edits } = codexTranscript(id, read.turns as { items?: CodexItem[] }[], launch.cwd);
     const chat: LoadedChat = { transcript: transcript as unknown as LoadedChat['transcript'], edits };
     this.codexReads.delete(id);
@@ -1783,6 +1785,28 @@ export default class VaultClaudePlugin extends Plugin {
   /** Lets go of what was read of Codex chat `id`: it has changed (a turn ended, part was removed), read again next time. */
   forgetCodexRead(id: string): void {
     this.codexReads.delete(id);
+    this.codexReadStamps.delete(id);
+  }
+
+  /** When each Codex thread had last changed as last read (see loadAnyChat), by id. */
+  private readonly codexReadStamps = new Map<string, number>();
+
+  /**
+   * Whether Codex thread `id` has changed since it was last read (a turn written from Codex's app or
+   * the phone, say), as Codex stamps it, without reading the conversation. Not read yet, or let go
+   * of after the panel's own turn (see forgetCodexRead): its stamp now is taken as the one read.
+   */
+  async codexThreadChanged(id: string): Promise<boolean> {
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return false;
+    const stamp = await readCodexThreadStamp(launch, id).catch(() => undefined);
+    if (stamp === undefined) return false;
+    const known = this.codexReadStamps.get(id);
+    if (known === undefined) {
+      this.codexReadStamps.set(id, stamp);
+      return false;
+    }
+    return stamp !== known;
   }
 
   /**
