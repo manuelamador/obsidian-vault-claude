@@ -55,3 +55,25 @@ test("the chats' and notes' data moves from data.json to chats.json, and each is
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('data.json from before chats.json (0.35 and earlier) keeps its chats, pins and summaries', async () => {
+  const root = mkdtempSync(`${tmpdir()}/vc-storage-old-`);
+  const dir = `${root}/plugin`;
+  mkdirSync(dir);
+  try {
+    writeFileSync(`${dir}/data.json`, JSON.stringify({ settings: { panelMargin: 40 }, chats: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }], pinned: ['b'], chatSummaries: { a: { text: 'sum', at: 1 } }, drafts: { a: { text: 'draft', at: Date.now() } } }));
+    const p = pluginIn(root);
+    await p.loadSettings();
+    await p.saveSettings();
+    const again = pluginIn(root);
+    await again.loadSettings();
+    assert.deepEqual(again.chats.map((chat) => chat.id), ['a', 'b']);
+    assert.deepEqual(again.pinned, ['b']);
+    assert.equal(again.chatSummaries.a?.text, 'sum');
+    assert.equal(again.drafts.a?.text, 'draft');
+    assert.equal(again.settings.panelMargin, 40);
+    assert.equal('chats' in JSON.parse(readFileSync(`${dir}/data.json`, 'utf8')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
