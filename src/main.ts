@@ -2360,7 +2360,11 @@ export default class VaultClaudePlugin extends Plugin {
    */
   async closeBackgroundChat(id: string): Promise<boolean> {
     const running = this.backgroundChat(id);
-    if (!running) return false;
+    // On screen in a panel, where it carries on: only taken off the phone.
+    if (!running) {
+      for (const view of this.chatViews()) if (await view.takeChatOffPhone(id)) return true;
+      return false;
+    }
     const ends = [
       running.busy ? 'the reply it is writing' : '',
       running.tasks > 0 ? (running.tasks === 1 ? 'its background task' : `its ${running.tasks} background tasks`) : '',

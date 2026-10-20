@@ -2340,6 +2340,13 @@ export class ChatView extends ItemView {
     return true;
   }
 
+  /** Takes chat `id` off the phone if it is this panel's chat on screen and on the phone; whether it did. */
+  async takeChatOffPhone(id: string): Promise<boolean> {
+    if ((this.chatId ?? this.resumeId) !== id || !this.remoteUrl) return false;
+    await this.setChatRemote(false);
+    return true;
+  }
+
   /** This panel's chats on the phone: the one on screen and those in its background. */
   phoneChatIds(): string[] {
     const onScreen = this.chatId ?? this.resumeId;

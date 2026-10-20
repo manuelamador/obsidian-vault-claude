@@ -16,7 +16,7 @@ export interface HistoryActions {
   searchText(item: HistoryItem): Promise<string>;
   /** Stops the tasks a chat is running in the background. */
   stopTasks(item: HistoryItem): void;
-  /** Ends the process of a chat running in a panel's background; resolves to whether it was ended. */
+  /** Ends the process of a chat running in a panel's background, or takes one on screen off the phone; resolves to whether it did. */
   close?(item: HistoryItem): Promise<boolean>;
   /** The notes chats are linked to: those that changed each note, those it was sent to, and those that mentioned it. */
   noteLinks(): { changed: NoteChats; sent: NoteChats; mentioned: NoteChats };
@@ -346,14 +346,18 @@ export class HistoryModal extends SuggestModal<Match> {
       });
     }
     const { close } = this.actions;
-    if (item.inBackground && close) {
-      this.addButton(buttons, 'x', item.onPhone ? 'Close: end its process and take it off the phone' : 'Close: end its process (the chat is kept)', () => {
+    // In a panel's background: closed. On screen in a panel and on the phone: taken off the phone.
+    if ((item.inBackground || item.onPhone) && close) {
+      const label = !item.inBackground ? 'Take it off the phone' : item.onPhone ? 'Close: end its process and take it off the phone' : 'Close: end its process (the chat is kept)';
+      this.addButton(buttons, 'x', label, () => {
         void close(item).then((closed) => {
           if (!closed) return;
+          if (item.inBackground) {
+            item.status = undefined;
+            item.tasksRunning = false;
+          }
           item.inBackground = false;
-          item.status = undefined;
           item.onPhone = false;
-          item.tasksRunning = false;
           this.refresh();
         });
       });
