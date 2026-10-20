@@ -261,6 +261,8 @@ async function writeWhole(file: string, data: unknown): Promise<void> {
 interface PluginData {
   settings?: Partial<VaultClaudeSettings>;
   codexThreadsNamed?: boolean;
+  /** The plugin version the chat list was last rebuilt for (see rebuildChatListOnUpdate). */
+  chatListRebuiltFor?: string;
   /** The shared app-server the panel started, as Codex records it (see codexDaemonIdentity). */
   startedCodexDaemon?: string | boolean;
   chats?: ChatRecord[];
@@ -801,6 +803,7 @@ export default class VaultClaudePlugin extends Plugin {
       void this.sweepSideSessions(leftover);
       void this.tidyPlanNotes();
       void this.nameCodexThreadsOnce();
+      void this.rebuildChatListOnUpdate();
       // Listed once soon after starting, so that even the first history opened shows its rows at once;
       // and the note links of sessions Claude Code has since deleted are let go.
       const timer = window.setTimeout(() => {
@@ -1770,6 +1773,25 @@ export default class VaultClaudePlugin extends Plugin {
   /** Whether the Codex threads recorded before naming have been named (see nameCodexThreadsOnce). */
   private codexThreadsNamed = false;
 
+  /**
+   * Once per version, the first time Obsidian starts with it: the chat list rebuilt (see
+   * rebuildChatList), so that what an update changes in how chats are listed or named reaches the
+   * chats there are already; a notice only when it changed something.
+   */
+  private async rebuildChatListOnUpdate(): Promise<void> {
+    if (this.chatListRebuiltFor === this.manifest.version) return;
+    try {
+      await this.rebuildChatList(true);
+      this.chatListRebuiltFor = this.manifest.version;
+      this.saveSoon();
+    } catch (error) {
+      log('rebuilding the chat list after an update failed', error);
+    }
+  }
+
+  /** The plugin version the chat list was last rebuilt for (see rebuildChatListOnUpdate). */
+  private chatListRebuiltFor: string | null = null;
+
   /** When the Codex models were last asked for: a failed listing is not asked again at once. */
   private codexModelsTriedAt = 0;
 
@@ -2105,7 +2127,8 @@ export default class VaultClaudePlugin extends Plugin {
    * SDK started (see listHistory) and Codex threads the panel started (see refreshCodexStamps). The
    * history lists them without records; recorded, they keep their place among the panel's chats.
    */
-  async rebuildChatList(): Promise<void> {
+  /** `quiet`: no notice when nothing changed, as when run after an update (see rebuildChatListOnUpdate). */
+  async rebuildChatList(quiet = false): Promise<void> {
     const before = this.chats.length;
     this.codexRecovered = false;
     this.listedAt = 0;
@@ -2132,7 +2155,8 @@ export default class VaultClaudePlugin extends Plugin {
     await this.saveSettings();
     log('chat list rebuilt', { added, retitled });
     const said = [added > 0 ? `${added} chat${added === 1 ? '' : 's'} recorded again` : '', retitled > 0 ? `${retitled} renamed with Claude Code's title` : ''].filter(Boolean);
-    new Notice(said.length === 0 ? 'Every chat in the history was already recorded and named.' : `${said.join('; ')}.`);
+    if (said.length > 0) new Notice(`${quiet ? 'Vault Claude, chat list: ' : ''}${said.join('; ')}.`);
+    else if (!quiet) new Notice('Every chat in the history was already recorded and named.');
   }
 
   /** Codex chat `id` was active now: the history sorts it by this (see ChatRecord.at). */
@@ -4308,6 +4332,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.reportTo = raw.reportTo && typeof raw.reportTo === 'object' ? raw.reportTo : {};
     this.chatReports = raw.chatReports && typeof raw.chatReports === 'object' ? raw.chatReports : {};
     this.codexThreadsNamed = raw.codexThreadsNamed === true;
+    this.chatListRebuiltFor = typeof raw.chatListRebuiltFor === 'string' ? raw.chatListRebuiltFor : null;
     // An older version kept only whether it had started one: taken as the one running now.
     this.codexDaemonStarted = typeof raw.startedCodexDaemon === 'string' ? raw.startedCodexDaemon : raw.startedCodexDaemon === true ? codexDaemonIdentity(process.env) : null;
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
@@ -4375,6 +4400,7 @@ export default class VaultClaudePlugin extends Plugin {
       reportTo: this.reportTo,
       chatReports: this.chatReports,
       codexThreadsNamed: this.codexThreadsNamed,
+      ...(this.chatListRebuiltFor ? { chatListRebuiltFor: this.chatListRebuiltFor } : {}),
       startedCodexDaemon: this.codexDaemonStarted ?? undefined,
     };
   }
