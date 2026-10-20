@@ -6,9 +6,10 @@ import { chmodSync, writeFileSync } from 'node:fs';
  * request's method to `methods.log`), and then as `mode` says: `exit`, asked to start a turn, answers and exits
  * without finishing it; `silent`, answers nothing after the handshake; `die`, exits as soon as the
  * thread has started; `ask`, having started a turn, asks the panel a question and finishes the turn
- * only once it is answered (or refused).
+ * only once it is answered (or refused); `threads`, lists two threads the panel started, one page each
+ * (the second only for the first page's `nextCursor`), and none archived.
  */
-export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' = 'exit'): string {
+export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'threads' = 'exit'): string {
   const file = `${dir}/codex`;
   writeFileSync(
     file,
@@ -40,7 +41,12 @@ process.stdin.on('data', (chunk) => {
     const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
     if (message.method === 'initialize') reply({});
     else if (mode === 'silent') continue;
-    else if (message.method === 'thread/start') {
+    else if (message.method === 'thread/list') {
+      const thread = (id, name) => ({ id, name, originator: 'vault-claude', updatedAt: 1790000000, preview: '' });
+      if (message.params.archived) reply({ data: [], nextCursor: null });
+      else if (message.params.cursor === 'page-2') reply({ data: [thread('p2', 'Second')], nextCursor: null });
+      else reply({ data: [thread('p1', 'First')], nextCursor: 'page-2' });
+    } else if (message.method === 'thread/start') {
       reply({ thread: { id: 't1' } });
       if (mode === 'die') setTimeout(() => process.exit(3), 20);
     } else if (message.method === 'turn/start') {
@@ -59,6 +65,6 @@ process.stdin.on('data', (chunk) => {
 }
 
 /** How to run the stand-in: node found on PATH by its first line, this one's folder first. */
-export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask' | 'elicit') {
+export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'threads') {
   return { codexPath: fakeCodex(dir, mode), cwd: dir, env: { ...process.env, PATH: `${process.execPath.replace(/\/node$/, '')}:${process.env.PATH ?? ''}` } };
 }

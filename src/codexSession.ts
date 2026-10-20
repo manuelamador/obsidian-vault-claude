@@ -838,37 +838,51 @@ export async function readCodexThread(launch: CodexLaunch, threadId: string): Pr
  * kind: those in Codex's lists and those kept out of them (archived; see CodexSessionConfig.hidden).
  * Turns written elsewhere (Codex's app, the phone) count, which the panel's own records do not see.
  */
-/** A thread the panel started (`originator` vault-claude, see CodexConnection), saved and not archived. */
-export interface CodexPanelThread {
+/** One of the vault's Codex threads, as `thread/list` gives it. */
+export interface CodexThreadSummary {
   id: string;
+  /** When it last changed, in ms. */
+  updatedAt: number;
+  archived: boolean;
+  /** Started by the panel (`originator` vault-claude, see CodexConnection), and saved. */
+  fromPanel: boolean;
   /** Its name in Codex's lists, else the start of its first message. */
   title: string;
-  updatedAt: number;
+}
+
+/** The most pages read of one `thread/list` listing: a guard against a cursor that never ends. */
+const THREAD_LIST_PAGES = 100;
+
+/** Every page of `thread/list` with `params`, following `nextCursor` to the end. */
+async function listAllThreads(request: (method: string, params: unknown) => Promise<unknown>, params: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+  const threads: Record<string, unknown>[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < THREAD_LIST_PAGES; page += 1) {
+    const listed = (await request('thread/list', { ...params, ...(cursor ? { cursor } : {}) })) as { data?: Record<string, unknown>[]; nextCursor?: unknown };
+    threads.push(...(listed.data ?? []));
+    if (typeof listed.nextCursor !== 'string' || !listed.nextCursor || listed.nextCursor === cursor) return threads;
+    cursor = listed.nextCursor;
+  }
+  log('codex thread list cut at its page limit', { pages: THREAD_LIST_PAGES });
+  return threads;
 }
 
 /**
- * When each of the vault's Codex threads last changed (ms), and those of them the panel started:
- * which lists the panel's Codex chats from Codex's own store, should the plugin's records be lost.
- * Archived threads are only stamped: the panel archives the scratch chats it lets go of, and every
- * chat when its threads are kept out of Codex's lists.
+ * The vault's Codex threads, archived ones included, every page of them: which says when each Codex
+ * chat last changed, and lists the panel's Codex chats from Codex's own store, should the plugin's
+ * records be lost.
  */
-export async function readCodexThreadStamps(launch: CodexLaunch, limit = 100): Promise<{ stamps: Map<string, number>; panel: CodexPanelThread[] }> {
+export async function readCodexThreads(launch: CodexLaunch, pageSize = 100): Promise<CodexThreadSummary[]> {
   return withAppServer(launch, async (request) => {
-    const stamps = new Map<string, number>();
-    const panel: CodexPanelThread[] = [];
+    const threads: CodexThreadSummary[] = [];
     for (const archived of [false, true]) {
-      const page = (await request('thread/list', { cwd: launch.cwd, archived, sortKey: 'updated_at', limit })) as {
-        data?: { id?: unknown; updatedAt?: unknown; originator?: unknown; ephemeral?: unknown; name?: unknown; preview?: unknown }[];
-      };
-      for (const thread of page.data ?? []) {
+      for (const thread of await listAllThreads(request, { cwd: launch.cwd, archived, sortKey: 'updated_at', limit: pageSize })) {
         if (typeof thread.id !== 'string' || typeof thread.updatedAt !== 'number') continue;
-        stamps.set(thread.id, thread.updatedAt * 1000);
-        if (archived || thread.originator !== 'vault-claude' || thread.ephemeral === true) continue;
         const title = typeof thread.name === 'string' && thread.name.trim() ? thread.name : typeof thread.preview === 'string' ? thread.preview : '';
-        panel.push({ id: thread.id, title, updatedAt: thread.updatedAt * 1000 });
+        threads.push({ id: thread.id, updatedAt: thread.updatedAt * 1000, archived, fromPanel: thread.originator === 'vault-claude' && thread.ephemeral !== true, title });
       }
     }
-    return { stamps, panel };
+    return threads;
   });
 }
 
