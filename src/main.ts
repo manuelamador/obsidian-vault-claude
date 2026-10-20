@@ -444,8 +444,13 @@ export default class VaultClaudePlugin extends Plugin {
       this.app.workspace.on('quit', (tasks?: Tasks) => {
         this.quitting = true;
         this.stopCodexDaemonAtQuit(tasks);
+        // Obsidian does not unload plugins when it quits, and `claude remote-control` does not end
+        // when its input closes: stopped here, or it outlives the app and holds the vault.
+        this.remote.stop();
       }),
     );
+    // A window closed or reloaded without the quit event (e.g. Cmd+R): the same.
+    this.registerDomEvent(window, 'beforeunload', () => this.remote.stop());
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
     // Opened again with the workspace: it shows the chat of the first panel.
     this.registerView(CONNECTIONS_VIEW_TYPE, (leaf) => new ConnectionsView(leaf, (pane) => void this.followPanel(pane, this.connectionsPanel ?? this.chatViews()[0] ?? null), () => this.confirmRebuildConnections()));
@@ -4045,6 +4050,49 @@ export default class VaultClaudePlugin extends Plugin {
         this.probe = null;
       });
     return this.probe;
+  }
+
+  /** data.json's path on disk, or null for a vault not on the local file system. */
+  private dataPath(): string | null {
+    const root = this.vaultRoot();
+    return root && this.manifest.dir ? joinPath(root, this.manifest.dir, 'data.json') : null;
+  }
+
+  /**
+   * Reads data.json, or its backup when it is empty or cannot be read. Obsidian's own loadData
+   * returns null for both, and the defaults saved over it then lost every chat record (2026-10-20,
+   * a file left empty by an app quit in the middle of a write). A file read whole is copied to
+   * data.json.bak.
+   */
+  async loadData(): Promise<unknown> {
+    const file = this.dataPath();
+    if (!file) return super.loadData();
+    const read = async (path: string): Promise<unknown> => {
+      const text = await fsPromises.readFile(path, 'utf8').catch(() => null);
+      if (text === null || !text.trim()) return null;
+      try {
+        return JSON.parse(text);
+      } catch {
+        return null;
+      }
+    };
+    const data = await read(file);
+    if (data !== null) {
+      await fsPromises.copyFile(file, `${file}.bak`).catch((error: unknown) => log('backing up the plugin data failed', error));
+      return data;
+    }
+    const backup = await read(`${file}.bak`);
+    if (existsSync(file) || backup !== null) log('plugin data empty or unreadable', { backup: backup !== null });
+    return backup;
+  }
+
+  /** Writes data.json whole or not at all: to a temporary file, then renamed over it. */
+  async saveData(data: unknown): Promise<void> {
+    const file = this.dataPath();
+    if (!file) return super.saveData(data);
+    const temporary = `${file}.tmp`;
+    await fsPromises.writeFile(temporary, JSON.stringify(data, null, 2));
+    await fsPromises.rename(temporary, file);
   }
 
   async loadSettings(): Promise<void> {
