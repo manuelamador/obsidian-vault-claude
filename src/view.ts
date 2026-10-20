@@ -2533,15 +2533,17 @@ export class ChatView extends ItemView {
           // Queued messages still listed have had their own turn without being reported back.
           entry.pendingIds.clear();
           entry.waitedForQueue = false;
-          if (entry.remoteUrl || entry.tasks.size > 0) {
-            // On the phone: kept running so it can be continued there. With background tasks
-            // running: kept for them, and Claude takes up their results in a turn of its own.
-            this.updateBackgroundIndicator();
-            return;
-          }
           const succeeded = message.subtype === 'success' && !message.is_error;
           if (message.duration_ms >= this.plugin.settings.notifyAfterSeconds * 1000) {
             this.systemNotify(succeeded ? 'Claude finished' : 'Claude stopped with an error', entry.title ?? 'A chat', () => void this.showChat(entry));
+          }
+          if (entry.remoteUrl || entry.tasks.size > 0) {
+            // On the phone: kept running so it can be continued there. With background tasks
+            // running: kept for them, and Claude takes up their results in a turn of its own. Its
+            // reply is done all the same, and said so as for a chat that ends.
+            this.announceDone(entry, succeeded);
+            this.updateBackgroundIndicator();
+            return;
           }
           this.finishBackground(entry, succeeded);
         }
@@ -2682,13 +2684,18 @@ export class ChatView extends ItemView {
     this.background.delete(entry);
     this.closeSession(entry.session);
     if (entry.chatId && entry.session instanceof CodexSession) this.plugin.touchCodexChat(entry.chatId);
+    this.announceDone(entry, succeeded);
+    this.updateBackgroundIndicator();
+  }
+
+  /** A background chat's reply is done, whether its process ends (finishBackground) or is kept (on the phone, or for its tasks): the history marks it, and its tab on the margin says so. */
+  private announceDone(entry: BackgroundChat, succeeded: boolean): void {
     if (!this.isOnScreen()) this.unseen = succeeded ? 'done' : 'error';
     // In the background, so not seen whether or not this panel is visible.
     if (entry.chatId) {
       this.plugin.markChatUnseen(entry.chatId, succeeded ? 'done' : 'error');
       this.doneTabs.add({ id: entry.chatId, title: entry.title ?? 'Chat', outcome: succeeded ? 'done' : 'error', text: entry.lastText });
     }
-    this.updateBackgroundIndicator();
     // Its tab on the margin says so (see DoneTabs); a notice as well when the panel is out of sight,
     // where the tab cannot be seen, and instead for a chat without an id, which has none.
     if (entry.chatId && this.isOnScreen()) entry.notice?.hide();
