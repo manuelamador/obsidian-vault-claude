@@ -7228,20 +7228,20 @@ export class ChatView extends ItemView {
 
   /**
    * Asks before sending draft `draft`: to whom, its subject and the start of its text. Confirmed,
-   * Claude is asked to send it as it is; the connector has no tool that sends a draft, so Claude
-   * sends its text (as a reply in its thread when it is one) and then deletes the draft.
+   * Claude is asked to send the draft itself, by its id (the connector's send tool takes one), so that
+   * it goes exactly as it is, attachments and thread included; Gmail removes the draft as it sends it.
    */
   private confirmSendDraft(draft: EmailDraft): void {
     const to = [...draft.to, ...draft.cc.map((each) => `cc ${each}`)].join(', ');
     const start = draft.body ? ` “${draft.body.length > 300 ? `${draft.body.slice(0, 300)}…` : draft.body}”` : '';
     const what = `${to ? `To ${to}` : 'To the recipients set in the draft'}${draft.subject ? `, “${draft.subject}”` : ''}.${start} Sent mail cannot be taken back.`;
     const request = (archive: boolean) => {
-      const reply = draft.replyTo ? ` It is a reply: send it with the reply tool to message ${draft.replyTo}, to the same recipients as the draft.` : ' Send it to the recipients, subject and text the draft has.';
       const thread = draft.threadId ? ` thread ${draft.threadId}` : ' its thread';
-      const then = archive ? ` Then delete the draft and archive${thread} (take it out of the inbox, keeping it in All Mail).` : ' Then delete the draft.';
-      // Sending its text would leave its attachments behind (the connector cannot attach): such a draft is left for Gmail.
-      const attached = ' If the draft has attachments, do not send it and do not delete it: say that it has attachments, which only Gmail can send with it, and that it should be sent from Gmail.';
-      this.sendOrDraft(`Send the Gmail draft ${draft.id} now, exactly as it is: read it with get_draft first and do not change its text.${attached}${reply}${then} Say whether it was sent.`, 'Send request added below your draft: send it when ready');
+      const then = archive ? ` Then archive${thread} (take it out of the inbox, keeping it in All Mail).` : '';
+      this.sendOrDraft(
+        `Send the Gmail draft ${draft.id} now, exactly as it is: send the draft itself by its id (send_message with draftId), not a copy of its text, so that its recipients, text, attachments and thread go as they are. Gmail removes the draft as it sends it: there is nothing to delete.${then} Say whether it was sent.`,
+        'Send request added below your draft: send it when ready',
+      );
     };
     new ChoiceModal(this.app, 'Send this draft?', what, [
       ['Send and archive', () => request(true)],
