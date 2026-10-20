@@ -8,6 +8,7 @@
 // its project (show it, put the chat in it, open its note), or to make it one.
 import { ItemView, Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import { ProjectPicker } from './projectModals';
+import { mailThreadTitle } from './emailMessages';
 import { folderOf } from './chatFolders';
 import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 
@@ -49,7 +50,7 @@ interface MapActions {
 export interface ChatMapHost extends MapActions {
   title: string;
   /** The email threads the chat read with the Gmail connector (see VaultClaudePlugin.recordMail), newest first. */
-  mail: { subject: string; url?: string; at: number }[];
+  mail: { subject: string; from?: string; url?: string; at: number }[];
   /** Notes linked to many chats (see hubNotes): drawn, joining no chats. */
   hubs: ReadonlySet<string>;
   notes: MapNote[];
@@ -773,8 +774,8 @@ export class ConnectionsView extends ItemView {
     for (const thread of mail) {
       const row = list.createDiv({ cls: 'vc-map-mail-row' });
       setIcon(row.createSpan({ cls: 'vc-map-mail-icon' }), 'mail');
-      if (thread.url) row.createEl('a', { text: thread.subject, href: thread.url, cls: 'external-link' });
-      else row.createSpan({ text: thread.subject });
+      if (thread.url) row.createEl('a', { text: mailThreadTitle(thread), href: thread.url, cls: 'external-link' });
+      else row.createSpan({ text: mailThreadTitle(thread) });
       if (thread.at) row.createSpan({ cls: 'vc-muted', text: new Date(thread.at).toISOString().slice(0, 10) });
     }
   }

@@ -177,12 +177,40 @@ export interface ChatProjectState {
   includeChats?: string[];
 }
 
-/** An email thread a chat read (see recordMail): Gmail's id for it, its subject, its link, and when its last message was sent. */
+/**
+ * An email thread a chat read (see recordMail): Gmail's id for it, its subject (empty when the read did
+ * not give it, as a search for metadata only does not), who sent it, its link, and when its last message
+ * was sent.
+ */
 export interface MailThread {
   id: string;
   subject: string;
+  from?: string;
   url?: string;
   at: number;
+}
+
+/**
+ * Up to 0.39: "(no subject)" also stood for a subject the read did not give. Either way a subject from
+ * another read of the same thread is preferred.
+ */
+function knownSubject(subject: string): boolean {
+  return subject !== '' && subject !== '(no subject)';
+}
+
+/** `threads` with each thread once: the first of each, with the subject and sender any of its reads gave. */
+function oneEachThread(threads: MailThread[]): MailThread[] {
+  const byId = new Map<string, MailThread>();
+  for (const thread of threads) {
+    const kept = byId.get(thread.id);
+    if (!kept) byId.set(thread.id, { ...thread });
+    else {
+      if (!knownSubject(kept.subject) && knownSubject(thread.subject)) kept.subject = thread.subject;
+      kept.from ??= thread.from;
+      kept.at = Math.max(kept.at, thread.at);
+    }
+  }
+  return [...byId.values()];
 }
 
 /** A plan edited in a note (see ChatView.renderPlanCard): the note, and the plan as Claude wrote it. */
@@ -422,11 +450,13 @@ export default class VaultClaudePlugin extends Plugin {
    * input and the Connections pane to show: newest first, at most MAIL_PER_CHAT. Read from what the
    * chat showed; nothing is asked of Gmail.
    */
-  recordMail(id: string, messages: { threadId?: string; subject: string; url?: string; time: number }[]): void {
+  recordMail(id: string, messages: { threadId?: string; subject: string; sender?: string; url?: string; time: number }[]): void {
     const known = this.chatMail[id] ?? [];
-    const found = messages.flatMap((message) => (message.threadId ? [{ id: message.threadId, subject: message.subject || '(no subject)', ...(message.url ? { url: message.url } : {}), at: Number.isNaN(message.time) ? 0 : message.time }] : []));
+    const found = messages.flatMap((message) =>
+      message.threadId ? [{ id: message.threadId, subject: message.subject, ...(message.sender ? { from: message.sender } : {}), ...(message.url ? { url: message.url } : {}), at: Number.isNaN(message.time) ? 0 : message.time }] : [],
+    );
     if (found.length === 0) return;
-    const merged = [...found, ...known].filter((thread, i, all) => all.findIndex((other) => other.id === thread.id) === i);
+    const merged = oneEachThread([...found, ...known]);
     merged.sort((a, b) => b.at - a.at);
     const kept = merged.slice(0, MAIL_PER_CHAT);
     if (JSON.stringify(kept) === JSON.stringify(known)) return;
@@ -439,8 +469,7 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** The email threads chats `ids` read, each once, newest first. */
   mailOfChats(ids: string[]): MailThread[] {
-    const all = ids.flatMap((id) => this.chatMail[id] ?? []);
-    return all.filter((thread, i) => all.findIndex((other) => other.id === thread.id) === i).sort((a, b) => b.at - a.at);
+    return oneEachThread(ids.flatMap((id) => this.chatMail[id] ?? [])).sort((a, b) => b.at - a.at);
   }
 
   /** The margin tabs kept from the last run, once: for the first panel opened; the others start with none. */

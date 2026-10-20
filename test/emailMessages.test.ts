@@ -91,3 +91,20 @@ test('a draft sent or deleted by its id is told apart from other Gmail calls', a
   assert.equal(draftEnded('mcp__claude_ai_Gmail__send_message', { to: ['a@example.com'] }), null);
   assert.equal(draftEnded('mcp__claude_ai_Gmail__get_draft', { draftId: 'r-1' }), null);
 });
+
+test('a thread read without its subject is named by its sender, and takes the subject another read gave', async () => {
+  const { mailThreadTitle } = await import('../src/emailMessages');
+  const VaultClaudePlugin = (await import('../src/main')).default;
+  assert.equal(mailThreadTitle({ subject: '', from: 'Anna <anna@example.com>' }), 'From Anna <anna@example.com>');
+  assert.equal(mailThreadTitle({ subject: '' }), 'Email thread');
+  const p = new (VaultClaudePlugin as unknown as new () => InstanceType<typeof VaultClaudePlugin>)();
+  p.saveSettings = async () => undefined;
+  (p as unknown as { app: unknown }).app = { workspace: { getLeavesOfType: () => [] } };
+  // A search for metadata only, then a read that gave the subject; and another chat's placeholder.
+  p.recordMail('a', [{ threadId: 't1', subject: '', sender: 'Anna', time: 1 }]);
+  p.recordMail('a', [{ threadId: 't1', subject: 'Plans', sender: 'Anna', time: 1 }]);
+  p.chatMail.b = [{ id: 't1', subject: '(no subject)', at: 1 }];
+  assert.deepEqual(p.mailOfChats(['b', 'a']).map((thread) => thread.subject), ['Plans']);
+  p.recordMail('a', [{ threadId: 't1', subject: '', time: 2 }]);
+  assert.equal(p.chatMail.a[0].subject, 'Plans');
+});

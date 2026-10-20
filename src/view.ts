@@ -52,7 +52,7 @@ import { DoneTabs, type DoneTab } from './doneTabs';
 import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, settleDraftCards, threadMarkdown } from './emailCards';
 import { ReplyModal } from './replyModal';
 import { TodoModal } from './todoModal';
-import { draftEnded, emailDraft, emailMessages, readsThread, resultText, type EmailDraft, type EmailMessage } from './emailMessages';
+import { draftEnded, emailDraft, emailMessages, mailThreadTitle, readsThread, resultText, type EmailDraft, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
 import { hiddenPaths } from './pathFilter';
@@ -5657,7 +5657,7 @@ export class ChatView extends ItemView {
     for (const thread of this.noteMail.slice(0, 15)) {
       menu.addItem((item) =>
         item
-          .setTitle(thread.at ? `${thread.subject} · ${formatDate(thread.at).slice(0, 10)}` : thread.subject)
+          .setTitle(thread.at ? `${mailThreadTitle(thread)} · ${formatDate(thread.at).slice(0, 10)}` : mailThreadTitle(thread))
           .setIcon('mail')
           .setDisabled(!thread.url)
           .onClick(() => thread.url && window.open(thread.url)),

@@ -217,3 +217,8 @@ export function emailDraft(name: string, input: Record<string, unknown>, text: s
     ...(url ? { url } : {}),
   };
 }
+
+/** An email thread as the panel names it: its subject, else who sent it (a read that gave no subject, see MailThread). */
+export function mailThreadTitle(thread: { subject: string; from?: string }): string {
+  return thread.subject || (thread.from ? `From ${thread.from}` : 'Email thread');
+}
