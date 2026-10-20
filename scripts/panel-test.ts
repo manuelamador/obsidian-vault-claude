@@ -1597,6 +1597,54 @@ async function main(): Promise<void> {
       if (!planOk) process.exitCode = 1;
     }
 
+    // A connector's request in a Codex chat: its whole message as text, the values Allow sends, and
+    // Decline as a refusal; a link opened only from the card, Done only after.
+    {
+      const askView = view as unknown as { askPermission(request: unknown): Promise<{ behavior: string; message?: string }> };
+      internals.messagesEl.empty();
+      const asking = askView.askPermission({
+        toolName: 'mcp__gmail',
+        input: { description: 'Send to a@example.com?' },
+        signal: new AbortController().signal,
+        title: 'gmail asks for your confirmation',
+        connector: { message: 'Send to a@example.com?\nWith <b>two</b> attachments', fields: [{ label: 'Send me a copy', value: 'yes' }] },
+      });
+      const card = internals.messagesEl.querySelector('.vc-permission') as HTMLElement;
+      const message = card.querySelector('.vc-connector-message')?.textContent;
+      const field = card.querySelector('.vc-connector-fields li')?.textContent;
+      const buttons = [...card.querySelectorAll('button')].map((el) => el.textContent).join(',');
+      ([...card.querySelectorAll('button')].find((el) => el.textContent === 'Decline') as HTMLButtonElement).click();
+      const declined = await asking;
+      const opened: string[] = [];
+      const openBefore = dom.window.open;
+      dom.window.open = ((url: string) => void opened.push(url)) as typeof dom.window.open;
+      const linking = askView.askPermission({
+        toolName: 'mcp__auth',
+        input: { description: 'Sign in' },
+        signal: new AbortController().signal,
+        title: 'auth asks you to open a link',
+        connector: { message: 'Sign in', fields: [], url: 'https://example.com/auth' },
+      });
+      const linkCard = [...internals.messagesEl.querySelectorAll('.vc-permission')].pop() as HTMLElement;
+      const linkButton = (text: string) => [...linkCard.querySelectorAll('button')].find((el) => el.textContent === text) as HTMLButtonElement;
+      const doneAtFirst = linkButton('Done').disabled;
+      linkButton('Open link').click();
+      const doneAfter = linkButton('Done').disabled;
+      linkButton('Done').click();
+      const linked = await linking;
+      dom.window.open = openBefore;
+      internals.messagesEl.empty();
+      const connectorOk =
+        message === 'Send to a@example.com?\nWith <b>two</b> attachments' &&
+        field === 'Send me a copy: yes' &&
+        buttons === 'Allow,Decline' &&
+        declined.behavior === 'deny' &&
+        declined.message === 'The user declined the connector request.' &&
+        doneAtFirst && !doneAfter && opened.join() === 'https://example.com/auth' && linked.behavior === 'allow';
+      console.log(`connector card: message ${JSON.stringify(message)}; field ${JSON.stringify(field)}; buttons ${buttons}; decline ${declined.behavior}; link Done before ${doneAtFirst}, after ${doneAfter}, opened ${opened.join()} -> ${connectorOk}`);
+      if (!connectorOk) process.exitCode = 1;
+    }
+
     // "Send to Claude": a folder and a PDF become @ mentions after what is typed.
     const mentionInput = root.querySelector('.vc-input') as HTMLTextAreaElement;
     mentionInput.value = 'Compare';

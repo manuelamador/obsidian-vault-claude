@@ -3933,3 +3933,14 @@ a.vc-email-attachment:hover {
   color: var(--text-accent);
   text-decoration: underline;
 }
+
+/* A connector's request in a Codex chat: its whole message, and the values its answer carries. */
+.vc-connector-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.vc-connector-fields {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}

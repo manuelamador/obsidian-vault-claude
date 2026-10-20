@@ -11,7 +11,7 @@ import type { SDKControlGetContextUsageResponse } from '@anthropic-ai/claude-age
 import { splitContext } from './history';
 import { log } from './log';
 import { contextBlock, type ContextPart } from './projects';
-import type { SessionHandlers, UserContent } from './session';
+import { CONNECTOR_DECLINED, type ConnectorRequest, type SessionHandlers, type UserContent } from './session';
 import { codexTurnAccess, type CodexAccess } from './codexAccess';
 
 export type { CodexLaunch } from './codexConnection';
@@ -93,6 +93,8 @@ export class CodexSession {
   private sending: Promise<void> = Promise.resolve();
   /** The approval cards shown, withdrawn when the turn or the session ends. */
   private readonly approvals = new Set<AbortController>();
+  /** Connectors' requests waiting on their cards, by request id (see onElicitation). */
+  private readonly elicitations = new Map<string, AbortController>();
   /** Context given to go with the next message (see addContext): a project's notes, included chats. */
   private pendingContext: { parts: ContextPart[]; delivered: (sessionId: string | null, keys: string[]) => void }[] = [];
   /** The files each change in this turn touches, by item: what its approval card names. */
@@ -393,6 +395,15 @@ export class CodexSession {
     const id = this.sessionId;
     if (!id || (typeof params.threadId === 'string' && params.threadId !== id)) return;
     switch (method) {
+      case 'serverRequest/resolved': {
+        // A connector's request answered or ended elsewhere: its card withdrawn, with no answer of ours.
+        const key = String(params.requestId);
+        const waiting = this.elicitations.get(key);
+        if (!waiting) break;
+        this.elicitations.delete(key);
+        waiting.abort();
+        break;
+      }
       case 'turn/started':
         this.turnId = (params.turn as { id?: string } | undefined)?.id ?? this.turnId;
         break;
@@ -471,30 +482,41 @@ export class CodexSession {
 
   /**
    * A tool of an MCP server (a connector: Gmail sending a message, say) asks for a confirmation before
-   * it acts: the panel's approval card answers it. A form is accepted with its fields' defaults, as the
-   * card asks nothing more; a link asked to be opened is opened once allowed. Declined, the tool does not act.
+   * it acts, or for a link to be opened: the panel's connector card answers it (see readElicitation),
+   * showing the whole message and the values a form's answer carries. Allow accepts; Decline refuses;
+   * anything else (Cancel, Esc, the turn or chat ending, a request the panel cannot answer) cancels. A
+   * request for another thread, or one Codex says was resolved elsewhere, opens no card or is withdrawn
+   * without an answer. Answered once.
    */
   private async onElicitation(requestId: number | string, params: Record<string, unknown>): Promise<void> {
+    const reply = (action: 'accept' | 'decline' | 'cancel', content: unknown = null) => this.respond(requestId, { action, content, _meta: null });
+    if (typeof params.threadId === 'string' && this.sessionId && params.threadId !== this.sessionId) {
+      log('codex elicitation for another thread refused', { threadId: params.threadId });
+      return reply('cancel');
+    }
     const server = typeof params.serverName === 'string' ? params.serverName : 'a connector';
-    const message = typeof params.message === 'string' ? params.message : '';
-    const url = params.mode === 'url' && typeof params.url === 'string' ? params.url : undefined;
+    const { connector, content } = readElicitation(params);
     const controller = new AbortController();
+    const key = String(requestId);
+    this.elicitations.set(key, controller);
     this.approvals.add(controller);
     try {
       const answer = await this.handlers.onPermission({
         toolName: `mcp__${server}`,
-        input: { description: message || `${server} asks to go ahead`, ...(url ? { url } : {}) },
+        input: { description: connector.message || `${server} asks to go ahead`, ...(connector.url ? { url: connector.url } : {}) },
         signal: controller.signal,
-        title: url ? `${server} asks you to open a link` : `${server} asks for your confirmation`,
+        title: connector.cannotAnswer ? `${server} asks for what the panel cannot give` : connector.url ? `${server} asks you to open a link` : `${server} asks for your confirmation`,
+        connector,
       });
-      if (controller.signal.aborted) return;
-      if (answer.behavior !== 'allow') return this.respond(requestId, { action: 'decline' });
-      if (url) window.open(url);
-      this.respond(requestId, url ? { action: 'accept' } : { action: 'accept', content: elicitationDefaults(params.requestedSchema) });
+      // Resolved elsewhere (see serverRequest/resolved): nothing to answer.
+      if (!this.elicitations.has(key)) return;
+      if (answer.behavior === 'allow' && !connector.cannotAnswer) reply('accept', connector.url ? null : content);
+      else reply(answer.behavior === 'deny' && answer.message === CONNECTOR_DECLINED ? 'decline' : 'cancel');
     } catch (error) {
       log('answering a codex elicitation failed', error);
-      if (!controller.signal.aborted) this.respond(requestId, { action: 'cancel' });
+      if (this.elicitations.has(key)) reply('cancel');
     } finally {
+      this.elicitations.delete(key);
       this.approvals.delete(controller);
     }
   }
@@ -719,16 +741,61 @@ export async function archiveCodexThread(launch: CodexLaunch, threadId: string):
   await withAppServer(launch, (request) => request('thread/archive', { threadId }));
 }
 
-/** A form's answer from its fields' defaults (an MCP elicitation's `requestedSchema`): empty for a plain confirmation. */
-export function elicitationDefaults(schema: unknown): Record<string, unknown> {
-  const properties = schema && typeof schema === 'object' ? (schema as { properties?: unknown }).properties : undefined;
+/** The ways a connector asks with a form (see readElicitation), as Codex's app-server names them. */
+const FORM_MODES = new Set(['form', 'openai/form', 'openaiForm']);
+
+/** A value as the connector card shows it. */
+function shownValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  if (Array.isArray(value)) return value.map(String).join(', ') || '(none)';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+/**
+ * A connector's request (an MCP elicitation's params) as its card shows it, and the content Allow
+ * sends. A form is answered with its fields' defaults, each shown; one with a required field that has
+ * none, or not a flat object of simple fields, cannot be answered from the panel, which collects no
+ * input. A link is opened only if it is http or https. Any other way of asking cannot be answered.
+ */
+export function readElicitation(params: Record<string, unknown>): { connector: ConnectorRequest; content: Record<string, unknown> } {
+  const message = typeof params.message === 'string' ? params.message : '';
+  const mode = typeof params.mode === 'string' ? params.mode : 'form';
+  const connector: ConnectorRequest = { message, fields: [] };
   const content: Record<string, unknown> = {};
-  if (!properties || typeof properties !== 'object') return content;
-  for (const [name, field] of Object.entries(properties as Record<string, unknown>)) {
-    const value = field && typeof field === 'object' ? (field as { default?: unknown }).default : undefined;
-    if (value !== undefined && value !== null) content[name] = value;
+  if (mode === 'url') {
+    const url = typeof params.url === 'string' ? params.url : '';
+    if (/^https?:\/\//i.test(url)) connector.url = url;
+    else connector.cannotAnswer = url ? `It asks to open a link the panel does not open: ${url}` : 'It asks to open a link, and gives none.';
+    return { connector, content };
   }
-  return content;
+  if (!FORM_MODES.has(mode)) {
+    connector.cannotAnswer = `It asks in a way the panel does not support (${mode}).`;
+    return { connector, content };
+  }
+  const schema = params.requestedSchema;
+  if (schema === undefined || schema === null) return { connector, content };
+  const { type, properties, required } = schema as { type?: unknown; properties?: unknown; required?: unknown };
+  if (typeof schema !== 'object' || (type !== undefined && type !== 'object') || (properties !== undefined && (typeof properties !== 'object' || properties === null))) {
+    connector.cannotAnswer = 'It asks for a form the panel cannot read.';
+    return { connector, content };
+  }
+  const needed = new Set(Array.isArray(required) ? required.filter((name): name is string => typeof name === 'string') : []);
+  const missing: string[] = [];
+  for (const [name, field] of Object.entries((properties ?? {}) as Record<string, unknown>)) {
+    const spec = field && typeof field === 'object' ? (field as { title?: unknown; default?: unknown; type?: unknown }) : null;
+    const label = typeof spec?.title === 'string' && spec.title.trim() ? spec.title : name;
+    if (!spec || !['string', 'number', 'integer', 'boolean', 'array'].includes(String(spec.type ?? 'string'))) {
+      connector.cannotAnswer = `It asks for a form the panel cannot read (${label}).`;
+      return { connector, content };
+    }
+    if (spec.default !== undefined && spec.default !== null) {
+      content[name] = spec.default;
+      connector.fields.push({ label, value: shownValue(spec.default) });
+    } else if (needed.has(name)) missing.push(label);
+    else connector.fields.push({ label, value: '(left empty)' });
+  }
+  if (missing.length > 0) connector.cannotAnswer = `It asks for information the panel cannot collect: ${missing.join(', ')}.`;
+  return { connector, content };
 }
 
 /** Codex threads being copied now (see CodexSession.start), how many copies, and whether one of them unarchived it. */

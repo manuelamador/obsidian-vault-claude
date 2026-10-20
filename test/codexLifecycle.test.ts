@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { CodexConnection } from '../src/codexConnection';
 import { unframe } from '../src/codexSocket';
+import { CONNECTOR_DECLINED, type PermissionRequest } from '../src/session';
 import { contextApart, CodexSession, revertCodexThread, runCodexOneShot, stopCodexReader } from '../src/codexSession';
 
 import { launchIn } from './fakeCodex';
@@ -85,29 +86,66 @@ test('a Codex chat sends its permissions with each turn (the sandbox, when it as
   }
 });
 
-test("a connector's confirmation (Gmail sending, say) reaches the approval card, and its answer goes back to Codex", async () => {
-  for (const allow of [true, false]) {
+test("a connector's confirmation (Gmail sending, say) reaches its card, with what it sends, and its answer goes back to Codex", async () => {
+  const cases = [
+    { result: { behavior: 'allow' as const, updatedInput: {} }, answer: { action: 'accept', content: { note: 'ok' }, _meta: null } },
+    { result: { behavior: 'deny' as const, message: CONNECTOR_DECLINED }, answer: { action: 'decline', content: null, _meta: null } },
+    // Not answered by the card's Decline (Cancel, Esc, a closed chat): cancelled, not refused.
+    { result: { behavior: 'deny' as const, message: 'Cancelled.' }, answer: { action: 'cancel', content: null, _meta: null } },
+  ];
+  for (const { result, answer: expected } of cases) {
     const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
     try {
       let ended: () => void = () => undefined;
       const done = new Promise<void>((resolve) => (ended = resolve));
-      const asked: { toolName: string; title?: string; input: Record<string, unknown> }[] = [];
+      const asked: PermissionRequest[] = [];
       const handlers = {
         onMessage: () => undefined,
         onEnd: () => ended(),
-        onPermission: async (request: { toolName: string; title?: string; input: Record<string, unknown> }) => {
-          asked.push(request);
-          return allow ? { behavior: 'allow' as const, updatedInput: {} } : { behavior: 'deny' as const, message: '' };
-        },
+        onPermission: async (request: PermissionRequest) => (asked.push(request), result),
       };
       const session = new CodexSession(launchIn(dir, 'elicit'), handlers as never);
       session.send('send it');
       await done;
       assert.equal(asked[0]?.toolName, 'mcp__gmail');
       assert.equal(asked[0]?.title, 'gmail asks for your confirmation');
-      assert.equal(asked[0]?.input.description, 'Send this email?');
-      const answer = JSON.parse(readFileSync(`${dir}/answer.json`, 'utf8')) as Record<string, unknown>;
-      assert.deepEqual(answer, allow ? { action: 'accept', content: { note: 'ok' } } : { action: 'decline' });
+      assert.equal(asked[0]?.connector?.message, 'Send this email?');
+      assert.deepEqual(asked[0]?.connector?.fields, [{ label: 'note', value: 'ok' }]);
+      assert.deepEqual(JSON.parse(readFileSync(`${dir}/answer.json`, 'utf8')), expected);
+      session.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a connector's request resolved elsewhere withdraws its card unanswered; one for another thread opens none", async () => {
+  for (const mode of ['elicitResolved', 'elicitOther'] as const) {
+    const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+    try {
+      let ended: () => void = () => undefined;
+      const done = new Promise<void>((resolve) => (ended = resolve));
+      const asked: PermissionRequest[] = [];
+      const handlers = {
+        onMessage: () => undefined,
+        onEnd: () => ended(),
+        onPermission: (request: PermissionRequest) =>
+          new Promise((resolve) => {
+            asked.push(request);
+            request.signal.addEventListener('abort', () => resolve({ behavior: 'deny', message: 'Cancelled.' }));
+          }),
+      };
+      const session = new CodexSession(launchIn(dir, mode), handlers as never);
+      session.send('send it');
+      await done;
+      if (mode === 'elicitResolved') {
+        assert.equal(asked.length, 1);
+        assert.equal(asked[0].signal.aborted, true);
+        assert.equal(existsSync(`${dir}/answer.json`), false);
+      } else {
+        assert.equal(asked.length, 0);
+        assert.deepEqual(JSON.parse(readFileSync(`${dir}/answer.json`, 'utf8')), { action: 'cancel', content: null, _meta: null });
+      }
       session.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -73,7 +73,7 @@ import { contextHash, type ContextPart } from './projects';
 import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
-import { ClaudeSession, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
+import { CONNECTOR_DECLINED, ClaudeSession, type ConnectorRequest, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
 import { CodexSession, forkCodexThread, revertCodexThread, type CodexModel } from './codexSession';
 
 /** A chat's session: Claude Code's, or Codex's (see CodexSession), which has the same shape. */
@@ -7461,6 +7461,12 @@ export class ChatView extends ItemView {
     }
 
     // The plan that ends plan mode: approved as it is or as edited in a note, or sent back with feedback.
+    if (request.connector) {
+      this.renderConnectorCard(card, request.title ?? 'A connector asks for your confirmation', request.connector, input, finish);
+      this.scrollToBottom(true);
+      return;
+    }
+
     if (toolName === 'ExitPlanMode') {
       this.renderPlanCard(card, approval, finish);
       this.scrollToBottom(true);
@@ -7489,6 +7495,50 @@ export class ChatView extends ItemView {
       .createEl('button', { text: 'Deny' })
       .addEventListener('click', () => finish({ behavior: 'deny', message: 'The user denied this action.' }, 'Denied'));
     this.scrollToBottom(true);
+  }
+
+  /**
+   * The card for a connector's request in a Codex chat (see CodexSession.onElicitation): its whole
+   * message, and each field of its form with the value Allow sends. A link is opened only from the
+   * card, and Done says the step there is done; a request the panel cannot answer offers only Cancel.
+   */
+  private renderConnectorCard(card: HTMLElement, title: string, connector: ConnectorRequest, input: Record<string, unknown>, finish: (result: PermissionResult, label: string, said?: string) => void): void {
+    card.createDiv({ cls: 'vc-permission-title', text: title });
+    const detail = card.createDiv({ cls: 'vc-permission-detail' });
+    if (connector.message) detail.createDiv({ cls: 'vc-connector-message', text: connector.message });
+    if (connector.url) detail.createDiv({ cls: 'vc-muted', text: `Link: ${connector.url}` });
+    if (connector.fields.length > 0) {
+      const list = detail.createEl('ul', { cls: 'vc-connector-fields' });
+      for (const field of connector.fields) list.createEl('li', { text: `${field.label}: ${field.value}` });
+    }
+    if (connector.cannotAnswer) detail.createDiv({ cls: 'vc-muted', text: connector.cannotAnswer });
+    const buttons = card.createDiv({ cls: 'vc-permission-buttons' });
+    const button = (text: string, onClick: () => void, cta = false) => {
+      const el = buttons.createEl('button', { text, ...(cta ? { cls: 'mod-cta' } : {}) });
+      el.addEventListener('click', onClick);
+      return el;
+    };
+    const cancel = () => finish({ behavior: 'deny', message: 'Cancelled.' }, 'Cancelled');
+    if (connector.cannotAnswer) {
+      button('Cancel', cancel);
+    } else if (connector.url) {
+      const url = connector.url;
+      let done: HTMLButtonElement | null = null;
+      button(
+        'Open link',
+        () => {
+          window.open(url, '_blank', 'noopener');
+          if (done) done.disabled = false;
+        },
+        true,
+      );
+      done = button('Done', () => finish({ behavior: 'allow', updatedInput: input }, 'Done'));
+      done.disabled = true;
+      button('Cancel', cancel);
+    } else {
+      button('Allow', () => finish({ behavior: 'allow', updatedInput: input }, 'Allowed'), true);
+      button('Decline', () => finish({ behavior: 'deny', message: CONNECTOR_DECLINED }, 'Declined'));
+    }
   }
 
   /**

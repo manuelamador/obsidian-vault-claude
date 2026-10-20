@@ -33,7 +33,24 @@ export interface PermissionRequest {
   title?: string;
   decisionReason?: string;
   blockedPath?: string;
+  /** A connector's request (a Codex chat's MCP elicitation, see CodexSession.onElicitation): a card of its own. */
+  connector?: ConnectorRequest;
 }
+
+/** What a connector asks (see PermissionRequest.connector), as its card shows it. */
+export interface ConnectorRequest {
+  /** Its message, whole, shown as text. */
+  message: string;
+  /** The fields of its form, each with the value that goes back if allowed. */
+  fields: { label: string; value: string }[];
+  /** A link it asks to be opened: opened only from the card, then confirmed there. */
+  url?: string;
+  /** Why it cannot be answered from the panel: the card offers only Cancel. */
+  cannotAnswer?: string;
+}
+
+/** The connector card's Decline (see ConnectorRequest): a refusal, which every other way of not answering (Cancel, Esc, a closed chat) is not. */
+export const CONNECTOR_DECLINED = 'The user declined the connector request.';
 
 export interface SessionConfig {
   cwd: string;

@@ -6,10 +6,13 @@ import { chmodSync, writeFileSync } from 'node:fs';
  * request's method to `methods.log`), and then as `mode` says: `exit`, asked to start a turn, answers and exits
  * without finishing it; `silent`, answers nothing after the handshake; `die`, exits as soon as the
  * thread has started; `ask`, having started a turn, asks the panel a question and finishes the turn
- * only once it is answered (or refused); `threads`, lists two threads the panel started, one page each
+ * only once it is answered (or refused); `elicit`, asks a connector's confirmation and exits once it is
+ * answered, keeping the answer in `answer.json`; `elicitResolved`, asks it and then says it was resolved
+ * elsewhere, exiting soon after; `elicitOther`, asks it for another thread; `threads`, lists two
+ * threads the panel started, one page each
  * (the second only for the first page's `nextCursor`), and none archived.
  */
-export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'threads' = 'exit'): string {
+export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'elicitResolved' | 'elicitOther' | 'threads' = 'exit'): string {
   const file = `${dir}/codex`;
   writeFileSync(
     file,
@@ -52,8 +55,13 @@ process.stdin.on('data', (chunk) => {
     } else if (message.method === 'turn/start') {
       require('fs').writeFileSync(${JSON.stringify(`${dir}/turn.json`)}, JSON.stringify(message.params));
       reply({ turn: { id: 'turn1' } });
-      if (mode === 'elicit') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'e1', method: 'mcpServer/elicitation/request', params: { threadId: 't1', serverName: 'gmail', mode: 'form', message: 'Send this email?', requestedSchema: { type: 'object', properties: { note: { type: 'string', default: 'ok' } } } } }) + '\\n');
-      else if (mode === 'ask') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'q1', method: 'item/tool/requestUserInput', params: { threadId: 't1' } }) + '\\n');
+      if (mode.startsWith('elicit')) {
+        process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'e1', method: 'mcpServer/elicitation/request', params: { threadId: mode === 'elicitOther' ? 'other' : 't1', turnId: 'turn1', serverName: 'gmail', mode: 'form', _meta: null, message: 'Send this email?', requestedSchema: { type: 'object', properties: { note: { type: 'string', default: 'ok' } } } } }) + '\\n');
+        if (mode === 'elicitResolved') {
+          setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'serverRequest/resolved', params: { threadId: 't1', requestId: 'e1' } }) + '\\n'), 50);
+          setTimeout(() => process.exit(0), 400);
+        }
+      } else if (mode === 'ask') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'q1', method: 'item/tool/requestUserInput', params: { threadId: 't1' } }) + '\\n');
       else setTimeout(() => process.exit(0), 20);
     } else reply({});
   }
@@ -65,6 +73,6 @@ process.stdin.on('data', (chunk) => {
 }
 
 /** How to run the stand-in: node found on PATH by its first line, this one's folder first. */
-export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'threads') {
+export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'elicitResolved' | 'elicitOther' | 'threads') {
   return { codexPath: fakeCodex(dir, mode), cwd: dir, env: { ...process.env, PATH: `${process.execPath.replace(/\/node$/, '')}:${process.env.PATH ?? ''}` } };
 }
