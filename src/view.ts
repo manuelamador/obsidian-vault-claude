@@ -410,6 +410,11 @@ export function closedNotice(stopped: number, tasks: number, offPhone: number): 
   return null;
 }
 
+/** Whether text typed at `at` in `text` starts a word: at its start, or after a space, a line break, or an opening bracket or quote. */
+export function startsWord(text: string, at: number): boolean {
+  return at === 0 || /[\s([{"'“‘]/.test(text[at - 1] ?? '');
+}
+
 /** A background chat with nothing left to keep its process for: not working, no tasks, not on the phone, nothing waiting on you. */
 function isIdle(entry: BackgroundChat): boolean {
   return !entry.busy && entry.tasks.size === 0 && !entry.remoteUrl && entry.approvals.length === 0;
@@ -4558,7 +4563,8 @@ export class ChatView extends ItemView {
       }
       return;
     }
-    if (evt.key === '@') {
+    // The picker for an @ that starts a word; one inside a word (an email address) is typed as it is.
+    if (evt.key === '@' && startsWord(this.inputEl.value, this.inputEl.selectionStart)) {
       evt.preventDefault();
       const start = this.inputEl.selectionStart;
       const end = this.inputEl.selectionEnd;

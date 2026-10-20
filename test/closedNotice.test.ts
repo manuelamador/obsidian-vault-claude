@@ -12,3 +12,13 @@ test('closing the panel tells chats taken off the phone from work stopped', () =
   );
   assert.equal(closedNotice(2, 3, 0), 'Closing the panel stopped 2 chats and 3 background tasks. The conversations are saved: reopen one from the history to carry on.');
 });
+
+test('an @ starts a mention only where it starts a word, not inside an email address', async () => {
+  const { startsWord } = await import('../src/view');
+  assert.equal(startsWord('', 0), true);
+  assert.equal(startsWord('see ', 4), true);
+  assert.equal(startsWord('line\n', 5), true);
+  assert.equal(startsWord('(', 1), true);
+  assert.equal(startsWord('write to amador', 15), false);
+  assert.equal(startsWord('x', 1), false);
+});
