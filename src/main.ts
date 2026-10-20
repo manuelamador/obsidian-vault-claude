@@ -220,10 +220,36 @@ export interface ContextReading {
 /** The chat records' file, beside data.json: a reset of the settings, or of the records, leaves the other. */
 const RECORDS_FILE = 'chats.json';
 
-interface RecordsData {
-  chats?: ChatRecord[];
-  deletedCodex?: string[];
-}
+/**
+ * What the plugin keeps of the chats and notes, in chats.json (see RECORDS_FILE): everything but the
+ * settings, the caches and the flags, which stay in data.json. Up to 0.36.0 only the records were
+ * here; the rest moves over from data.json at the first save.
+ */
+type RecordsData = Pick<
+  PluginData,
+  | 'chats'
+  | 'scratch'
+  | 'pinned'
+  | 'ticks'
+  | 'noteChats'
+  | 'noteRefs'
+  | 'noteMentions'
+  | 'noteRemoved'
+  | 'drafts'
+  | 'planNotes'
+  | 'unseen'
+  | 'sideSessions'
+  | 'pickUp'
+  | 'doneTabs'
+  | 'chatMail'
+  | 'chatProjects'
+  | 'chatLinks'
+  | 'chatSummaries'
+  | 'chatContext'
+  | 'frontmatterGuidance'
+  | 'reportTo'
+  | 'chatReports'
+> & { deletedCodex?: string[] };
 
 /**
  * Reads JSON file `file`, or its backup (`.bak`) when it is empty or cannot be read; a file read
@@ -249,6 +275,30 @@ async function readWhole(file: string): Promise<unknown> {
   const backup = await read(`${file}.bak`);
   if (existsSync(file) || backup !== null) log('plugin data empty or unreadable', { file, backup: backup !== null });
   return backup;
+}
+
+/** How many days of copies keepDailyBackup keeps of each file. */
+const BACKUP_DAYS = 7;
+
+/**
+ * Copies `file` to `backups/<name>-YYYY-MM-DD.json` beside it, once a day (the first time it is
+ * saved that day), and removes copies past the BACKUP_DAYS newest: so that a bad save, which writing
+ * whole does not prevent, can be undone from an earlier day's copy.
+ */
+async function keepDailyBackup(file: string): Promise<void> {
+  const folder = joinPath(file, '..', 'backups');
+  const name = file.split(/[\\/]/).pop()?.replace(/\.json$/, '') ?? 'data';
+  const today = localDay(Date.now());
+  const copy = joinPath(folder, `${name}-${today}.json`);
+  if (existsSync(copy)) return;
+  try {
+    await fsPromises.mkdir(folder, { recursive: true });
+    await fsPromises.copyFile(file, copy);
+    const kept = (await fsPromises.readdir(folder)).filter((each) => new RegExp(`^${name}-\\d{4}-\\d{2}-\\d{2}\\.json$`).test(each)).sort();
+    for (const old of kept.slice(0, Math.max(0, kept.length - BACKUP_DAYS))) await fsPromises.rm(joinPath(folder, old), { force: true });
+  } catch (error) {
+    log('keeping a daily backup failed', error);
+  }
 }
 
 /** Writes `data` to `file` whole or not at all: to a temporary file, then renamed over it. */
@@ -4258,6 +4308,10 @@ export default class VaultClaudePlugin extends Plugin {
     // Version 0.1 stored the settings object itself at the top level.
     const stored: Partial<VaultClaudeSettings> = raw.settings ?? raw;
     this.settings = { ...DEFAULT_SETTINGS, ...stored };
+    // The chats' and notes' data, from chats.json where it is there (see RecordsData), else from data.json as before.
+    const recordsFile = this.pluginFile(RECORDS_FILE);
+    const records = ((recordsFile ? await readWhole(recordsFile) : null) ?? {}) as RecordsData;
+    Object.assign(raw, Object.fromEntries(Object.entries(records).filter(([, value]) => value !== undefined && value !== null)));
     // Only the times offered: anything else (a hand-edited data.json) falls back to the default.
     if (!SCRATCH_IDLE_CHOICES.includes(this.settings.scratchIdleHours)) this.settings.scratchIdleHours = DEFAULT_SETTINGS.scratchIdleHours;
     if (this.settings.sideChatContext !== 'quote') this.settings.sideChatContext = 'chat';
@@ -4279,9 +4333,7 @@ export default class VaultClaudePlugin extends Plugin {
     // Up to 0.13.0 a panel-wide switch, on by default; notes are now attached per chat, and none to start with.
     delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
     // The chat records, in a file of their own since 0.36.0 (see RECORDS_FILE); before, in data.json.
-    const recordsFile = this.pluginFile(RECORDS_FILE);
-    const records = ((recordsFile ? await readWhole(recordsFile) : null) ?? {}) as RecordsData;
-    const chats = Array.isArray(records.chats) ? records.chats : raw.chats;
+    const chats = raw.chats;
     this.deletedCodex = Array.isArray(records.deletedCodex) ? records.deletedCodex.filter((id): id is string => typeof id === 'string') : [];
     // Up to 0.21.1 each record also held when it was made and last used, which nothing read.
     this.chats = Array.isArray(chats)
@@ -4357,8 +4409,10 @@ export default class VaultClaudePlugin extends Plugin {
       // no stack of the plugin's for the log's handler of unhandled errors to know it by.
       const records = this.pluginFile(RECORDS_FILE);
       try {
-        if (records) await writeWhole(records, { chats: this.chats, deletedCodex: this.deletedCodex } satisfies RecordsData);
+        if (records) await writeWhole(records, this.recordsToSave());
         await this.saveData(this.dataToSave(records === null));
+        // A copy a day of each, the first saved that day (see keepDailyBackup).
+        for (const file of [records, this.pluginFile('data.json')]) if (file) await keepDailyBackup(file);
       } catch (error) {
         log('saving the plugin data failed', error);
         throw error;
@@ -4372,8 +4426,26 @@ export default class VaultClaudePlugin extends Plugin {
   private dataToSave(withRecords = true): PluginData {
     return {
       settings: this.settings,
-      ...(withRecords ? { chats: this.chats } : {}),
+      ...(withRecords ? this.recordsToSave() : {}),
+      models: this.models,
+      modelsFetchedAt: this.modelsFetchedAt,
+      commands: this.commands,
+      commandsFetchedAt: this.commandsFetchedAt,
+      promptHistory: this.promptHistory,
+      codexThreadsNamed: this.codexThreadsNamed,
+      ...(this.chatListRebuiltFor ? { chatListRebuiltFor: this.chatListRebuiltFor } : {}),
+      startedCodexDaemon: this.codexDaemonStarted ?? undefined,
+    };
+  }
+
+  /** The chats' and notes' data as chats.json holds it (see RecordsData). */
+  private recordsToSave(): RecordsData {
+    return {
+      chats: this.chats,
+      deletedCodex: this.deletedCodex,
       scratch: this.scratch ?? undefined,
+      pinned: this.pinned,
+      ticks: this.ticks,
       noteChats: this.noteChats,
       noteRefs: this.noteRefs,
       noteMentions: this.noteMentions,
@@ -4381,27 +4453,17 @@ export default class VaultClaudePlugin extends Plugin {
       drafts: this.drafts,
       planNotes: this.planNotes,
       unseen: this.unseen,
-      models: this.models,
-      modelsFetchedAt: this.modelsFetchedAt,
-      commands: this.commands,
-      commandsFetchedAt: this.commandsFetchedAt,
-      pinned: this.pinned,
-      ticks: this.ticks,
       sideSessions: this.sideSessions,
       pickUp: this.pickUp,
+      doneTabs: this.doneTabs,
+      chatMail: this.chatMail,
       chatProjects: this.chatProjects,
       chatLinks: this.chatLinks,
       chatSummaries: this.chatSummaries,
-      doneTabs: this.doneTabs,
-      chatMail: this.chatMail,
       chatContext: this.chatContext,
       frontmatterGuidance: this.frontmatterGuidance,
-      promptHistory: this.promptHistory,
       reportTo: this.reportTo,
       chatReports: this.chatReports,
-      codexThreadsNamed: this.codexThreadsNamed,
-      ...(this.chatListRebuiltFor ? { chatListRebuiltFor: this.chatListRebuiltFor } : {}),
-      startedCodexDaemon: this.codexDaemonStarted ?? undefined,
     };
   }
 }
