@@ -58,6 +58,8 @@ export function gmailBody(payload: unknown, depth = 0): string {
 /** One Gmail API message, with absent metadata left absent rather than an ID-only empty card. */
 function message(value: unknown): ObjectValue | null {
   const raw = object(value);
+  // A search's result: one flat row per message (`from_`, `to`, `subject`, `email_ts`, …), no MIME payload.
+  if (raw.payload === undefined && (raw.from_ !== undefined || raw.email_ts !== undefined)) return searchRow(raw);
   const payload = object(raw.payload);
   const headers = Array.isArray(payload.headers) ? payload.headers.map(object) : [];
   const header = (name: string) => headers.find(each => string(each.name).toLowerCase() === name)?.value;
@@ -81,6 +83,36 @@ function message(value: unknown): ObjectValue | null {
     bccRecipients: typeof header('bcc') === 'string' ? [header('bcc')] : [],
     date: header('date') ?? (raw.internal_date != null && Number.isFinite(time) && Math.abs(time) <= 8.64e15 ? new Date(time).toISOString() : undefined),
     labelIds: raw.label_ids, snippet: raw.snippet, plaintextBody: body, attachments,
+  };
+}
+
+/** "Name address" as Codex's search gives a sender or recipient, written as mail does: "Name <address>". */
+function mailbox(value: unknown): string {
+  const text = string(value).trim();
+  const match = /^(.*?)\s*<?([^\s<>]+@[^\s<>]+)>?$/.exec(text);
+  return match && match[1] ? `${match[1]} <${match[2]}>` : text;
+}
+
+/** A search's flat row (see message), in the fields the card parser reads. */
+function searchRow(raw: ObjectValue): ObjectValue {
+  const list = (value: unknown) => (Array.isArray(value) ? value.map(mailbox).filter(Boolean) : []);
+  const attachments = (Array.isArray(raw.attachments) ? raw.attachments.map(object) : []).flatMap((each) => {
+    const filename = string(each.filename) || string(each.name);
+    return filename ? [{ filename, mimeType: string(each.mime_type) || string(each.mimeType) }] : [];
+  });
+  return {
+    id: raw.id,
+    threadId: raw.thread_id,
+    ...(typeof raw.subject === 'string' ? { subject: raw.subject } : {}),
+    ...(raw.from_ !== undefined ? { sender: mailbox(raw.from_) } : {}),
+    toRecipients: list(raw.to),
+    ccRecipients: list(raw.cc),
+    bccRecipients: list(raw.bcc),
+    date: raw.email_ts,
+    labelIds: raw.labels,
+    snippet: raw.snippet,
+    viewUrl: raw.display_url,
+    attachments,
   };
 }
 

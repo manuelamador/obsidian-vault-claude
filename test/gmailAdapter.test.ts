@@ -98,3 +98,17 @@ test('copied and blind-copied recipients are read from either connector, and sho
   assert.equal(recipientsLine(['x@example.com'], ['c@example.com', 'd@example.com'], ['b@example.com']), 'To x@example.com · Cc c@example.com, d@example.com · Bcc b@example.com');
   assert.equal(recipientsLine([], ['c@example.com'], []), 'Cc c@example.com');
 });
+
+test("Codex's search rows, flat fields with no MIME payload, show sender, recipients, subject and date", () => {
+  // The shape of a real search_emails result (2026-10-20), addresses replaced.
+  const row = { id: 'm1', thread_id: 't1', from_: 'Kim Lee kim@example.edu', to: ['Pat Doe pat@example.com'], cc: ['Sam Roe sam@example.org'], bcc: [], subject: 'Re: Plans', snippet: 'Thanks!', labels: ['UNREAD', 'INBOX'], has_attachment: false, attachments: [], email_ts: '2026-10-20T17:23:18-05:00', display_url: 'https://mail.google.com/mail/u/?authuser=pat%40example.com#all/m1' };
+  const [card] = emailMessages('mcp__codex_apps__gmail.search_emails', JSON.stringify({ structuredContent: { emails: [row], next_page_token: null } })) ?? [];
+  assert.equal(card.sender, 'Kim Lee <kim@example.edu>');
+  assert.deepEqual(card.to, ['Pat Doe <pat@example.com>']);
+  assert.deepEqual(card.cc, ['Sam Roe <sam@example.org>']);
+  assert.equal(card.subject, 'Re: Plans');
+  assert.equal(card.threadId, 't1');
+  assert.equal(card.unread, true);
+  assert.equal(card.time, Date.parse('2026-10-20T17:23:18-05:00'));
+  assert.equal(card.url, row.display_url);
+});
