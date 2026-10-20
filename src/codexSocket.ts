@@ -23,6 +23,10 @@ export class CodexSocket {
   private closed = false;
   private stoppedOnPurpose = false;
   private buffer = Buffer.alloc(0);
+  /** Chunks arrived since `buffer` was last joined, their bytes, and how many the frame under way needs in all (0: unknown). */
+  private chunks: Buffer[] = [];
+  private chunked = 0;
+  private needed = 0;
   /** A message arriving in fragments, its parts so far. */
   private fragments: Buffer[] = [];
   private readonly key = randomBytes(16).toString('base64');
@@ -65,7 +69,13 @@ export class CodexSocket {
   }
 
   private onData(chunk: Buffer): void {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
+    // A large message comes in many chunks: joined once it has all come, not chunk by chunk.
+    this.chunks.push(chunk);
+    this.chunked += chunk.length;
+    if (this.upgraded && this.needed > 0 && this.buffer.length + this.chunked < this.needed) return;
+    this.buffer = Buffer.concat([this.buffer, ...this.chunks]);
+    this.chunks = [];
+    this.chunked = 0;
     if (!this.upgraded) {
       const end = this.buffer.indexOf('\r\n\r\n');
       if (end < 0) return;
@@ -84,7 +94,11 @@ export class CodexSocket {
   private readFrames(): void {
     for (;;) {
       const parsed = unframe(this.buffer);
-      if (!parsed) return;
+      if (!parsed) {
+        this.needed = frameLength(this.buffer);
+        return;
+      }
+      this.needed = 0;
       this.buffer = this.buffer.subarray(parsed.length);
       const { fin, opcode, payload } = parsed;
       if (opcode === 0x8) {
@@ -124,6 +138,16 @@ export function frame(opcode: number, payload: Buffer): Buffer {
   const masked = Buffer.alloc(length);
   for (let i = 0; i < length; i++) masked[i] = payload[i] ^ mask[i % 4];
   return Buffer.concat([head, mask, masked]);
+}
+
+/** How many bytes the frame starting `buffer` takes in all, once its header has come; 0 before. */
+export function frameLength(buffer: Buffer): number {
+  if (buffer.length < 2) return 0;
+  const masked = (buffer[1] & 0x80) !== 0 ? 4 : 0;
+  const length = buffer[1] & 0x7f;
+  if (length < 126) return 2 + masked + length;
+  if (length === 126) return buffer.length < 4 ? 0 : 4 + masked + buffer.readUInt16BE(2);
+  return buffer.length < 10 ? 0 : 10 + masked + Number(buffer.readBigUInt64BE(2));
 }
 
 /** The first whole frame in `buffer`, unmasked; null until it has all arrived. */

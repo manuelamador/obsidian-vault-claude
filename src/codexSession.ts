@@ -278,6 +278,11 @@ export class CodexSession {
     ended?.();
   }
 
+  /** Whether it runs through Codex's shared app-server, where Codex's phone app shares its thread (see CodexConnection.shared). */
+  get shared(): boolean {
+    return this.connection?.shared === true;
+  }
+
   /** What it may do without asking, from the next turn (a turn running keeps what it started with). */
   setAccess(access: CodexAccess): void {
     this.config.access = access;
@@ -324,12 +329,14 @@ export class CodexSession {
       const { resume, fork } = this.config;
       // Kept archived (see hidden): Codex resumes or copies only a thread that is not.
       const archived = resume ?? fork;
-      if (this.config.hidden && archived) await unarchiveQuietly((method, params) => this.request(method, params), archived);
+      const unarchived = this.config.hidden && archived ? await unarchiveQuietly((method, params) => this.request(method, params), archived) : false;
       const opened = (await (resume
         ? this.request('thread/resume', { ...params, threadId: resume })
         : fork
           ? this.request('thread/fork', { ...params, threadId: fork, excludeTurns: true })
           : this.request('thread/start', params))) as { thread?: { id?: string }; model?: string };
+      // A copied thread (a side chat's) that was archived goes back to it; a resumed one is archived as it is let go of (see close).
+      if (unarchived && fork && !resume) await this.request('thread/archive', { threadId: fork }).catch(() => undefined);
       this.sessionId = opened.thread?.id ?? resume ?? null;
       this.model = opened.model ?? null;
       if (!this.sessionId) throw new Error('Codex started no thread');
@@ -445,7 +452,6 @@ export class CodexSession {
   }
 }
 
-/** A message of yours as Codex takes it: its text, and its images as data URLs. */
 /**
  * The context a message carries (`projects`, the projects' block, and what the panel prepends to the
  * message's text: see splitContext) apart from what was typed, for Codex to take it as a developer
@@ -468,6 +474,7 @@ export function contextApart(projects: string, content: UserContent): { context:
   return { context: all, content: blocks.filter((block) => block.type !== 'text' || block.text.trim()) as UserContent };
 }
 
+/** A message of yours as Codex takes it: its text, and its images as data URLs. */
 export function codexInput(content: UserContent): unknown[] {
   if (typeof content === 'string') return [{ type: 'text', text: content, text_elements: [] }];
   return content.flatMap((block): unknown[] => {
@@ -647,8 +654,11 @@ export async function archiveCodexThread(launch: CodexLaunch, threadId: string):
 }
 
 /** Unarchives thread `threadId`, if it is archived: Codex answers an error for one that is not, which is no failure here. */
-export async function unarchiveQuietly(request: (method: string, params: unknown) => Promise<unknown>, threadId: string): Promise<void> {
-  await request('thread/unarchive', { threadId }).catch(() => undefined);
+export async function unarchiveQuietly(request: (method: string, params: unknown) => Promise<unknown>, threadId: string): Promise<boolean> {
+  return request('thread/unarchive', { threadId }).then(
+    () => true,
+    () => false,
+  );
 }
 
 /** Names Codex thread `threadId` (`thread/name/set`): the title Codex's own lists show, the app and the phone, rather than the first message. */
@@ -703,20 +713,24 @@ export async function revertCodexThread(launch: CodexLaunch, threadId: string, m
  */
 export async function forkCodexThread(launch: CodexLaunch, threadId: string, upTo?: string, hidden = false): Promise<string> {
   return withAppServer(launch, async (request) => {
-    // Codex copies only a thread that is not archived (see CodexSessionConfig.hidden).
-    if (hidden) await unarchiveQuietly(request, threadId);
-    let lastTurnId: string | undefined;
-    if (upTo) {
-      const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };
-      lastTurnId = codexTurnHolding(read.thread?.turns ?? [], upTo)?.id;
-      if (!lastTurnId) throw new Error('that reply was not found in the Codex conversation');
+    // Codex copies only a thread that is not archived (see CodexSessionConfig.hidden): one that was is archived again after.
+    const wasArchived = hidden && (await unarchiveQuietly(request, threadId));
+    try {
+      let lastTurnId: string | undefined;
+      if (upTo) {
+        const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };
+        lastTurnId = codexTurnHolding(read.thread?.turns ?? [], upTo)?.id;
+        if (!lastTurnId) throw new Error('that reply was not found in the Codex conversation');
+      }
+      const forked = (await request('thread/fork', { threadId, cwd: launch.cwd, excludeTurns: true, ...(lastTurnId ? { lastTurnId } : {}) })) as { thread?: { id?: string } };
+      const id = forked.thread?.id;
+      if (!id) throw new Error('Codex made no copy');
+      // Loaded here by the fork; the chat that opens it loads it in its own process.
+      await request('thread/unsubscribe', { threadId: id }).catch(() => undefined);
+      return id;
+    } finally {
+      if (wasArchived) await request('thread/archive', { threadId }).catch(() => undefined);
     }
-    const forked = (await request('thread/fork', { threadId, cwd: launch.cwd, excludeTurns: true, ...(lastTurnId ? { lastTurnId } : {}) })) as { thread?: { id?: string } };
-    const id = forked.thread?.id;
-    if (!id) throw new Error('Codex made no copy');
-    // Loaded here by the fork; the chat that opens it loads it in its own process.
-    await request('thread/unsubscribe', { threadId: id }).catch(() => undefined);
-    return id;
   });
 }
 

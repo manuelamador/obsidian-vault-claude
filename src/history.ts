@@ -49,13 +49,13 @@ export interface HistoryItem {
 // UserPromptSubmit hook (see ClaudeSession.addContext); stripped there, written nowhere now.
 const CONTEXT_BLOCK = /^(?:<project_context>[\s\S]*?<\/project_context>\s*)?(?:<linked_chats>[\s\S]*?<\/linked_chats>\s*)?(?:<obsidian_context>[\s\S]*?<\/obsidian_context>\s*)?/;
 
-/** Removes the note context the panel prepends to prompts. */
 /** `text` parted into the context the panel prepends (empty when none) and what follows it. */
 export function splitContext(text: string): { context: string; rest: string } {
   const context = CONTEXT_BLOCK.exec(text)?.[0] ?? '';
   return { context: context.trim(), rest: text.slice(context.length) };
 }
 
+/** Removes the note context the panel prepends to prompts. */
 export function stripContext(text: string): string {
   return text.replace(CONTEXT_BLOCK, '');
 }

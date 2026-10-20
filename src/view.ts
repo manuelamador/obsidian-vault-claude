@@ -124,9 +124,9 @@ import {
 import { codexAccessDetail, codexAccessLabel, codexAccessModes, codexAccessShort, type CodexAccess } from './codexAccess';
 import { shortTitle, zoteroCitation, zoteroItemByLink, zoteroLabel, zoteroLink, zoteroLinksIn, zoteroPdfPath } from './zotero';
 
-/** How long after a panel writes a memo's Send box its own write is told from someone else's edit (see setMemoBox). */
 /** How long a Codex chat may sit idle before its own process is let go of (see releaseCodexWhenIdle). */
 const CODEX_IDLE_RELEASE_MS = 3 * 60_000;
+/** How long after a panel writes a memo's Send box its own write is told from someone else's edit (see setMemoBox). */
 const MEMO_BOX_SETTLE_MS = 1500;
 
 /** The most chats the back arrow goes through. */
@@ -774,6 +774,10 @@ export class ChatView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    // Where it is, kept as the layout changes: by the time it closes, its leaf is already out of the
+    // layout (Obsidian detaches it first), and says nothing of where it was (see onClose).
+    this.wasInSidebar = this.inSidebar();
+    this.registerEvent(this.app.workspace.on('layout-change', () => (this.wasInSidebar = this.inSidebar())));
     try {
       this.buildPanel();
     } catch (error) {
@@ -1283,7 +1287,7 @@ export class ChatView extends ItemView {
     // sidebar itself (or with Obsidian quitting), they stop and the notice says so.
     const shown = { id: this.chatId ?? this.resumeId, title: this.chatName ?? 'Chat', scratch: this.scratch };
     const running = this.busy || this.background.size > 0 || this.tasks.size > 0;
-    const fallback = !this.plugin.otherChatView(this) && running && !this.plugin.quitting && !this.inSidebar();
+    const fallback = !this.plugin.otherChatView(this) && running && !this.plugin.quitting && !this.wasInSidebar;
     const heir = this.plugin.otherChatView(this) ?? (fallback ? await this.plugin.newPanelAt('sidebar').catch(() => null) : null);
     if (heir) {
       this.handOver(heir);
@@ -1328,6 +1332,9 @@ export class ChatView extends ItemView {
     const tasks = moving.reduce((sum, entry) => sum + entry.tasks.size, 0);
     new Notice(`${chatsAndTasks(moving.length, tasks)} moved to another Claude panel, still running.`);
   }
+
+  /** Where the panel was the last time the layout changed (see onOpen): a sidebar, or not. */
+  private wasInSidebar = true;
 
   /** Whether this panel is in a sidebar, rather than the main area or a window of its own. */
   inSidebar(): boolean {
@@ -1651,9 +1658,9 @@ export class ChatView extends ItemView {
 
   /** Every Claude chat of this panel that is running, put on the phone (see setChatRemote), quietly: Claude Code on the phone was turned on. */
   async putChatsOnPhone(): Promise<void> {
-    if (this.engine !== 'codex' && this.session && !this.remoteUrl) await this.setChatRemote(true, true);
+    if (this.engine !== 'codex' && !this.scratch && this.session && !this.remoteUrl) await this.setChatRemote(true, true);
     for (const entry of this.background) {
-      if (entry.remoteUrl || entry.session instanceof CodexSession) continue;
+      if (entry.remoteUrl || entry.scratch || entry.session instanceof CodexSession) continue;
       try {
         const response = (await entry.session.enableRemoteControl(true, entry.title ?? 'Obsidian chat')) as { session_url?: string } | null;
         if (response?.session_url) entry.remoteUrl = response.session_url;
@@ -1667,9 +1674,9 @@ export class ChatView extends ItemView {
 
   /**
    * Puts the chat on screen on the phone (Remote Control for its session) or takes it off.
-   * A chat that has not started yet is started, or resumed, without sending a message.
+   * A chat that has not started yet is started, or resumed, without sending a message. `quiet`: no
+   * notice, as when every chat is put on the phone at once (see putChatsOnPhone).
    */
-  /** `quiet`: no notice, as when every chat is put on the phone at once (see putChatsOnPhone). */
   private async setChatRemote(on: boolean, quiet = false): Promise<void> {
     if (!on) {
       const session = this.session;
@@ -6458,7 +6465,8 @@ export class ChatView extends ItemView {
             void this.loadModels(this.session);
           }
           // Claude Code on the phone: every chat that starts is reachable from it.
-          if (this.plugin.settings.phoneClaude && this.engine !== 'codex' && !this.remoteUrl && !this.remoteRequested && this.session) {
+          // Not the scratch chat, kept out of the lists and started over when idle.
+          if (this.plugin.settings.phoneClaude && this.engine !== 'codex' && !this.scratch && !this.remoteUrl && !this.remoteRequested && this.session) {
             this.remoteRequested = true;
             void this.setChatRemote(true, true);
           }
@@ -6638,8 +6646,6 @@ export class ChatView extends ItemView {
     this.endTurn();
   }
 
-  /** `prompts`: the messages the turn answers, when known (see turnPrompts). */
-  /** `prompts`: the messages the turn answers, when known (see turnPrompts); `turn`: a turn already drawn that it goes on in. */
   /**
    * Without Codex's shared app-server, a Codex chat's own process holds its thread, and Codex's phone
    * app cannot open it meanwhile ("another Codex session is using this task"): let go of after
@@ -6647,9 +6653,9 @@ export class ChatView extends ItemView {
    */
   private releaseCodexWhenIdle(): void {
     this.cancelCodexRelease();
-    const launch = this.plugin.codexLaunch();
-    if (typeof launch === 'string' || launch.shared) return;
     const session = this.session;
+    // Through Codex's shared app-server, the phone app shares the thread already: nothing to let go of.
+    if (!(session instanceof CodexSession) || session.shared) return;
     this.codexRelease = window.setTimeout(() => {
       this.codexRelease = null;
       if (this.session !== session || !session || this.engine !== 'codex' || this.busy || this.pending.size > 0 || this.tasks.size > 0) return;
@@ -6669,6 +6675,7 @@ export class ChatView extends ItemView {
   /** The timer letting go of an idle Codex chat's process (see releaseCodexWhenIdle). */
   private codexRelease: number | null = null;
 
+  /** `prompts`: the messages the turn answers, when known (see turnPrompts); `turn`: a turn already drawn that it goes on in. */
   private beginTurn(prompts: string[] = [], turn: HTMLElement | null = null): void {
     this.cancelCodexRelease();
     this.busy = true;

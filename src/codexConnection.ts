@@ -73,6 +73,7 @@ export class CodexConnection {
   private openSocket(path: string, launch: CodexLaunch): { send(text: string): void; stop(): void } {
     const waiting: string[] = [];
     let opened = false;
+    this.viaSocket = true;
     const socket = new CodexSocket(path, {
       onOpen: () => {
         opened = true;
@@ -83,6 +84,7 @@ export class CodexConnection {
         log('codex shared app-server connection closed', error?.message ?? 'on purpose');
         if (!opened && error && !this.stopping && !this.done) {
           log('codex shared app-server unreachable: a process of its own instead');
+          this.viaSocket = false;
           this.pipe = this.openProcess(launch);
           for (const text of waiting.splice(0)) this.pipe.send(text);
           return;
@@ -136,6 +138,13 @@ export class CodexConnection {
   get open(): boolean {
     return !this.stopping && !this.done;
   }
+
+  /** Whether it runs through Codex's shared app-server, not a process of its own (which it falls back to; see openSocket). */
+  get shared(): boolean {
+    return this.viaSocket;
+  }
+
+  private viaSocket = false;
 
   /** What Codex last wrote to stderr. */
   stderr(): string {

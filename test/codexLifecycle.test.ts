@@ -165,8 +165,12 @@ test("a Codex connection to the shared app-server speaks WebSocket over its sock
         const message = JSON.parse(parsed.payload.toString()) as { id?: number; method?: string };
         seen.push(message.method ?? '');
         if (message.id === undefined) continue;
-        const reply = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { method: message.method } }));
-        socket.write(Buffer.concat([Buffer.from([0x81, reply.length]), reply]));
+        // thread/list answers a large message, sent in small pieces, as a long thread's would come.
+        const result = message.method === 'thread/list' ? { method: message.method, big: 'x'.repeat(200_000) } : { method: message.method };
+        const reply = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
+        const head = reply.length < 126 ? Buffer.from([0x81, reply.length]) : Buffer.from([0x81, 127, 0, 0, 0, 0, (reply.length >>> 24) & 255, (reply.length >>> 16) & 255, (reply.length >>> 8) & 255, reply.length & 255]);
+        const whole = Buffer.concat([head, reply]);
+        for (let at = 0; at < whole.length; at += 4096) socket.write(whole.subarray(at, at + 4096));
       }
     });
   });
@@ -174,7 +178,9 @@ test("a Codex connection to the shared app-server speaks WebSocket over its sock
   try {
     const connection = new CodexConnection({ codexPath: '/nonexistent', cwd: dir, env: {}, shared: true, socketPath: path }, {}, { timeoutMs: 1500 });
     await connection.ready;
-    assert.deepEqual(await connection.request('thread/list', {}), { method: 'thread/list' });
+    const listed = (await connection.request('thread/list', {})) as { method: string; big: string };
+    assert.equal(listed.method, 'thread/list');
+    assert.equal(listed.big.length, 200_000);
     connection.stop();
     assert.deepEqual(seen.slice(0, 3), ['initialize', 'initialized', 'thread/list']);
   } finally {

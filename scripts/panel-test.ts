@@ -4872,13 +4872,12 @@ async function main(): Promise<void> {
         placed.push(place);
         return { adoptBackground: (entry: unknown) => void fellBack.push(entry), openChat: async () => true, openScratch: async () => undefined };
       };
-      const placeView = view as unknown as { inSidebar(): boolean; closing: boolean };
-      const realInSidebar = placeView.inSidebar;
-      placeView.inSidebar = () => false;
+      const placeView = view as unknown as { wasInSidebar: boolean; closing: boolean };
+      placeView.wasInSidebar = false;
       placeView.closing = false;
       startRunning();
       const fellSaid = await notices(() => view.onClose());
-      placeView.inSidebar = realInSidebar;
+      placeView.wasInSidebar = true;
       placeView.closing = false;
       const fallbackOk = placed.join() === 'sidebar' && fellBack.length === 2 && !fellSaid.some((line) => line.includes('stopped'));
       console.log(`closing outside the sidebar falls back to a sidebar panel: placed ${placed.join()}; moved ${fellBack.length} -> ${fallbackOk}`);

@@ -640,6 +640,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
         );
+    }
 
     new Setting(containerEl).setName('Saved notes').setHeading();
 
@@ -671,7 +672,6 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName('Appearance and input').setHeading();
 
-    }
 
     new Setting(containerEl)
       .setName('Tool calls')
