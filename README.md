@@ -72,7 +72,7 @@ Open the chat from the robot icon in the left ribbon.
 
 ### Chatting
 
-- **Replies that fit your vault.** Obsidian Markdown renders wikilinks, callouts, equations and local images. Thinking and tool calls fold into a single Steps line.
+- **Replies that fit your vault.** Obsidian Markdown renders wikilinks, callouts, equations and local images. Thinking, tool calls and the notes written on the way fold into a single Steps line, the notes muted there; the answer stays below it.
 - **See what changed.** Each reply lists the files it changed, with diffs you can open at the affected line.
 - **Explore a reply.** Quote selected text, ask a side question, or use the reply buttons to copy, insert, save or branch. Side chats can use the conversation so far and are deleted when closed unless you keep them.
 

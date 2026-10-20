@@ -357,11 +357,14 @@ async function main(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
     console.log(`copied: ${JSON.stringify(copied)} (expected "Let me check.\\n\\ndone")`);
     if (copied !== 'Let me check.\n\ndone') process.exitCode = 1;
-    // What Claude wrote between steps stays visible: one tool call on its own is not folded away.
+    // What Claude wrote before its last step is a note on the way: folded with the steps, muted there;
+    // the answer after the last step stays open.
     const turnsNow = [...root.querySelectorAll<HTMLElement>('.vc-turn')];
     const spoken = [...turnsNow[1].querySelectorAll<HTMLElement>(':scope > .vc-text')].map((el) => el.textContent);
-    const spokenOk = spoken.join('|') === 'Let me check.|done' && !turnsNow[1].querySelector('.vc-steps') && !!turnsNow[1].querySelector(':scope > .vc-tools');
-    console.log(`messages between steps stay open: ${spoken.join(' | ')} -> ${spokenOk}`);
+    const noted = turnsNow[1].querySelector('.vc-steps .vc-text.is-interim')?.textContent;
+    const notedHeader = turnsNow[1].querySelector('.vc-steps-header')?.textContent;
+    const spokenOk = spoken.join('|') === 'done' && noted === 'Let me check.' && notedHeader === 'Steps: 1 tool call, 1 note';
+    console.log(`notes before the last step fold, the answer stays: open ${spoken.join(' | ')}; folded ${noted}; "${notedHeader}" -> ${spokenOk}`);
     if (!spokenOk) process.exitCode = 1;
     internals.messagesEl.empty();
     internals.renderTranscript(transcript.slice(0, 7), { running: true });
@@ -2364,7 +2367,7 @@ async function main(): Promise<void> {
     console.log(`steps fold on a long run: "${longFoldText}"; inside ${insideFold}; left outside ${outsideFold} -> ${longOk}`);
     if (!longOk) process.exitCode = 1;
 
-    // A reply that speaks between runs of steps: one fold per run, the messages between them open.
+    // A reply that speaks between runs of steps: one fold for them and the note between, the answer open.
     internals.messagesEl.empty();
     internals.renderTranscript([
       entry('su', 'user', 'two rounds'),
@@ -2382,8 +2385,9 @@ async function main(): Promise<void> {
       .map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : null))
       .filter(Boolean)
       .join(',');
-    const splitOk = splitOrder === 'fold,text,fold,text';
-    console.log(`steps and messages in order: ${splitOrder} (expected fold,text,fold,text) -> ${splitOk}`);
+    const splitHeader = splitTurn.querySelector('.vc-steps-header')?.textContent;
+    const splitOk = splitOrder === 'fold,text' && splitHeader === 'Steps: 2 tool calls, 2 thoughts, 1 note';
+    console.log(`steps and messages in order: ${splitOrder}, "${splitHeader}" (expected fold,text) -> ${splitOk}`);
     if (!splitOk) process.exitCode = 1;
     // Text with nothing to show between steps (white space streamed between tool calls) leaves one fold.
     {
@@ -2398,7 +2402,7 @@ async function main(): Promise<void> {
       (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(blankTurn);
       const blankOrder = [...blankTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
       const blankHeader = blankTurn.querySelector('.vc-steps-header')?.textContent;
-      // Text whose Markdown is still rendering is empty on screen but not blank: it stays between folds.
+      // Text whose Markdown is still rendering is empty on screen but not blank: a note, folded with the steps around it.
       const pendingTurn = document.createElement('div');
       const pendingStep = (text: string) => pendingTurn.createDiv({ cls: 'vc-tools' }).createDiv({ cls: 'vc-tool', text });
       pendingStep('Bash ls');
@@ -2421,7 +2425,7 @@ async function main(): Promise<void> {
       const cardFolds = [...cardTurn.querySelectorAll('.vc-steps-header')].map((el) => el.textContent);
       const cardKept = cardTurn.querySelector(':scope > .vc-changes') !== null;
       const pendingOrder = [...pendingTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
-      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts' && pendingOrder === 'fold,text,fold' && rendering.parentElement === pendingTurn && JSON.stringify(cardFolds) === JSON.stringify(['Steps: 2 tool calls, 2 thoughts']) && cardKept;
+      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts' && pendingOrder === 'fold' && rendering.hasClass('is-interim') && rendering.parentElement?.hasClass('vc-steps-body') && JSON.stringify(cardFolds) === JSON.stringify(['Steps: 2 tool calls, 2 thoughts']) && cardKept;
       console.log(`steps around empty text: ${blankOrder}, "${blankHeader}"; around text still rendering: ${pendingOrder}; around the changed-files card: ${JSON.stringify(cardFolds)} -> ${blankOk}`);
       if (!blankOk) process.exitCode = 1;
     }

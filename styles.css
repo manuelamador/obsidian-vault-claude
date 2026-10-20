@@ -3955,3 +3955,9 @@ a.vc-email-attachment:hover {
   font-size: var(--font-ui-smaller);
   overflow-wrap: anywhere;
 }
+
+/* Notes Claude wrote on the way, folded with a finished reply's steps: muted, as the steps are. */
+.vc-steps-body > .vc-text.is-interim {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}

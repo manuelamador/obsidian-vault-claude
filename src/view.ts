@@ -3639,8 +3639,9 @@ export class ChatView extends ItemView {
 
   /**
    * A finished reply's steps — tool calls, thinking and approvals — fold into one line; a click
-   * opens them. Only a run of two or more: a lone group is already one line. What Claude wrote
-   * stays where it is and stays open, so a reply that speaks between steps can still be read.
+   * opens them. Only a run of two or more: a lone group is already one line. What Claude wrote before
+   * its last step (a note of what it is about to do) folds with them, shown muted there; what it wrote
+   * after its last step, the answer, stays open below. Cards (mail, changed files) stay in place.
    */
   private foldSteps(turn: HTMLElement): void {
     if (turn.hasClass('has-folded-steps')) return;
@@ -3652,12 +3653,16 @@ export class ChatView extends ItemView {
     // Text that was only white space between two steps does not end their run, which would split one
     // fold into two with nothing between: it is removed. Judged by its source, not by what is on
     // screen, since a reply's Markdown is still being rendered when a chat opened from the history folds.
+    const children = (Array.from(turn.children) as HTMLElement[]).filter((el) => !isTrailer(el));
+    // Text before the last step: notes on the way, not the answer.
+    const lastStep = children.map((el) => isStep(el)).lastIndexOf(true);
+    const interim = new Set(children.slice(0, Math.max(0, lastStep)).filter((el) => el.hasClass('vc-text') && !this.isBlankText(el)));
+    for (const el of interim) el.addClass('is-interim');
     const runs: HTMLElement[][] = [];
     let run: HTMLElement[] = [];
     let gap: HTMLElement[] = [];
-    for (const el of Array.from(turn.children) as HTMLElement[]) {
-      if (isTrailer(el)) continue;
-      if (isStep(el)) {
+    for (const el of children) {
+      if (isStep(el) || interim.has(el)) {
         for (const empty of gap) empty.remove();
         run.push(el);
         gap = [];
@@ -3670,7 +3675,11 @@ export class ChatView extends ItemView {
       }
     }
     if (run.length > 0) runs.push(run);
-    for (const steps of runs) if (steps.length >= 2) this.foldRun(turn, steps);
+    for (const steps of runs) {
+      if (steps.length >= 2) this.foldRun(turn, steps);
+      // A note left alone, with no step beside it to fold with, is shown as written.
+      else for (const el of steps) el.removeClass('is-interim');
+    }
   }
 
   /**
@@ -3710,7 +3719,8 @@ export class ChatView extends ItemView {
     for (const el of steps) body.appendChild(el);
     const tools = body.querySelectorAll('.vc-tools:not(.vc-thinking) .vc-tool').length;
     const thoughts = body.querySelectorAll(':scope > .vc-thinking').length;
-    const parts = [tools && plural(tools, 'tool call'), thoughts && plural(thoughts, 'thought')].filter(Boolean);
+    const notes = body.querySelectorAll(':scope > .vc-text.is-interim').length;
+    const parts = [tools && plural(tools, 'tool call'), thoughts && plural(thoughts, 'thought'), notes && plural(notes, 'note')].filter(Boolean);
     setIcon(header.createSpan({ cls: 'vc-tools-chevron' }), 'chevron-right');
     header.createSpan({ cls: 'vc-tools-text', text: `Steps: ${parts.join(', ') || plural(steps.length, 'step')}` });
     const failed = body.querySelectorAll('.vc-tool.is-error').length;
