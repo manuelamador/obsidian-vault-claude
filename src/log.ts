@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { dirname, join } from 'path';
 
 /** The platform's folder for application logs. */
@@ -11,9 +11,11 @@ function logDir(): string {
 
 /**
  * Diagnostic log outside the vault. Records lifecycle events and errors, never message text. The
- * tests set VAULT_CLAUDE_LOG to a file of their own, so their runs stay out of the log Obsidian's is.
+ * tests set VAULT_CLAUDE_LOG to a file of their own, so their runs stay out of the log Obsidian's is;
+ * a test file run on its own (`node --test`, which sets NODE_TEST_CONTEXT) goes to that file too.
  */
-export const LOG_PATH = process.env.VAULT_CLAUDE_LOG || join(logDir(), 'vault-claude.log');
+export const LOG_PATH =
+  process.env.VAULT_CLAUDE_LOG || (process.env.NODE_TEST_CONTEXT ? join(tmpdir(), 'vault-claude-tests.log') : join(logDir(), 'vault-claude.log'));
 
 /** Past this size the log is moved to `vault-claude.log.1` (replacing the previous one). */
 const MAX_BYTES = 1_000_000;
