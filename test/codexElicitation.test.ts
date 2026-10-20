@@ -38,9 +38,11 @@ test('a link is offered only if http or https; another way of asking cannot be a
   assert.equal(readElicitation({ mode: 'openai/userVerification', message: 'Verify' }).connector.cannotAnswer, 'It asks in a way the panel does not support (openai/userVerification).');
 });
 
-test('a request naming the tool it runs is allowed for a chat by that tool', () => {
-  const asked = (serverName: string) => readElicitation({ serverName, mode: 'form', message: 'Allow Gmail to run tool "gmail.send_draft"?', requestedSchema: { type: 'object', properties: {} } }).connector.allowKey;
-  assert.equal(asked('codex_apps'), 'codex_apps:tool:gmail.send_draft');
+test('a request naming the tool it runs is allowed for a chat by that tool and connector, except a tool that sends mail', () => {
+  const asked = (serverName: string, tool: string) => readElicitation({ serverName, mode: 'form', message: `Allow Gmail to run tool "${tool}"?`, requestedSchema: { type: 'object', properties: {} } }).connector.allowKey;
+  assert.equal(asked('codex_apps', 'gmail.archive_emails'), 'codex_apps:tool:gmail.archive_emails');
   // Another connector's tool of the same name is allowed apart.
-  assert.notEqual(asked('other'), asked('codex_apps'));
+  assert.notEqual(asked('other', 'gmail.archive_emails'), asked('codex_apps', 'gmail.archive_emails'));
+  // Sending asks each time: an email read in the chat could ask for a send.
+  for (const tool of ['gmail.send_draft', 'gmail.send_email', 'gmail.forward_emails']) assert.equal(asked('codex_apps', tool), undefined);
 });

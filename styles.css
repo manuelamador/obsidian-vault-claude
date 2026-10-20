@@ -3575,12 +3575,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
 }
 
 /* The Reply with Claude dialog. */
-.vc-reply-input {
-  width: 100%;
-  margin-top: 8px;
-  resize: vertical;
-}
-
 /* "Codex" on a Codex chat: beside its title in the panel, and on its row in the history. */
 .vc-engine-badge {
   flex: 0 0 auto;
@@ -3943,30 +3937,6 @@ a.vc-email-attachment:hover {
 .vc-connector-fields {
   margin: 4px 0 0;
   padding-left: 18px;
-}
-
-/* A draft edited on its card: the subject and the whole text, then Save and Cancel. */
-.vc-email-draft.is-editing {
-  cursor: default;
-}
-
-.vc-email-edit-subject,
-.vc-email-edit-body {
-  width: 100%;
-  margin-top: 6px;
-  font: inherit;
-}
-
-.vc-email-edit-body {
-  resize: vertical;
-  line-height: 1.45;
-}
-
-.vc-email-edit-buttons {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  margin-top: 8px;
 }
 
 .vc-email-note {

@@ -3,6 +3,7 @@
 // start a new chat about it, or save as a note. A long search shows its first cards, the rest a click
 // away; an opened thread shows its messages framed together, in place of its card in the search.
 import { setIcon } from 'obsidian';
+import { inertEmailText, safeGmailUrl } from './emailSafety';
 import { formatDate } from './history';
 import { attachmentKind, type EmailDraft, type EmailMessage } from './emailMessages';
 
@@ -22,8 +23,6 @@ export interface EmailCardActions {
   saveThread: (messages: EmailMessage[]) => void;
   /** A request in the input for Claude to open the message's thread, for a card that has only its snippet (a search's). */
   openThread: (message: EmailMessage) => void;
-  /** Claude asked to draft a reply to the message, as you say it should (see ReplyModal). */
-  reply: (message: EmailMessage) => void;
 }
 
 /** When `message` was sent, as the chat writes dates; empty when unknown. */
@@ -45,20 +44,26 @@ export function recipientsLine(to: string[], cc: string[], bcc: string[]): strin
 
 /** `message` as Markdown, to quote or save: who, when and what, its attachments by name (the files stay in Gmail), then its text. */
 export function emailMarkdown(message: EmailMessage): string {
-  const head = [`**${message.subject || '(no subject)'}**`, `From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`];
-  if (message.attachments) head.push(`Attachments: ${message.attachments.map((each) => `${each.url ? `[${each.name}](${each.url})` : each.name} (${attachmentKind(each.type)})`).join(', ')}`);
-  if (message.url) head.push(`[Open in Gmail](${message.url})`);
-  return [...head, '', ...(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
+  const url = safeGmailUrl(message.url);
+  const head = [`**${inertEmailText(message.subject || '(no subject)')}**`, inertEmailText(`From ${message.sender}${message.to.length > 0 ? ` to ${message.to.join(', ')}` : ''}${emailDate(message) ? `, ${emailDate(message)}` : ''}`)];
+  const cc = recipientsLine([], message.cc ?? [], message.bcc ?? []);
+  if (cc) head.push(inertEmailText(cc));
+  if (message.attachments) head.push(`Attachments: ${message.attachments.map((each) => { const link = safeGmailUrl(each.url); const name = inertEmailText(each.name); return `${link ? `[${name}](${link})` : name} (${attachmentKind(each.type)})`; }).join(', ')}`);
+  if (url) head.push(`[Open in Gmail](${url})`);
+  // Its text with images and HTML made inert: the note renders nothing from the sender's server.
+  return [...head, '', ...inertEmailText(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
 }
 
 /** A thread's messages as one note: its subject, then each message quoted (see emailMarkdown), oldest first. */
 export function threadMarkdown(messages: EmailMessage[]): string {
   const subject = messages[0]?.subject || '(no subject)';
-  return [`# ${subject}`, ...messages.map((message) => emailMarkdown(message))].join('\n\n');
+  return [`# ${inertEmailText(subject)}`, ...messages.map((message) => emailMarkdown(message))].join('\n\n');
 }
 
 /** The card for `message` at the end of `list`; `subject`: whether it shows the subject (a thread's header shows it once). */
 function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardActions, subject = true): HTMLElement {
+  // Links from the tool's result open only in Gmail.
+  message = { ...message, url: safeGmailUrl(message.url), attachmentsZip: safeGmailUrl(message.attachmentsZip), attachments: message.attachments?.map((each) => ({ ...each, url: safeGmailUrl(each.url) })) };
   const card = list.createDiv({ cls: `vc-email-card${message.unread ? ' is-unread' : ''}` });
   if (message.threadId) card.dataset.thread = message.threadId;
   const head = card.createDiv({ cls: 'vc-email-head' });
@@ -119,7 +124,6 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
   }
   // A search's card carries only the snippet: Claude opens the thread, whose messages then expand.
   if (!message.body && message.threadId) button('book-open', 'Ask Claude to open this thread', () => actions.openThread(message));
-  button('reply', 'Reply with Claude', () => actions.reply(message));
   button('quote', 'Quote in your next message', () => actions.quote(message));
   button('message-square-plus', 'New chat about this message', () => actions.chat(message));
   button('list-plus', 'Make a todo', () => actions.todo(message));
@@ -172,21 +176,14 @@ export function renderEmailThread(parent: HTMLElement, messages: EmailMessage[],
   else parent.createDiv({ cls: 'vc-email-cards' }).appendChild(frame);
 }
 
-/** What a draft card does beyond opening in Gmail (see renderEmailDraft). */
-export interface DraftActions {
-  /** When sending is allowed (see the settings): its Send button, which asks first. */
-  send?: (draft: EmailDraft) => void;
-  /** Its Edit button: the subject and text as edited on the card, for Claude to write to the draft. */
-  edit?: (draft: EmailDraft, subject: string, body: string) => void;
-}
-
 /**
  * A card for draft `draft` in `parent`: to whom, its subject and the start of its text (all of it on
- * a click), to open in Gmail, edit on the card, or send (see DraftActions).
+ * a click), the files attached, and where Gmail opens it. A display only: sending or changing a draft
+ * is asked of Claude or Codex in the chat, through their own approvals.
  */
-export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft, actions: DraftActions = {}): HTMLElement {
+export function renderEmailDraft(parent: HTMLElement, draft: EmailDraft): HTMLElement {
   const card = parent.createDiv({ cls: 'vc-email-cards' }).createDiv({ cls: 'vc-email-card vc-email-draft', attr: { 'data-draft': draft.id } });
-  drawDraft(card, draft, actions);
+  drawDraft(card, { ...draft, url: safeGmailUrl(draft.url) });
   return card;
 }
 
@@ -200,8 +197,8 @@ const OUTCOME_SAID: Record<DraftOutcome, [string, string]> = {
 };
 
 /**
- * Draft `id`'s cards in `root`, all of them, or for `updated` all but the last: no longer to send or
- * edit, since the draft was sent, deleted, or changed by a later call whose card is the one kept.
+ * Draft `id`'s cards in `root`, all of them, or for `updated` all but the last: marked as no longer
+ * the draft in Gmail, since it was sent, deleted, or changed by a later call whose card is the one kept.
  */
 export function settleDraftCards(root: HTMLElement, id: string, outcome: DraftOutcome): void {
   const cards = [...root.querySelectorAll<HTMLElement>('.vc-email-draft')].filter((card) => card.dataset.draft === id);
@@ -209,9 +206,7 @@ export function settleDraftCards(root: HTMLElement, id: string, outcome: DraftOu
     if (card.dataset.outcome === outcome) continue;
     card.dataset.outcome = outcome;
     card.addClass('is-settled');
-    card.removeClass('is-editing');
-    card.querySelectorAll('.vc-email-actions, .vc-email-edit-buttons, .vc-email-note').forEach((el) => el.remove());
-    card.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((el) => (el.disabled = true));
+    card.querySelectorAll('.vc-email-actions, .vc-email-note').forEach((el) => el.remove());
     const [badge, note] = OUTCOME_SAID[outcome];
     const badgeEl = card.querySelector('.vc-email-badge');
     if (badgeEl) badgeEl.setText(badge);
@@ -219,11 +214,8 @@ export function settleDraftCards(root: HTMLElement, id: string, outcome: DraftOu
   }
 }
 
-/** Draws `draft` in `card`, in place of what it held: as read, or, from its Edit button, as a form. */
-function drawDraft(card: HTMLElement, draft: EmailDraft, actions: DraftActions, note?: string): void {
-  card.empty();
-  card.removeClass('is-expandable', 'is-expanded', 'is-editing');
-  card.removeAttribute('title');
+/** Draws `draft` in `card`. */
+function drawDraft(card: HTMLElement, draft: EmailDraft): void {
   const head = card.createDiv({ cls: 'vc-email-head' });
   head.createSpan({ cls: 'vc-email-badge', text: draft.updated ? 'Draft updated' : 'Draft' });
   head.createSpan({ cls: 'vc-email-sender', text: recipientsLine(draft.to, draft.cc, draft.bcc) });
@@ -235,17 +227,17 @@ function drawDraft(card: HTMLElement, draft: EmailDraft, actions: DraftActions, 
     if (short !== body || body.includes('\n')) {
       card.addClass('is-expandable');
       card.setAttr('title', 'Show the whole draft');
-      card.onclick = (evt) => {
-        if ((evt.target as HTMLElement).closest('.vc-email-actions, a, button, input, textarea')) return;
+      card.addEventListener('click', (evt) => {
+        if ((evt.target as HTMLElement).closest('.vc-email-actions, a, button')) return;
         if (window.getSelection()?.toString()) return;
         const open = !card.hasClass('is-expanded');
         card.toggleClass('is-expanded', open);
         card.setAttr('title', open ? 'Show less' : 'Show the whole draft');
         textEl.setText(open ? body : short);
-      };
+      });
     }
   }
-  // The files it carries, by name and type: they are sent with it (see confirmSendDraft), opened from the draft in Gmail.
+  // The files it carries, by name and type, opened from the draft in Gmail.
   if (draft.attachments) {
     const line = card.createDiv({ cls: 'vc-email-attachments' });
     for (const file of draft.attachments) {
@@ -255,62 +247,7 @@ function drawDraft(card: HTMLElement, draft: EmailDraft, actions: DraftActions, 
       if (file.type) chip.createSpan({ cls: 'vc-email-attachment-kind', text: attachmentKind(file.type) });
     }
   }
-  if (note) card.createDiv({ cls: 'vc-email-note vc-muted', text: note });
-  const { send, edit } = actions;
-  if (!draft.url && !send && !edit) return;
-  const buttons = card.createDiv({ cls: 'vc-email-actions' });
-  if (draft.url) {
-    const open = buttons.createEl('a', { cls: 'clickable-icon', href: draft.url, attr: { 'aria-label': 'Open the draft in Gmail' } });
-    setIcon(open, 'external-link');
-  }
-  if (edit) {
-    const button = buttons.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Edit the subject and text here' } });
-    setIcon(button, 'pencil');
-    button.addEventListener('click', () => drawDraftForm(card, draft, actions));
-  }
-  if (send) {
-    const button = buttons.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Send this draft…' } });
-    setIcon(button, 'send');
-    button.addEventListener('click', () => send(draft));
-  }
-}
-
-/**
- * The draft's subject and whole text, to edit on the card: Save hands them to Claude to write to the
- * draft (see DraftActions.edit), and the card shows them as saved; Cancel, or Esc, leaves it as it was.
- */
-function drawDraftForm(card: HTMLElement, draft: EmailDraft, actions: DraftActions): void {
-  card.empty();
-  card.removeClass('is-expandable', 'is-expanded');
-  card.addClass('is-editing');
-  card.onclick = null;
-  card.removeAttribute('title');
-  const head = card.createDiv({ cls: 'vc-email-head' });
-  head.createSpan({ cls: 'vc-email-badge', text: 'Editing draft' });
-  head.createSpan({ cls: 'vc-email-sender', text: recipientsLine(draft.to, draft.cc, draft.bcc) });
-  const subject = card.createEl('input', { cls: 'vc-email-edit-subject', attr: { type: 'text', placeholder: 'Subject', 'aria-label': 'Subject' } });
-  subject.value = draft.subject ?? '';
-  const body = card.createEl('textarea', { cls: 'vc-email-edit-body', attr: { 'aria-label': 'Text', rows: String(Math.min(20, Math.max(6, (draft.body ?? '').split('\n').length + 2))) } });
-  body.value = draft.body ?? '';
-  const buttons = card.createDiv({ cls: 'vc-email-edit-buttons' });
-  const cancel = () => drawDraft(card, draft, actions);
-  const save = () => {
-    const edited = { ...draft, subject: subject.value.trim(), body: body.value.replace(/\r\n?/g, '\n').trim() };
-    if (edited.subject === (draft.subject ?? '') && edited.body === (draft.body ?? '')) return cancel();
-    actions.edit?.(draft, edited.subject, edited.body);
-    drawDraft(card, edited, actions, 'Edited here: sent to Claude to update the draft in Gmail.');
-  };
-  buttons.createEl('button', { cls: 'mod-cta', text: 'Save' }).addEventListener('click', save);
-  buttons.createEl('button', { text: 'Cancel' }).addEventListener('click', cancel);
-  card.addEventListener('keydown', (evt) => {
-    if (evt.key === 'Escape') {
-      evt.preventDefault();
-      evt.stopPropagation();
-      cancel();
-    } else if (evt.key === 'Enter' && (evt.metaKey || evt.ctrlKey)) {
-      evt.preventDefault();
-      save();
-    }
-  });
-  body.focus();
+  if (!draft.url) return;
+  const open = card.createDiv({ cls: 'vc-email-actions' }).createEl('a', { cls: 'clickable-icon', href: draft.url, attr: { 'aria-label': 'Open the draft in Gmail' } });
+  setIcon(open, 'external-link');
 }

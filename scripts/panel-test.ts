@@ -1597,34 +1597,24 @@ async function main(): Promise<void> {
       if (!planOk) process.exitCode = 1;
     }
 
-    // A draft's card: Edit shows its subject and whole text in a form; Save hands them on and shows them
-    // as saved, with a note; Esc leaves it as it was.
+    // A draft's card is a display: who, subject, text, files, Gmail; no Send or Edit. A later version's
+    // card leaves the earlier one marked; sending it, every one.
     {
-      const { renderEmailDraft } = await import('../src/emailCards');
+      const { renderEmailDraft, settleDraftCards } = await import('../src/emailCards');
       const host = document.body.appendChild(document.createElement('div'));
-      const edits: string[] = [];
-      renderEmailDraft(host, { id: 'd1', updated: false, to: ['a@example.com'], cc: [], bcc: [], subject: 'Hello', body: 'Line one\nLine two' }, { edit: (_draft, subject, body) => void edits.push(`${subject}|${body}`) });
-      const card = host.querySelector('.vc-email-draft') as HTMLElement;
-      (card.querySelector('[aria-label="Edit the subject and text here"]') as HTMLButtonElement).click();
-      const formShown = card.hasClass('is-editing') && (card.querySelector('.vc-email-edit-body') as HTMLTextAreaElement).value === 'Line one\nLine two';
-      (card.querySelector('.vc-email-edit-subject') as HTMLInputElement).value = 'Hello again';
-      (card.querySelector('.vc-email-edit-body') as HTMLTextAreaElement).value = 'Line one\nLine three';
-      ([...card.querySelectorAll('button')].find((el) => el.textContent === 'Save') as HTMLButtonElement).click();
-      const saved = card.querySelector('.vc-email-subject')?.textContent === 'Hello again' && !!card.querySelector('.vc-email-note');
-      (card.querySelector('[aria-label="Edit the subject and text here"]') as HTMLButtonElement).click();
-      (card.querySelector('.vc-email-edit-body') as HTMLTextAreaElement).value = 'Thrown away';
-      card.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-      const cancelled = !card.hasClass('is-editing') && card.querySelector('.vc-email-subject')?.textContent === 'Hello again' && edits.length === 1;
-      // A later version's card leaves the earlier one nothing to act on; sending it, none at all.
-      const { settleDraftCards } = await import('../src/emailCards');
-      const later = renderEmailDraft(host, { id: 'd1', updated: true, to: ['a@example.com'], cc: [], bcc: [], subject: 'Hello again', body: 'Line one\nLine three' }, { edit: () => undefined, send: () => undefined });
+      const card = renderEmailDraft(host, { id: 'd1', updated: false, to: ['a@example.com'], cc: ['c@example.com'], bcc: [], subject: 'Hello', body: 'Line one', attachments: [{ name: 'notes.txt', type: 'text/plain' }], url: 'https://mail.google.com/mail/?authuser=x#drafts' });
+      const shown = card.textContent ?? '';
+      const display = shown.includes('To a@example.com · Cc c@example.com') && shown.includes('notes.txt') && card.querySelectorAll('button').length === 0 && !!card.querySelector('a[aria-label="Open the draft in Gmail"]');
+      const unsafe = renderEmailDraft(host, { id: 'd2', updated: false, to: [], cc: [], bcc: [], url: 'javascript:alert(1)' });
+      const noUnsafeLink = !unsafe.querySelector('a');
+      const later = renderEmailDraft(host, { id: 'd1', updated: true, to: ['a@example.com'], cc: [], bcc: [], subject: 'Hello again' });
       settleDraftCards(host, 'd1', 'updated');
-      const superseded = card.hasClass('is-settled') && !card.querySelector('.vc-email-actions') && !later.hasClass('is-settled') && !!later.querySelector('.vc-email-actions');
+      const superseded = card.hasClass('is-settled') && !later.hasClass('is-settled');
       settleDraftCards(host, 'd1', 'sent');
-      const sent = later.querySelector('.vc-email-badge')?.textContent === 'Sent' && !later.querySelector('.vc-email-actions');
+      const sent = later.querySelector('.vc-email-badge')?.textContent === 'Sent';
       host.remove();
-      const draftOk = formShown && saved && cancelled && edits[0] === 'Hello again|Line one\nLine three' && superseded && sent;
-      console.log(`draft card edit: form ${formShown}; saved ${saved}; Esc ${cancelled}; handed on ${JSON.stringify(edits)}; earlier version settled ${superseded}; sent ${sent} -> ${draftOk}`);
+      const draftOk = display && noUnsafeLink && superseded && sent;
+      console.log(`draft card: shown as a display ${display}; non-Gmail link dropped ${noUnsafeLink}; earlier version settled ${superseded}; sent ${sent} -> ${draftOk}`);
       if (!draftOk) process.exitCode = 1;
     }
 
@@ -1642,7 +1632,7 @@ async function main(): Promise<void> {
       mailView.finishTool('gmail-create', false, undefined, false, JSON.stringify({ content: [{ type: 'text', text: 'Action completed.' }], structuredContent: { id: 'r-codex-test', message: { thread_id: 't-test' } } }));
       const card = mailView.messagesEl.querySelector('[data-draft="r-codex-test"]');
       const drawn = card?.textContent?.includes('Codex test') && card.textContent.includes('Draft body');
-      const noUnsafeEdit = !card?.querySelector('[aria-label="Edit the subject and text here"]');
+      const noUnsafeEdit = !card?.querySelector('button');
       mailView.addTool('gmail-send', 'mcp__codex_apps__gmail.send_draft', { draft_id: 'r-codex-test' });
       mailView.finishTool('gmail-send', false, undefined, false, 'Action completed.');
       const settled = card?.querySelector('.vc-email-badge')?.textContent === 'Sent';

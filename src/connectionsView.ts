@@ -9,6 +9,7 @@
 import { ItemView, Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import { ProjectPicker } from './projectModals';
 import { mailThreadTitle } from './emailMessages';
+import { safeGmailUrl } from './emailSafety';
 import { folderOf } from './chatFolders';
 import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 
@@ -774,7 +775,8 @@ export class ConnectionsView extends ItemView {
     for (const thread of mail) {
       const row = list.createDiv({ cls: 'vc-map-mail-row' });
       setIcon(row.createSpan({ cls: 'vc-map-mail-icon' }), 'mail');
-      if (thread.url) row.createEl('a', { text: mailThreadTitle(thread), href: thread.url, cls: 'external-link' });
+      const url = safeGmailUrl(thread.url);
+      if (url) row.createEl('a', { text: mailThreadTitle(thread), href: url, cls: 'external-link' });
       else row.createSpan({ text: mailThreadTitle(thread) });
       if (thread.at) row.createSpan({ cls: 'vc-muted', text: new Date(thread.at).toISOString().slice(0, 10) });
     }

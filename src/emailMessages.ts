@@ -1,3 +1,4 @@
+import { safeGmailUrl } from './emailSafety';
 import { codexGmailMessages, codexGmailTool, gmailBody, gmailResult } from './gmailAdapter';
 
 // The messages in what Claude Code's Gmail tools return (a search, a thread, a message), for the
@@ -113,7 +114,8 @@ function message(raw: RawMessage, count?: number): EmailMessage {
   const labels = Array.isArray(raw.labelIds) ? raw.labelIds : [];
   const full = str(raw.plaintextBody).replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   const body = decodeEntities(full);
-  const url = str(raw.viewUrl);
+  // Links open only in Gmail, whatever the result says (see safeGmailUrl).
+  const url = safeGmailUrl(raw.viewUrl) ?? '';
   const threadId = str(raw.threadId);
   const zip = attachmentsZipUrl(url, str(raw.id));
   const attachments = (Array.isArray(raw.attachments) ? raw.attachments : []).flatMap((each: { filename?: unknown; mimeType?: unknown; partId?: unknown }) => {
@@ -235,7 +237,7 @@ export function emailDraft(name: string, input: Record<string, unknown>, text: s
   const result = gmailResult(text, structured) as { viewUrl?: unknown; id?: unknown; threadId?: unknown; message?: { thread_id?: unknown } } | null;
   if (!result || typeof result !== 'object' || typeof result.id !== 'string' || !result.id) return null;
   const list = (value: unknown) => (Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : typeof value === 'string' && value ? [value] : []);
-  const url = str(result.viewUrl);
+  const url = safeGmailUrl(result.viewUrl);
   const replyTo = str(input.replyToMessageId);
   const threadId = str(result.threadId) || str(result.message?.thread_id);
   const attachments = draftAttachments(input);

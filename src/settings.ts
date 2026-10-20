@@ -1,6 +1,6 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from 'obsidian';
 import { delimiter } from 'path';
-import type { EffortLevel, PermissionMode } from '@anthropic-ai/claude-agent-sdk';
+import type { EffortLevel, PermissionMode, Settings } from '@anthropic-ai/claude-agent-sdk';
 import type VaultClaudePlugin from './main';
 import { detectClaudePath } from './session';
 import { prettyModel } from './usageDisplay';
@@ -39,6 +39,15 @@ const DEFAULT_DENY_RULES = [
 
 /** The Gmail connector's tools that send mail, refused while "Mail: drafts only" is on. */
 const MAIL_SEND_TOOLS = ['send_message', 'reply', 'forward', 'send_draft'].map((tool) => `mcp__claude_ai_Gmail__${tool}`);
+
+/**
+ * The settings a Claude chat starts with (Claude Code's flag layer): with "Mail: drafts only" off, the
+ * Gmail tools that send are ask rules, so that each send asks you whatever the permission mode (with it
+ * on they are denied, see sessionDenyRules).
+ */
+export function sessionMailSettings(settings: Pick<VaultClaudeSettings, 'mailDraftsOnly'>): Settings | undefined {
+  return settings.mailDraftsOnly ? undefined : { permissions: { ask: [...MAIL_SEND_TOOLS] } };
+}
 
 /** The rules every chat runs with: the deny rules set, and, with "Mail: drafts only", the Gmail tools that send. */
 export function sessionDenyRules(settings: Pick<VaultClaudeSettings, 'denyRules' | 'mailDraftsOnly'>): string[] {
