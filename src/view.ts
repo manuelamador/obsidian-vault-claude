@@ -1617,6 +1617,25 @@ export class ChatView extends ItemView {
     button.setAttr('aria-label', parts.length > 0 ? `${parts.join('. ')}. Click for options.` : 'Phone access: off. Click to turn it on for Claude Code or Codex.');
   }
 
+  /** Whether this panel has a session open on chat `id`: the chat on screen, or one in its background. */
+  hasSessionOn(id: string): boolean {
+    if (this.session && (this.chatId ?? this.resumeId) === id) return true;
+    return [...this.background].some((entry) => entry.chatId === id);
+  }
+
+  /** How many of this panel's Codex chats are working through Codex's shared app-server: on screen, or in the background. */
+  workingSharedCodex(): number {
+    const onScreen = this.session instanceof CodexSession && this.session.shared && (this.busy || this.pending.size > 0 || this.tasks.size > 0) ? 1 : 0;
+    return onScreen + [...this.background].filter((entry) => entry.session instanceof CodexSession && entry.session.shared).length;
+  }
+
+  /** Obsidian is quitting: this panel's Codex sessions on the shared app-server are let go of now, before it stops (see stopCodexDaemonAtQuit). Their ends. */
+  releaseSharedCodex(): Promise<void>[] {
+    const sessions = [this.session, ...[...this.background].map((entry) => entry.session)].filter((session): session is CodexSession => session instanceof CodexSession && session.shared);
+    for (const session of sessions) session.close();
+    return sessions.map((session) => session.ended);
+  }
+
   /** Codex's shared app-server is being started (see VaultClaudePlugin.setPhoneCodex). */
   codexDaemonStarting = false;
 
@@ -2147,12 +2166,12 @@ export class ChatView extends ItemView {
     this.updateContextChip();
   }
 
-  /** Whether chat `id` is on screen here or running in this panel's background. */
   /** Whether chat `id` is the one on screen here (by either id: one opened from the history has no id of its own until its first message). */
   showsChat(id: string): boolean {
     return (this.chatId ?? this.resumeId) === id;
   }
 
+  /** Whether chat `id` is on screen here or running in this panel's background. */
   holdsChat(id: string): boolean {
     return this.chatId === id || [...this.background].some((entry) => entry.chatId === id);
   }
@@ -8174,7 +8193,7 @@ export class ChatView extends ItemView {
       }
       const chat = this.plugin.settings.sideChatContext === 'chat' ? (this.chatId ?? this.resumeId) : null;
       return new CodexSession(
-        { ...codex, ...(chat ? { fork: chat } : {}), readOnly: true, hidden: this.plugin.settings.codexHidden, developerInstructions: APPEND_SYSTEM_PROMPT + sideChatPrompt(chat !== null), model: this.codexModel, effort: this.codexEffort, denyRules: sessionDenyRules(this.plugin.settings) },
+        { ...codex, ...(chat ? { fork: chat, forkLetGo: () => !this.plugin.chatHeldOpen(chat) } : {}), readOnly: true, hidden: this.plugin.settings.codexHidden, developerInstructions: APPEND_SYSTEM_PROMPT + sideChatPrompt(chat !== null), model: this.codexModel, effort: this.codexEffort, denyRules: sessionDenyRules(this.plugin.settings) },
         handlers,
       );
     }

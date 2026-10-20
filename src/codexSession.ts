@@ -25,6 +25,8 @@ export interface CodexSessionConfig extends CodexLaunch {
   readOnly?: boolean;
   /** Kept out of Codex's own lists (the app, the phone): archived when the session ends, unarchived before it resumes. */
   hidden?: boolean;
+  /** Hidden, the thread copied (see fork) is archived again once copied, when this says nothing else has it open. */
+  forkLetGo?: () => boolean;
   /** Instructions added to Codex's own (as the panel's system prompt addition is for Claude). */
   developerInstructions?: string;
   /** The model and reasoning effort to run; none uses Codex's own settings. */
@@ -329,14 +331,19 @@ export class CodexSession {
       const { resume, fork } = this.config;
       // Kept archived (see hidden): Codex resumes or copies only a thread that is not.
       const archived = resume ?? fork;
-      if (this.config.hidden && archived) await unarchiveQuietly((method, params) => this.request(method, params), archived);
-      const opened = (await (resume
-        ? this.request('thread/resume', { ...params, threadId: resume })
-        : fork
-          ? this.request('thread/fork', { ...params, threadId: fork, excludeTurns: true })
-          : this.request('thread/start', params))) as { thread?: { id?: string }; model?: string };
-      // A resumed one is archived again as it is let go of (see close). A copied one (a side chat's) is
-      // left unarchived: its chat is open in the panel, and is archived as that chat is let go of.
+      const unarchived = this.config.hidden && archived ? await unarchiveQuietly((method, params) => this.request(method, params), archived) : false;
+      let opened: { thread?: { id?: string }; model?: string };
+      try {
+        opened = (await (resume
+          ? this.request('thread/resume', { ...params, threadId: resume })
+          : fork
+            ? this.request('thread/fork', { ...params, threadId: fork, excludeTurns: true })
+            : this.request('thread/start', params))) as typeof opened;
+      } finally {
+        // A resumed one is archived again as it is let go of (see close). A copied one (a side chat's)
+        // goes back at once, copied or not, unless its own chat has it open, which archives it as it lets go.
+        if (unarchived && fork && !resume && this.config.forkLetGo?.()) await this.request('thread/archive', { threadId: fork }).catch(() => undefined);
+      }
       this.sessionId = opened.thread?.id ?? resume ?? null;
       this.model = opened.model ?? null;
       if (!this.sessionId) throw new Error('Codex started no thread');
