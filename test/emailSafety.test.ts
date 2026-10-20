@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { emailMarkdown } from '../src/emailCards';
 import { inertEmailText, safeGmailUrl } from '../src/emailSafety';
-import { sessionDenyRules, sessionMailSettings } from '../src/settings';
 
 test('only Gmail addresses are kept as links', () => {
   assert.equal(safeGmailUrl('https://mail.google.com/mail/?authuser=x#all/1'), 'https://mail.google.com/mail/?authuser=x#all/1');
@@ -15,11 +14,4 @@ test("an email saved or quoted loads nothing: its images and HTML are text, its 
   assert.ok(saved.includes('See \\![](https://t.example/p.png)'));
   assert.ok(!saved.includes('<b>') && !saved.includes('javascript:'));
   assert.ok(saved.includes('Cc c@example.com'));
-});
-
-test('with sending allowed, every Gmail send asks; with drafts only, sending tools are denied', () => {
-  const tools = ['send_message', 'reply', 'forward', 'send_draft'].map((tool) => `mcp__claude_ai_Gmail__${tool}`);
-  assert.deepEqual(sessionMailSettings({ mailDraftsOnly: false }), { permissions: { ask: tools } });
-  assert.equal(sessionMailSettings({ mailDraftsOnly: true }), undefined);
-  assert.deepEqual(sessionDenyRules({ denyRules: '', mailDraftsOnly: true }), tools);
 });

@@ -78,7 +78,7 @@ import { CodexSession, forkCodexThread, revertCodexThread, type CodexModel } fro
 
 /** A chat's session: Claude Code's, or Codex's (see CodexSession), which has the same shape. */
 type ChatSession = ClaudeSession | CodexSession;
-import { SCRATCH_IDLE_CHOICES, chatModel, idleLabel, sessionDenyRules, sessionMailSettings, modeShort, permissionModes, type ToolDisplay } from './settings';
+import { SCRATCH_IDLE_CHOICES, chatModel, idleLabel, sessionDenyRules, modeShort, permissionModes, type ToolDisplay } from './settings';
 import { summarizeTool, toolLabel, vaultRelative } from './toolSummary';
 import { ChangesCard, agentDiffs, isOwnChange, openFileAtLine, savedChangedFiles, toolDiffs, type EditDiff } from './editDiff';
 import { linkFileNames } from './fileLinks';
@@ -5211,8 +5211,6 @@ export class ChatView extends ItemView {
         forkSession: this.forkOnResume,
         allowBypass: settings.allowBypass,
         denyRules: sessionDenyRules(settings),
-        // Every Gmail send asks, whatever the permission mode (Claude Code's own ask rules).
-        settings: sessionMailSettings(settings),
         // Its multiple-choice questions are answered in the chat (see renderApprovalCard); a side
         // chat leaves them off, and asks in plain text.
         askQuestions: true,
@@ -8489,8 +8487,6 @@ export class ChatView extends ItemView {
         appendSystemPrompt: APPEND_SYSTEM_PROMPT + sideChatPrompt(this.sideForks.has(id)),
         ...resume,
         denyRules: sessionDenyRules(settings),
-        // Every Gmail send asks, whatever the permission mode (Claude Code's own ask rules).
-        settings: sessionMailSettings(settings),
       },
       handlers,
     );

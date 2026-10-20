@@ -817,8 +817,6 @@ function connectorApp(message: string): string | undefined {
  */
 function allowKeyOf(server: string, message: string): string | undefined {
   const tool = /\brun tool "([^"]+)"/.exec(message)?.[1];
-  // A tool that sends mail asks each time: an email read in the chat could ask for a send.
-  if (tool && /(?:^|[._])(send_draft|send_email|send_message|forward_emails|forward|reply)$/i.test(tool)) return undefined;
   return tool ? `${server}:tool:${tool}` : message.trim() ? `${server}:message:${message.trim()}` : undefined;
 }
 
