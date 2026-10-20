@@ -2329,17 +2329,6 @@ export class ChatView extends ItemView {
     return entry ? { busy: entry.busy, tasks: entry.tasks.size, approvals: entry.approvals.length, onPhone: entry.remoteUrl !== null } : null;
   }
 
-  /** Ends chat `id`'s process if it runs in this panel's background, taking it off the phone; whether it did. */
-  closeBackgroundOf(id: string): boolean {
-    const entries = [...this.background].filter((entry) => entry.chatId === id);
-    for (const entry of entries) this.dropBackground(entry);
-    if (entries.length === 0) return false;
-    log('background chat closed from the history', { id });
-    this.updateBackgroundIndicator();
-    this.updatePhoneButton();
-    return true;
-  }
-
   /** Takes chat `id` off the phone if it is this panel's chat on screen and on the phone; whether it did. */
   async takeChatOffPhone(id: string): Promise<boolean> {
     if ((this.chatId ?? this.resumeId) !== id || !this.remoteUrl) return false;
@@ -2545,6 +2534,10 @@ export class ChatView extends ItemView {
           if (entry.chatId && this.plugin.awaitsReport(entry.chatId)) this.plugin.reportDone(entry.chatId, entry.lastText, message.is_error);
           entry.busy = false;
           entry.turnPrompts = [];
+          // Whether the turn answered a message sent from the panel, rather than one from the phone.
+          // Older Claude Code names none: then, whether any was waiting.
+          const answered = message.user_message_uuids;
+          const sentHere = answered ? answered.some((id) => entry.pendingIds.has(id)) : entry.pendingIds.size > 0;
           for (const id of message.user_message_uuids ?? []) entry.pendingIds.delete(id);
           if (entry.pendingIds.size > 0 && !entry.waitedForQueue) {
             // A queued message not taken up by this turn runs as the next one.
@@ -2556,14 +2549,21 @@ export class ChatView extends ItemView {
           entry.pendingIds.clear();
           entry.waitedForQueue = false;
           const succeeded = message.subtype === 'success' && !message.is_error;
-          if (message.duration_ms >= this.plugin.settings.notifyAfterSeconds * 1000) {
+          // A reply to a message sent from the phone is read there: no notification here.
+          const fromPhone = entry.remoteUrl !== null && !sentHere;
+          if (!fromPhone && message.duration_ms >= this.plugin.settings.notifyAfterSeconds * 1000) {
             this.systemNotify(succeeded ? 'Claude finished' : 'Claude stopped with an error', entry.title ?? 'A chat', () => void this.showChat(entry));
           }
-          if (entry.remoteUrl || entry.tasks.size > 0) {
-            // On the phone: kept running so it can be continued there. With background tasks
-            // running: kept for them, and Claude takes up their results in a turn of its own. Its
-            // reply is done all the same, and said so as for a chat that ends.
-            this.announceDone(entry, succeeded);
+          if (entry.tasks.size > 0) {
+            // With background tasks running: kept for them, and Claude takes up their results in a
+            // turn of its own; said done when it ends (see finishBackground).
+            this.updateBackgroundIndicator();
+            return;
+          }
+          if (entry.remoteUrl) {
+            // On the phone: kept running so it can be continued there. A reply to a message sent
+            // from the panel is done all the same, and said so as for a chat that ends.
+            if (!fromPhone) this.announceDone(entry, succeeded);
             this.updateBackgroundIndicator();
             return;
           }
@@ -2635,10 +2635,16 @@ export class ChatView extends ItemView {
     session.close();
   }
 
-  /** Stops chat `id` if it runs in this panel's background, without a word: it has been let go of (the scratch chat, cleared). */
-  closeBackgroundChat(id: string): void {
-    for (const entry of [...this.background]) if (entry.chatId === id) this.dropBackground(entry);
+  /**
+   * Stops chat `id` if it runs in this panel's background, without a word, taking it off the phone:
+   * it has been let go of (the scratch chat, cleared), or closed from the history. Whether it ran here.
+   */
+  closeBackgroundChat(id: string): boolean {
+    const entries = [...this.background].filter((entry) => entry.chatId === id);
+    for (const entry of entries) this.dropBackground(entry);
     this.updateBackgroundIndicator();
+    this.updatePhoneButton();
+    return entries.length > 0;
   }
 
   /**
@@ -3093,7 +3099,7 @@ export class ChatView extends ItemView {
         remove: (item) => (item.scratch ? this.plugin.clearScratchChat().then(() => true) : this.plugin.deleteChat(item.id)),
         searchText: (item) => this.plugin.chatSearchText(item.id),
         stopTasks: (item) => void this.plugin.stopChatTasks(item.id),
-        close: (item) => this.plugin.closeBackgroundChat(item.id),
+        close: (item) => this.plugin.closeRunningChat(item.id),
         noteLinks: () => ({ changed: this.plugin.noteChats, sent: this.plugin.noteRefs, mentioned: this.plugin.noteMentions }),
         openNote: (path) => void this.openNoteLink(path, '', 'tab'),
         projectOf: (folder) => this.plugin.projectOfFolder(folder)?.path ?? null,

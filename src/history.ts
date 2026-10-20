@@ -135,21 +135,35 @@ const firstPrompts = new Map<string, { stamp: string; prompt: string | null }>()
 /** How far into a session file its first prompt is looked for: in the vault's 122, it was at most 600 KB in. */
 const FIRST_PROMPT_BYTES = 1024 * 1024;
 
-/** How far into a session file its entrypoint is looked for: it is on the first rows with a message. */
-const ENTRYPOINT_BYTES = 64 * 1024;
+/** A first prompt that starts with the panel's context block: a panel chat whatever else its file says. */
+const CONTEXT_START = /^<(obsidian_context|project_context|linked_chats)>/;
+
+/** How much of a session file is read at a time for its entrypoint (see sessionEntrypoint). */
+const ENTRYPOINT_CHUNK = 64 * 1024;
 
 /**
  * What started session `id`, as Claude Code records it on its rows (`"entrypoint":"sdk-ts"` for
  * the panel's chats, `cli` for the terminal, `claude-desktop` for the desktop app); null if none is
- * found near its start.
+ * found within its first FIRST_PROMPT_BYTES. Rows before the first message (snapshots of the files
+ * it may change) carry none: in the vault's sessions on 2026-10-20 the first was up to 345 KB in.
  */
 async function sessionEntrypoint(id: string, dir: string): Promise<string | null> {
   const file = await fs.open(sessionFile(id, dir), 'r').catch(() => null);
   if (!file) return null;
   try {
-    const buffer = Buffer.alloc(ENTRYPOINT_BYTES);
-    const { bytesRead } = await file.read(buffer, 0, ENTRYPOINT_BYTES, 0);
-    return /"entrypoint":"([^"]+)"/.exec(buffer.toString('utf8', 0, bytesRead))?.[1] ?? null;
+    const buffer = Buffer.alloc(ENTRYPOINT_CHUNK);
+    // Each read overlaps the last by a little, so that a marker cut between two reads is still found.
+    const overlap = 64;
+    let tail = '';
+    for (let at = 0; at < FIRST_PROMPT_BYTES; at += ENTRYPOINT_CHUNK) {
+      const { bytesRead } = await file.read(buffer, 0, ENTRYPOINT_CHUNK, at);
+      if (bytesRead === 0) return null;
+      const text = tail + buffer.toString('utf8', 0, bytesRead);
+      const found = /"entrypoint":"([^"]+)"/.exec(text)?.[1];
+      if (found) return found;
+      tail = text.slice(-overlap);
+    }
+    return null;
   } finally {
     await file.close();
   }
@@ -181,7 +195,7 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
   await eachInParallel(unread, async ({ sessionId }) => {
     const first = await firstUserText(sessionId, dir);
     if (first === null) empty.add(sessionId);
-    else unrecorded.set(sessionId, !interactiveIds.has(sessionId) && (await sessionEntrypoint(sessionId, dir)) === 'sdk-ts' ? chatTitle(first) : false);
+    else unrecorded.set(sessionId, !interactiveIds.has(sessionId) && (CONTEXT_START.test(first) || (await sessionEntrypoint(sessionId, dir)) === 'sdk-ts') ? chatTitle(first) : false);
   });
   const listed: { item: HistoryItem; stamp: string }[] = [];
   for (const session of sessions) {

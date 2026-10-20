@@ -169,7 +169,7 @@ async function main(): Promise<void> {
     codexLaunch: () => 'Codex is not set up in the panel test.',
     backgroundChat: () => null,
     phoneChats: () => new Set<string>(),
-    closeBackgroundChat: async () => false,
+    closeRunningChat: async () => false,
     loadAnyChat: async (id: string, root: string) => (await import('../src/history')).loadChat(id, root),
     mailOfChats: (): unknown[] => [],
     setHomeProject: async () => undefined,

@@ -314,10 +314,11 @@ export class HistoryModal extends SuggestModal<Match> {
       setIcon(phone, 'smartphone');
     }
     // Open and In the background say where a chat is; the rest say it is doing something. On the
-    // phone is the icon before it.
-    if (item.status && item.status !== 'On your phone') {
-      const quiet = item.status === 'Open' || item.status === 'In the background';
-      meta.createSpan({ cls: `vc-history-status${quiet ? ' is-quiet' : ''}`, text: `${quiet ? '○' : '●'} ${item.status} · ` });
+    // phone is the icon before it, not said again.
+    const status = item.status?.replace(/^On your phone(?: · )?/, '');
+    if (status) {
+      const quiet = status === 'Open' || status === 'In the background';
+      meta.createSpan({ cls: `vc-history-status${quiet ? ' is-quiet' : ''}`, text: `${quiet ? '○' : '●'} ${status} · ` });
     }
     if (item.scratch) meta.appendText(item.updatedAt ? `${formatDate(item.updatedAt)} · starts over when idle` : 'not used yet · starts over when idle');
     else meta.appendText(`${formatDate(item.updatedAt)}${origin(item)}`);

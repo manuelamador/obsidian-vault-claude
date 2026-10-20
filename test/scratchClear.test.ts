@@ -31,7 +31,7 @@ function setup() {
     let showing = shows;
     view.isScratchChat = () => showing;
     view.holdsChat = () => showing;
-    view.closeBackgroundChat = (chat) => void calls.push(`background ${chat === id}`);
+    view.closeBackgroundChat = (chat) => (calls.push(`background ${chat === id}`), false);
     view.keepAsChat = (chat) => void calls.push(`kept as a chat ${chat === id}`);
     view.startScratchOver = () => {
       calls.push('started over');

@@ -12,10 +12,12 @@ test('the history lists the SDK sessions as panel chats without records, leaving
   mkdirSync(dir, { recursive: true });
   const before = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = config;
-  const session = (entrypoint: string, text: string, customTitle?: string, aiTitle?: string) => {
+  const session = (entrypoint: string, text: string, customTitle?: string, aiTitle?: string, snapshot = 0) => {
     const id = randomUUID();
     const uuid = randomUUID();
     const rows: object[] = [
+      // What Claude Code writes before the first message, with no entrypoint: snapshots of the files it may change.
+      ...(snapshot > 0 ? [{ type: 'file-history-snapshot', messageId: randomUUID(), snapshot: { trackedFileBackups: { 'a.md': 'x'.repeat(snapshot) } } }] : []),
       { type: 'user', uuid, parentUuid: null, sessionId: id, cwd: root, entrypoint, timestamp: new Date().toISOString(), message: { role: 'user', content: text } },
       { type: 'assistant', uuid: randomUUID(), parentUuid: uuid, sessionId: id, cwd: root, entrypoint, timestamp: new Date().toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } },
     ];
@@ -32,11 +34,13 @@ test('the history lists the SDK sessions as panel chats without records, leaving
     const withContext = session('sdk-ts', '<obsidian_context>\nNote: a.md\n</obsidian_context>\n\nabout this note', undefined, 'About a note');
     const renamed = session('sdk-ts', 'first prompt', 'Renamed chat');
     const mention = session('sdk-ts', '@[[Research Projects/BankRegulation/]] here is a new version');
+    // Its first entrypoint 300 KB in, past a large snapshot; listed by Claude Code once it has named it.
+    const late = session('sdk-ts', 'entrypoint found late', undefined, 'Found late', 300_000);
     const side = session('sdk-ts', 'a side chat');
     const terminal = session('cli', 'from the terminal');
     const items = await listHistory(root, [], false, new Set([side]));
     const byId = new Map(items.map((item) => [item.id, item]));
-    assert.deepEqual([...byId.keys()].sort(), [plain, withContext, renamed, mention].sort());
+    assert.deepEqual([...byId.keys()].sort(), [plain, withContext, renamed, mention, late].sort());
     assert.equal(byId.get(mention)?.title, '@BankRegulation here is a new version');
     assert.equal(byId.get(plain)?.title, 'a chat sent with no note open');
     assert.equal(byId.get(withContext)?.title, 'About a note');
