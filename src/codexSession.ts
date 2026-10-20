@@ -801,10 +801,13 @@ function connectorApp(message: string): string | undefined {
   return /^Allow (.+?) to run tool\b/.exec(message)?.[1];
 }
 
-/** What "Allow for this chat" allows for a request (see ConnectorRequest.allowKey): the tool it names, else its whole message. */
-function allowKeyOf(message: string): string | undefined {
+/**
+ * What "Allow for this chat" allows for a request (see ConnectorRequest.allowKey): the tool it names,
+ * else its whole message, of its connector (`server`), so that one's allowance covers no other's.
+ */
+function allowKeyOf(server: string, message: string): string | undefined {
   const tool = /\brun tool "([^"]+)"/.exec(message)?.[1];
-  return tool ? `tool:${tool}` : message.trim() ? `message:${message.trim()}` : undefined;
+  return tool ? `${server}:tool:${tool}` : message.trim() ? `${server}:message:${message.trim()}` : undefined;
 }
 
 /** The ways a connector asks with a form (see readElicitation), as Codex's app-server names them. */
@@ -826,7 +829,7 @@ function shownValue(value: unknown): string {
 export function readElicitation(params: Record<string, unknown>): { connector: ConnectorRequest; content: Record<string, unknown> } {
   const message = typeof params.message === 'string' ? params.message : '';
   const mode = typeof params.mode === 'string' ? params.mode : 'form';
-  const allowKey = allowKeyOf(message);
+  const allowKey = allowKeyOf(typeof params.serverName === 'string' ? params.serverName : 'connector', message);
   const connector: ConnectorRequest = { message, fields: [], ...(allowKey ? { allowKey } : {}) };
   const content: Record<string, unknown> = {};
   if (mode === 'url') {

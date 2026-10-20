@@ -7282,7 +7282,8 @@ export class ChatView extends ItemView {
    */
   private requestDraftEdit(draft: EmailDraft, subject: string, body: string): void {
     // How (exactly, recipients kept, not with attachments) is in the panel's standing instructions (see APPEND_SYSTEM_PROMPT).
-    this.sendOrDraft(`Update draft ${draft.id} to this subject and text, exactly as written:\n\nSubject: ${subject}\n\n${body}`, 'Draft edit added below your message: send it when ready');
+    // The values as JSON strings: where each begins and ends, and its whitespace, exactly.
+    this.sendOrDraft(`Update draft ${draft.id} to this subject and text, exactly as written (JSON strings):\nSubject: ${JSON.stringify(subject)}\nText: ${JSON.stringify(body)}`, 'Draft edit added below your message: send it when ready');
   }
 
   /** Sends `text` as a message when the input is empty; with a draft there, adds it below for you to send (`hint` says so). */

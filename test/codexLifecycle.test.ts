@@ -333,7 +333,7 @@ test("a connector's request allowed for the chat is answered without a card", as
     session.send('send it');
     await done;
     assert.equal(asked.length, 0);
-    assert.deepEqual(allowed, ['t1 message:Send this email?']);
+    assert.deepEqual(allowed, ['t1 gmail:message:Send this email?']);
     assert.deepEqual(JSON.parse(readFileSync(`${dir}/answer.json`, 'utf8')), { action: 'accept', content: { note: 'ok' }, _meta: null });
     session.close();
   } finally {
