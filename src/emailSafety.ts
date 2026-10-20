@@ -20,5 +20,23 @@ export function safeGmailUrl(value: unknown): string | undefined {
  * starts a tag is escaped, so `a < b` reads as written.
  */
 export function inertEmailText(text: string): string {
-  return text.replace(/!(?=\[)/g, '&#33;').replace(/<(?=[A-Za-z/!?])/g, '&lt;');
+  // A line opening with `>` would nest a quote inside the saved one, whose first line could then be a live callout (`> [!danger] …`).
+  return text.replace(/!(?=\[)/g, '&#33;').replace(/<(?=[A-Za-z/!?])/g, '&lt;').replace(/^(\s*)>/gm, '$1&gt;');
+}
+
+/** The Tasks plugin's markers (dates, recurrence, priority, done) and block ids, which an email's text must not set on a task. */
+const TASK_MARKERS = /[📅⏳🛫🔁⏫🔼🔽✅➕❌⛔🆔]\uFE0F?|\^[\w-]+/gu;
+
+/**
+ * Text from an email as it goes into a task line (an email card's Make a todo): plain words, shown and
+ * edited as typed, with images, tags and the Tasks plugin's markers taken out, so that it loads nothing
+ * and sets no date, recurrence or priority of its own.
+ */
+export function plainEmailText(text: string): string {
+  return text
+    .replace(/!(?=\[)/g, '')
+    .replace(/<\/?[A-Za-z][^>]*>/g, '')
+    .replace(TASK_MARKERS, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }

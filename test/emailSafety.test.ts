@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { emailMarkdown } from '../src/emailCards';
-import { inertEmailText, safeGmailUrl } from '../src/emailSafety';
+import { inertEmailText, plainEmailText, safeGmailUrl } from '../src/emailSafety';
 
 test('only Gmail addresses are kept as links', () => {
   assert.equal(safeGmailUrl('https://mail.google.com/mail/?authuser=x#all/1'), 'https://mail.google.com/mail/?authuser=x#all/1');
@@ -18,4 +18,13 @@ test("an email saved or quoted loads nothing: its images and HTML are text, its 
   assert.ok(saved.includes('See &#33;[](https://t.example/p.png)'));
   assert.ok(!saved.includes('<b>') && !saved.includes('javascript:'));
   assert.ok(saved.includes('Cc c@example.com'));
+});
+
+test('a quote inside a saved email cannot become a live callout', () => {
+  assert.equal(inertEmailText('> [!danger] Your account is locked\n  > nested'), '&gt; [!danger] Your account is locked\n  &gt; nested');
+});
+
+test("a todo from an email is plain words: no images, tags or Tasks markers of the sender's", () => {
+  assert.equal(plainEmailText('Reply to Ann: Re: <b>Budget</b> ![x](https://t.example/p.png) 📅 2026-10-21 🔁 every day ⏫ ^gcal-1'), 'Reply to Ann: Re: Budget [x](https://t.example/p.png) 2026-10-21 every day');
+  assert.equal(plainEmailText('Reply to Ann: a < b'), 'Reply to Ann: a < b');
 });

@@ -51,7 +51,7 @@ import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks,
 import { DoneTabs, type DoneTab } from './doneTabs';
 import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, settleDraftCards, threadMarkdown } from './emailCards';
 import { TodoModal } from './todoModal';
-import { inertEmailText, safeGmailUrl } from './emailSafety';
+import { plainEmailText, safeGmailUrl } from './emailSafety';
 import { draftEnded, emailDraft, emailMessages, mailThreadTitle, readsThread, resultText, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
@@ -3639,9 +3639,10 @@ export class ChatView extends ItemView {
 
   /**
    * A finished reply's steps — tool calls, thinking and approvals — fold into one line; a click
-   * opens them. Only a run of two or more: a lone group is already one line. What Claude wrote before
-   * its last step (a note of what it is about to do) folds with them, shown muted there; what it wrote
-   * after its last step, the answer, stays open below. Cards (mail, changed files) stay in place.
+   * opens them. Only a run of two or more: a lone group is already one line. The answer is the last
+   * text written after a step began (or the only text of a reply without steps): it stays open, even
+   * with a step after it (a todo list updated). Other text before the last step (a note of what it is
+   * about to do) folds with the steps, shown muted there. Cards (mail, changed files) stay in place.
    */
   private foldSteps(turn: HTMLElement): void {
     if (turn.hasClass('has-folded-steps')) return;
@@ -3654,10 +3655,11 @@ export class ChatView extends ItemView {
     // fold into two with nothing between: it is removed. Judged by its source, not by what is on
     // screen, since a reply's Markdown is still being rendered when a chat opened from the history folds.
     const children = (Array.from(turn.children) as HTMLElement[]).filter((el) => !isTrailer(el));
-    // Text before the last step is a note on the way; the last text is the answer, kept open even when
-    // a step follows it (a todo list updated, a note saved, a card asking you something).
+    // The answer: the last text, if a step came before it; a text before every step is a preamble.
     const texts = children.map((el, i) => (el.hasClass('vc-text') && !this.isBlankText(el) ? i : -1)).filter((i) => i >= 0);
-    const answer = texts.length > 0 ? texts[texts.length - 1] : -1;
+    const firstStep = children.findIndex((el) => isStep(el));
+    const lastText = texts.at(-1) ?? -1;
+    const answer = lastText > firstStep ? lastText : -1;
     const lastStep = children.map((el) => isStep(el)).lastIndexOf(true);
     const interim = new Set(texts.filter((i) => i < lastStep && i !== answer).map((i) => children[i]));
     for (const el of interim) el.addClass('is-interim');
@@ -7256,8 +7258,8 @@ export class ChatView extends ItemView {
         const where = `“${this.plugin.settings.todoNote}”, under ${this.plugin.settings.todoSection}`;
         const url = safeGmailUrl(message.url);
         const link = url ? ` [mail](${url})` : '';
-        // The sender's name and subject are the email's own text: made inert as a saved email's is (see inertEmailText).
-        new TodoModal(this.app, inertEmailText(`Reply to ${message.sender.replace(/\s*<[^>]*>/, '')}: ${message.subject || 'their message'}`), where, (text, due) => void this.plugin.addTodo(`${text}${link}`, due)).open();
+        // The sender's name and subject are the email's own text: plain words in the task line (see plainEmailText).
+        new TodoModal(this.app, plainEmailText(`Reply to ${message.sender.replace(/\s*<[^>]*>/, '')}: ${message.subject || 'their message'}`), where, (text, due) => void this.plugin.addTodo(`${text}${link}`, due)).open();
       },
       saveThread: (messages) => void this.replyToNewNote(threadMarkdown(messages), messages[0]?.subject || 'Email thread'),
       // By its id: the subject, which its sender wrote, stays out of your message.

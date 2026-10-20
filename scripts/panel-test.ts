@@ -2400,8 +2400,16 @@ async function main(): Promise<void> {
       (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(tailTurn);
       const open = [...tailTurn.querySelectorAll<HTMLElement>(':scope > .vc-text')].map((el) => el.textContent).join('|');
       const folded = [...tailTurn.querySelectorAll<HTMLElement>('.vc-steps .vc-text.is-interim')].map((el) => el.textContent).join('|');
-      const tailOk = open === 'Here is the answer.' && folded === 'Let me look.';
-      console.log(`answer followed by a step: open ${open}; folded ${folded} -> ${tailOk}`);
+      // A text before every step, with none after (a reply ending on steps or a card), is a preamble: folded.
+      const preTurn = document.createElement('div');
+      preTurn.createDiv({ cls: 'vc-text', text: "I'll check the files." });
+      preTurn.createDiv({ cls: 'vc-tools' }).createDiv({ cls: 'vc-tool', text: 'Read x' });
+      preTurn.createDiv({ cls: 'vc-permission', text: 'Allow?' });
+      (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(preTurn);
+      const preOpen = preTurn.querySelectorAll(':scope > .vc-text').length;
+      const preFolded = preTurn.querySelector('.vc-steps .vc-text.is-interim')?.textContent;
+      const tailOk = open === 'Here is the answer.' && folded === 'Let me look.' && preOpen === 0 && preFolded === "I'll check the files.";
+      console.log(`answer followed by a step: open ${open}; folded ${folded}; preamble with no answer folded ${preFolded} -> ${tailOk}`);
       if (!tailOk) process.exitCode = 1;
     }
     // Text with nothing to show between steps (white space streamed between tool calls) leaves one fold.
