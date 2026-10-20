@@ -41,7 +41,7 @@ export interface CodexSessionConfig extends CodexLaunch {
   access?: CodexAccess;
   /** Fast mode: each turn asks for Codex's fast tier; off, the thread's own tier (Codex's settings). */
   fast?: boolean;
-  /** The panel's deny rules (see sessionDenyRules): a command they match is refused without asking. */
+  /** The panel's deny rules (see denyRuleList): a command they match is refused without asking. */
   denyRules?: string[];
 }
 

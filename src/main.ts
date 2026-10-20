@@ -4482,7 +4482,12 @@ export default class VaultClaudePlugin extends Plugin {
     }
     // Up to 0.13.0 a panel-wide switch, on by default; notes are now attached per chat, and none to start with.
     delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
-    // Up to 0.39 "Mail: drafts only": sending is left to Claude Code's and Codex's own permissions.
+    // Up to 0.39 "Mail: drafts only": sending is left to Claude Code's and Codex's own permissions. One
+    // who had it on is told once, with how to keep the block, as it goes.
+    if ((stored as Partial<Record<'mailDraftsOnly', unknown>>).mailDraftsOnly === true) {
+      new Notice('Vault Claude no longer blocks sending mail ("Mail: drafts only" is gone): Claude Code\'s and Codex\'s own permissions decide. To keep Claude from sending, add mcp__claude_ai_Gmail__send_message, __reply, __forward and __send_draft to the deny rules in the settings.', 0);
+      this.saveSoon();
+    }
     delete (this.settings as Partial<Record<'mailDraftsOnly', unknown>>).mailDraftsOnly;
     // The chat records, in a file of their own since 0.36.0 (see RECORDS_FILE); before, in data.json.
     const chats = raw.chats;

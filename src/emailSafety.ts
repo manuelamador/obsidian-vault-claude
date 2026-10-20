@@ -14,9 +14,11 @@ export function safeGmailUrl(value: unknown): string | undefined {
 
 /**
  * Text from an email as it goes into a note or a message: its images (`![…](…)`, `![[…]]`) and HTML
- * tags escaped, so that rendering the note loads nothing from the sender's server; links stay, opened
- * only when clicked.
+ * tags made inert, so that rendering the note loads nothing from the sender's server; links stay,
+ * opened only when clicked. The `!` of an image becomes its entity, which no backslash before it can
+ * undo (an escape could: `\![` escaped is `\\![`, a backslash and a live image); only a `<` that
+ * starts a tag is escaped, so `a < b` reads as written.
  */
 export function inertEmailText(text: string): string {
-  return text.replace(/!\[/g, '\\![').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return text.replace(/!(?=\[)/g, '&#33;').replace(/<(?=[A-Za-z/!?])/g, '&lt;');
 }

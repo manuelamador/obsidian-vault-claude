@@ -3574,7 +3574,6 @@ body:has(.vc-pick-up) .popover.hover-popover {
   height: 14px;
 }
 
-/* The Reply with Claude dialog. */
 /* "Codex" on a Codex chat: beside its title in the panel, and on its row in the history. */
 .vc-engine-badge {
   flex: 0 0 auto;

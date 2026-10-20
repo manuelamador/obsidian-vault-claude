@@ -51,7 +51,7 @@ import { BOOKMARK_TAG, cleanTags, freeMemoTitle, linkedChatIds, removeChatLinks,
 import { DoneTabs, type DoneTab } from './doneTabs';
 import { emailMarkdown, renderEmailCards, renderEmailDraft, renderEmailThread, settleDraftCards, threadMarkdown } from './emailCards';
 import { TodoModal } from './todoModal';
-import { safeGmailUrl } from './emailSafety';
+import { inertEmailText, safeGmailUrl } from './emailSafety';
 import { draftEnded, emailDraft, emailMessages, mailThreadTitle, readsThread, resultText, type EmailMessage } from './emailMessages';
 import { FindBar, findRanges, revealIn } from './findBar';
 import { addFoldToggle } from './foldToggle';
@@ -78,7 +78,7 @@ import { CodexSession, forkCodexThread, revertCodexThread, type CodexModel } fro
 
 /** A chat's session: Claude Code's, or Codex's (see CodexSession), which has the same shape. */
 type ChatSession = ClaudeSession | CodexSession;
-import { SCRATCH_IDLE_CHOICES, chatModel, idleLabel, sessionDenyRules, modeShort, permissionModes, type ToolDisplay } from './settings';
+import { SCRATCH_IDLE_CHOICES, chatModel, idleLabel, denyRuleList, modeShort, permissionModes, type ToolDisplay } from './settings';
 import { summarizeTool, toolLabel, vaultRelative } from './toolSummary';
 import { ChangesCard, agentDiffs, isOwnChange, openFileAtLine, savedChangedFiles, toolDiffs, type EditDiff } from './editDiff';
 import { linkFileNames } from './fileLinks';
@@ -3654,9 +3654,12 @@ export class ChatView extends ItemView {
     // fold into two with nothing between: it is removed. Judged by its source, not by what is on
     // screen, since a reply's Markdown is still being rendered when a chat opened from the history folds.
     const children = (Array.from(turn.children) as HTMLElement[]).filter((el) => !isTrailer(el));
-    // Text before the last step: notes on the way, not the answer.
+    // Text before the last step is a note on the way; the last text is the answer, kept open even when
+    // a step follows it (a todo list updated, a note saved, a card asking you something).
+    const texts = children.map((el, i) => (el.hasClass('vc-text') && !this.isBlankText(el) ? i : -1)).filter((i) => i >= 0);
+    const answer = texts.length > 0 ? texts[texts.length - 1] : -1;
     const lastStep = children.map((el) => isStep(el)).lastIndexOf(true);
-    const interim = new Set(children.slice(0, Math.max(0, lastStep)).filter((el) => el.hasClass('vc-text') && !this.isBlankText(el)));
+    const interim = new Set(texts.filter((i) => i < lastStep && i !== answer).map((i) => children[i]));
     for (const el of interim) el.addClass('is-interim');
     const runs: HTMLElement[][] = [];
     let run: HTMLElement[] = [];
@@ -5210,7 +5213,7 @@ export class ChatView extends ItemView {
         resume: this.resumeId ?? undefined,
         forkSession: this.forkOnResume,
         allowBypass: settings.allowBypass,
-        denyRules: sessionDenyRules(settings),
+        denyRules: denyRuleList(settings.denyRules),
         // Its multiple-choice questions are answered in the chat (see renderApprovalCard); a side
         // chat leaves them off, and asks in plain text.
         askQuestions: true,
@@ -5232,7 +5235,7 @@ export class ChatView extends ItemView {
     const token = {};
     this.sessionToken = token;
     this.session = new CodexSession(
-      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, fast: this.fastMode, hidden: this.plugin.settings.codexHidden, denyRules: sessionDenyRules(this.plugin.settings), connectorAllowances: this.plugin.connectorAllowances },
+      { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, fast: this.fastMode, hidden: this.plugin.settings.codexHidden, denyRules: denyRuleList(this.plugin.settings.denyRules), connectorAllowances: this.plugin.connectorAllowances },
       this.foregroundHandlers(token),
     );
     return this.session;
@@ -7253,7 +7256,8 @@ export class ChatView extends ItemView {
         const where = `“${this.plugin.settings.todoNote}”, under ${this.plugin.settings.todoSection}`;
         const url = safeGmailUrl(message.url);
         const link = url ? ` [mail](${url})` : '';
-        new TodoModal(this.app, `Reply to ${message.sender.replace(/\s*<[^>]*>/, '')}: ${message.subject || 'their message'}`, where, (text, due) => void this.plugin.addTodo(`${text}${link}`, due)).open();
+        // The sender's name and subject are the email's own text: made inert as a saved email's is (see inertEmailText).
+        new TodoModal(this.app, inertEmailText(`Reply to ${message.sender.replace(/\s*<[^>]*>/, '')}: ${message.subject || 'their message'}`), where, (text, due) => void this.plugin.addTodo(`${text}${link}`, due)).open();
       },
       saveThread: (messages) => void this.replyToNewNote(threadMarkdown(messages), messages[0]?.subject || 'Email thread'),
       // By its id: the subject, which its sender wrote, stays out of your message.
@@ -8465,7 +8469,7 @@ export class ChatView extends ItemView {
       return new CodexSession(
         // On a process of its own, never the shared app-server: a read-only copy the phone does not show,
         // so stopping that leaves it be.
-        { ...codex, shared: false, socketPath: undefined, ...(chat ? { fork: chat, forkLetGo: () => !this.plugin.chatHeldOpen(chat) } : {}), readOnly: true, hidden: this.plugin.settings.codexHidden, developerInstructions: APPEND_SYSTEM_PROMPT + sideChatPrompt(chat !== null), model: this.codexModel, effort: this.codexEffort, denyRules: sessionDenyRules(this.plugin.settings) },
+        { ...codex, shared: false, socketPath: undefined, ...(chat ? { fork: chat, forkLetGo: () => !this.plugin.chatHeldOpen(chat) } : {}), readOnly: true, hidden: this.plugin.settings.codexHidden, developerInstructions: APPEND_SYSTEM_PROMPT + sideChatPrompt(chat !== null), model: this.codexModel, effort: this.codexEffort, denyRules: denyRuleList(this.plugin.settings.denyRules) },
         handlers,
       );
     }
@@ -8486,7 +8490,7 @@ export class ChatView extends ItemView {
         effort: this.effortOverride,
         appendSystemPrompt: APPEND_SYSTEM_PROMPT + sideChatPrompt(this.sideForks.has(id)),
         ...resume,
-        denyRules: sessionDenyRules(settings),
+        denyRules: denyRuleList(settings.denyRules),
       },
       handlers,
     );

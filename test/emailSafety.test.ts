@@ -9,9 +9,13 @@ test('only Gmail addresses are kept as links', () => {
 });
 
 test("an email saved or quoted loads nothing: its images and HTML are text, its links stay", () => {
-  assert.equal(inertEmailText('![](https://t.example/p.png) <img src="https://t.example/q.png"> ![[x.png]] [site](https://example.com)'), '\\![](https://t.example/p.png) &lt;img src="https://t.example/q.png"&gt; \\![[x.png]] [site](https://example.com)');
+  assert.equal(inertEmailText('![](https://t.example/p.png) <img src="https://t.example/q.png"> ![[x.png]] [site](https://example.com)'), '&#33;[](https://t.example/p.png) &lt;img src="https://t.example/q.png"> &#33;[[x.png]] [site](https://example.com)');
+  // A backslash before an image cannot bring it back: an escape could be undone, the entity cannot.
+  assert.equal(inertEmailText('\\![](https://t.example/p.png)'), '\\&#33;[](https://t.example/p.png)');
+  // A comparison is not a tag.
+  assert.equal(inertEmailText('if (a < b) and c > d'), 'if (a < b) and c > d');
   const saved = emailMarkdown({ sender: 'A <a@example.com>', to: ['b@example.com'], cc: ['c@example.com'], subject: 'Hi <b>there</b>', time: NaN, text: '', body: 'See ![](https://t.example/p.png)', unread: false, url: 'javascript:alert(1)' });
-  assert.ok(saved.includes('See \\![](https://t.example/p.png)'));
+  assert.ok(saved.includes('See &#33;[](https://t.example/p.png)'));
   assert.ok(!saved.includes('<b>') && !saved.includes('javascript:'));
   assert.ok(saved.includes('Cc c@example.com'));
 });

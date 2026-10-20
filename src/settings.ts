@@ -37,11 +37,7 @@ const DEFAULT_DENY_RULES = [
   'Bash(rm -rf:*)',
 ].join('\n');
 
-/** The rules every chat runs with: the deny rules set. */
-export function sessionDenyRules(settings: Pick<VaultClaudeSettings, 'denyRules'>): string[] {
-  return denyRuleList(settings.denyRules);
-}
-
+/** The deny rules every chat runs with, one per line of the setting; blank lines and `#` comments left out. */
 export function denyRuleList(value: string): string[] {
   return value
     .split('\n')
@@ -102,7 +98,6 @@ export interface VaultClaudeSettings {
   notifyAfterSeconds: number;
   allowBypass: boolean;
   denyRules: string;
-  /** Claude may read Gmail and write drafts through Claude Code's connector, but not send (see sessionDenyRules). */
   /** The features for Claude Code's Gmail connector (email and draft cards, Make a todo, Draft an email, mail read by chats); off without Gmail. */
   gmailFeatures: boolean;
   /** The note todos made from the chat go to (an email card's "Make a todo"), and its section. */

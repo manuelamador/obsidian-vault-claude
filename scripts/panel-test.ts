@@ -2389,6 +2389,21 @@ async function main(): Promise<void> {
     const splitOk = splitOrder === 'fold,text' && splitHeader === 'Steps: 2 tool calls, 2 thoughts, 1 note';
     console.log(`steps and messages in order: ${splitOrder}, "${splitHeader}" (expected fold,text) -> ${splitOk}`);
     if (!splitOk) process.exitCode = 1;
+    // The last text is the answer even when a step follows it (a todo list updated after answering): it stays open.
+    {
+      const tailTurn = document.createElement('div');
+      const tailStep = (text: string) => tailTurn.createDiv({ cls: 'vc-tools' }).createDiv({ cls: 'vc-tool', text });
+      tailTurn.createDiv({ cls: 'vc-text', text: 'Let me look.' });
+      tailStep('Read x');
+      tailTurn.createDiv({ cls: 'vc-text', text: 'Here is the answer.' });
+      tailStep('TodoWrite');
+      (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(tailTurn);
+      const open = [...tailTurn.querySelectorAll<HTMLElement>(':scope > .vc-text')].map((el) => el.textContent).join('|');
+      const folded = [...tailTurn.querySelectorAll<HTMLElement>('.vc-steps .vc-text.is-interim')].map((el) => el.textContent).join('|');
+      const tailOk = open === 'Here is the answer.' && folded === 'Let me look.';
+      console.log(`answer followed by a step: open ${open}; folded ${folded} -> ${tailOk}`);
+      if (!tailOk) process.exitCode = 1;
+    }
     // Text with nothing to show between steps (white space streamed between tool calls) leaves one fold.
     {
       const blankTurn = document.createElement('div');
@@ -2402,7 +2417,7 @@ async function main(): Promise<void> {
       (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(blankTurn);
       const blankOrder = [...blankTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
       const blankHeader = blankTurn.querySelector('.vc-steps-header')?.textContent;
-      // Text whose Markdown is still rendering is empty on screen but not blank: a note, folded with the steps around it.
+      // Text whose Markdown is still rendering is empty on screen but not blank: the reply's only text, its answer, stays open between the folds.
       const pendingTurn = document.createElement('div');
       const pendingStep = (text: string) => pendingTurn.createDiv({ cls: 'vc-tools' }).createDiv({ cls: 'vc-tool', text });
       pendingStep('Bash ls');
@@ -2425,7 +2440,7 @@ async function main(): Promise<void> {
       const cardFolds = [...cardTurn.querySelectorAll('.vc-steps-header')].map((el) => el.textContent);
       const cardKept = cardTurn.querySelector(':scope > .vc-changes') !== null;
       const pendingOrder = [...pendingTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
-      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts' && pendingOrder === 'fold' && rendering.hasClass('is-interim') && rendering.parentElement?.hasClass('vc-steps-body') && JSON.stringify(cardFolds) === JSON.stringify(['Steps: 2 tool calls, 2 thoughts']) && cardKept;
+      const blankOk = blankOrder === 'fold,text' && blankHeader === 'Steps: 2 tool calls, 2 thoughts' && pendingOrder === 'fold,text,fold' && !rendering.hasClass('is-interim') && rendering.parentElement === pendingTurn && JSON.stringify(cardFolds) === JSON.stringify(['Steps: 2 tool calls, 2 thoughts']) && cardKept;
       console.log(`steps around empty text: ${blankOrder}, "${blankHeader}"; around text still rendering: ${pendingOrder}; around the changed-files card: ${JSON.stringify(cardFolds)} -> ${blankOk}`);
       if (!blankOk) process.exitCode = 1;
     }
