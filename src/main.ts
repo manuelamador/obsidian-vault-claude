@@ -1593,9 +1593,16 @@ export default class VaultClaudePlugin extends Plugin {
     }
     claim();
     if (!this.codexDaemonRunning(launch.env)) {
-      // Not left running, unseen, by a switch that reads off: started here, claimed or not yet.
-      const stopped = await this.stopCodexDaemon();
-      if (stopped) log('stopping codex that did not start in time failed', stopped);
+      // Not left running, unseen, by a switch that reads off; one never claimed may be another client's,
+      // still starting. No chat uses it, so none is let go of.
+      if (this.startedCodexDaemon) {
+        const stopped = await runCodex(launch, ['app-server', 'daemon', 'stop']);
+        if (stopped) log('stopping codex that did not start in time failed', stopped);
+        else {
+          this.codexDaemonStarted = null;
+          this.saveSoon();
+        }
+      }
       return 'it did not start in time';
     }
     // Once it is up, so that it is there to take it.
@@ -2180,7 +2187,6 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /** Another panel, which can take over a closing panel's running chats. */
-
   otherChatView(except: ChatView): ChatView | null {
     return this.chatViews().find((view) => view !== except && !view.isClosing()) ?? null;
   }

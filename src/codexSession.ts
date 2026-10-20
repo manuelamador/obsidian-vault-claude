@@ -280,12 +280,12 @@ export class CodexSession {
     ended?.();
   }
 
-  /** Whether it runs through Codex's shared app-server, where Codex's phone app shares its thread (see CodexConnection.shared). */
   /** Not closed nor ended: still usable. */
   get live(): boolean {
     return !this.closed;
   }
 
+  /** Whether it runs through Codex's shared app-server, where Codex's phone app shares its thread (see CodexConnection.shared). */
   get shared(): boolean {
     return this.connection?.shared === true;
   }
@@ -342,6 +342,11 @@ export class CodexSession {
         copying.count++;
         forksUnderWay.set(fork, copying);
       }
+      // One archiving it again as this one joins (see below) is let finish, then it is unarchived afresh.
+      if (copying?.archiving) {
+        await copying.archiving;
+        copying.unarchived = false;
+      }
       const unarchived = this.config.hidden && archived ? await unarchiveQuietly((method, params) => this.request(method, params), archived) : false;
       if (copying && unarchived) copying.unarchived = true;
       let opened: { thread?: { id?: string }; model?: string };
@@ -355,8 +360,16 @@ export class CodexSession {
         // A resumed one is archived again as it is let go of (see close). A copied one (a side chat's)
         // goes back at once, copied or not, unless its own chat has it open, which archives it as it lets go.
         if (copying && fork && --copying.count === 0) {
-          forksUnderWay.delete(fork);
-          if (copying.unarchived && this.config.forkLetGo?.()) await this.request('thread/archive', { threadId: fork }).catch(() => undefined);
+          // Kept listed until archived: a copy starting meanwhile joins it rather than having it archived under it.
+          if (copying.unarchived && this.config.forkLetGo?.()) {
+            copying.archiving = this.request('thread/archive', { threadId: fork }).then(
+              () => undefined,
+              () => undefined,
+            );
+            await copying.archiving;
+            copying.archiving = undefined;
+          }
+          if (copying.count === 0) forksUnderWay.delete(fork);
         }
       }
       this.sessionId = opened.thread?.id ?? resume ?? null;
@@ -675,9 +688,10 @@ export async function archiveCodexThread(launch: CodexLaunch, threadId: string):
   await withAppServer(launch, (request) => request('thread/archive', { threadId }));
 }
 
-/** Unarchives thread `threadId`, if it is archived: Codex answers an error for one that is not, which is no failure here. */
 /** Codex threads being copied now (see CodexSession.start), how many copies, and whether one of them unarchived it. */
-const forksUnderWay = new Map<string, { count: number; unarchived: boolean }>();
+const forksUnderWay = new Map<string, { count: number; unarchived: boolean; archiving?: Promise<void> }>();
+
+/** Unarchives thread `threadId`, if it is archived: Codex answers an error for one that is not, which is no failure here. */
 
 export async function unarchiveQuietly(request: (method: string, params: unknown) => Promise<unknown>, threadId: string): Promise<boolean> {
   return request('thread/unarchive', { threadId }).then(
