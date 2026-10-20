@@ -1,4 +1,4 @@
-import { existsSync, promises as fsPromises } from 'fs';
+import { existsSync, readFileSync, promises as fsPromises } from 'fs';
 import { execFile, spawn } from 'child_process';
 import { homedir } from 'os';
 import type { TaskInfo } from './backgroundTasks';
@@ -50,6 +50,20 @@ function runCodex(launch: CodexLaunch, args: string[]): Promise<string | null> {
   return new Promise((resolve) =>
     execFile(launch.codexPath, args, { env: launch.env, timeout: 60_000 }, (error, _stdout, stderr) => resolve(error ? stderr.trim().split('\n').pop() || error.message : null)),
   );
+}
+
+/**
+ * The shared app-server running now, as Codex records it in `daemon.pid` (its pid and start time, so
+ * that a pid used again by another process is not taken for it); null when none is recorded.
+ */
+export function codexDaemonIdentity(env: Record<string, string | undefined>): string | null {
+  const home = env.CODEX_HOME || joinPath(homedir(), '.codex');
+  try {
+    const record = JSON.parse(readFileSync(joinPath(home, 'app-server-daemon', 'daemon.pid'), 'utf8')) as { pid?: unknown; processStartTime?: unknown };
+    return typeof record.pid === 'number' ? `${record.pid} ${String(record.processStartTime ?? '')}` : null;
+  } catch {
+    return null;
+  }
 }
 
 /** How many Codex chats' conversations are kept as read (see loadAnyChat). */
@@ -199,7 +213,8 @@ export interface ContextReading {
 interface PluginData {
   settings?: Partial<VaultClaudeSettings>;
   codexThreadsNamed?: boolean;
-  startedCodexDaemon?: boolean;
+  /** The shared app-server the panel started, as Codex records it (see codexDaemonIdentity). */
+  startedCodexDaemon?: string | boolean;
   chats?: ChatRecord[];
   models?: ModelInfo[];
   modelsFetchedAt?: number;
@@ -423,7 +438,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('quit', () => {
         this.quitting = true;
-        this.appQuitting = true;
+        this.stopCodexDaemonAtQuit();
       }),
     );
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
@@ -724,18 +739,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       // Phone access as it was left: Claude Code's Remote Control, and Codex's shared app-server.
       if (this.settings.phoneClaude) this.startRemote();
-      // One the panel started before a reload, since stopped elsewhere, is no longer its own.
-      if (this.startedCodexDaemon && !this.codexDaemonRunning()) this.startedCodexDaemon = false;
-      if (this.settings.phoneCodex && !this.codexDaemonRunning()) {
-        void this.startCodexDaemon().then(async (error) => {
-          if (error) {
-            new Notice(`Codex on the phone is off: its shared app-server did not start (${error}).`);
-            this.settings.phoneCodex = false;
-            await this.saveSettings();
-          }
-          this.codexDaemonSettingChanged();
-        });
-      }
+      if (this.settings.phoneCodex && !this.codexDaemonRunning()) void this.setPhoneCodex(true);
       void this.sweepSideSessions(leftover);
       void this.tidyPlanNotes();
       void this.nameCodexThreadsOnce();
@@ -948,18 +952,6 @@ export default class VaultClaudePlugin extends Plugin {
   onunload(): void {
     // Panels closing now are not reopened in the sidebar (see ChatView.onClose).
     this.quitting = true;
-    // Codex's shared app-server, if the panel started it, stops when Obsidian quits (not when the plugin
-    // is reloaded, after which it is still the panel's): left to finish on its own, as Obsidian does not wait.
-    if (this.startedCodexDaemon && this.appQuitting) {
-      const launch = this.codexLaunch();
-      if (typeof launch !== 'string') {
-        const stop = spawn(launch.codexPath, ['app-server', 'daemon', 'stop'], { env: launch.env, detached: true, stdio: 'ignore' });
-        stop.on('error', (error) => log('stopping codex at quit failed', error));
-        stop.unref();
-        this.startedCodexDaemon = false;
-        void this.saveData(this.dataToSave());
-      }
-    }
     // Clean-ups still waiting (what a removal left, see ChatView.removeFrom) are done now, not lost.
     for (const [timer, run] of this.cleanups) {
       window.clearTimeout(timer);
@@ -1041,7 +1033,7 @@ export default class VaultClaudePlugin extends Plugin {
 
   /**
    * Codex on the phone, or off: Codex chats go through its shared app-server, started now if none runs
-   * (and stopped when Obsidian quits; see onunload). Off, the panel stops one it started; one started
+   * (and stopped when Obsidian quits; see stopCodexDaemonAtQuit). Off, the panel stops one it started; one started
    * elsewhere stays, unused by the panel. Kept for the next start.
    */
   async setPhoneCodex(on: boolean): Promise<void> {
@@ -1548,24 +1540,46 @@ export default class VaultClaudePlugin extends Plugin {
   async startCodexDaemon(): Promise<string | null> {
     const launch = this.codexLaunch();
     if (typeof launch === 'string') return launch;
+    const before = codexDaemonIdentity(launch.env);
     const started = await runCodex(launch, ['app-server', 'daemon', 'start']);
     if (started) return started;
+    // Started here (a process Codex records that was not there before): the panel may stop it again
+    // (see stopCodexDaemon), and does when Obsidian quits, even if its socket comes late. One started
+    // elsewhere is not its to stop.
+    const identity = codexDaemonIdentity(launch.env);
+    if (identity && identity !== before) {
+      this.codexDaemonStarted = identity;
+      this.saveSoon();
+    }
     const remote = await runCodex(launch, ['app-server', 'daemon', 'enable-remote-control']);
     if (remote) log('enabling codex remote control failed', remote);
-    for (let waited = 0; waited < 10_000 && !this.codexDaemonRunning(launch.env); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250));
-    const running = this.codexDaemonRunning(launch.env);
-    // Started here: the panel may stop it again (see stopCodexDaemon), and does when Obsidian quits;
-    // kept across a reload of the plugin. One started elsewhere is not its to stop.
-    this.startedCodexDaemon = running;
-    this.saveSoon();
-    return running ? null : 'it did not start in time';
+    for (let waited = 0; waited < 30_000 && !this.codexDaemonRunning(launch.env); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250));
+    return this.codexDaemonRunning(launch.env) ? null : 'it did not start in time';
   }
 
-  /** Whether the panel started Codex's shared app-server (kept across reloads of the plugin), and so may stop it: other Codex clients may use one started elsewhere. */
-  startedCodexDaemon = false;
+  /** The shared app-server the panel started, as Codex records it (see codexDaemonIdentity), kept across reloads of the plugin; null for none. */
+  private codexDaemonStarted: string | null = null;
 
-  /** Obsidian itself is quitting (its quit event), not the plugin being reloaded or turned off: a shared app-server the panel started stops with it (see onunload). */
-  private appQuitting = false;
+  /** Whether the shared app-server running now is one the panel started, and so may stop: other Codex clients may use one started elsewhere. */
+  get startedCodexDaemon(): boolean {
+    const launch = this.codexLaunch();
+    return this.codexDaemonStarted !== null && codexDaemonIdentity(typeof launch === 'string' ? process.env : launch.env) === this.codexDaemonStarted;
+  }
+
+  /**
+   * Obsidian is quitting (its quit event, not a reload of the plugin): a shared app-server the panel
+   * started stops with it, left to finish on its own, as Obsidian does not wait.
+   */
+  private stopCodexDaemonAtQuit(): void {
+    if (!this.startedCodexDaemon) return;
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string') return;
+    const stop = spawn(launch.codexPath, ['app-server', 'daemon', 'stop'], { env: launch.env, detached: true, stdio: 'ignore' });
+    stop.on('error', (error) => log('stopping codex at quit failed', error));
+    stop.unref();
+    this.codexDaemonStarted = null;
+    this.saveSoon();
+  }
 
   /** Codex on the phone was switched: the panels' phone buttons and idle Codex chats follow. */
   codexDaemonSettingChanged(): void {
@@ -1579,10 +1593,12 @@ export default class VaultClaudePlugin extends Plugin {
   async stopCodexDaemon(): Promise<string | null> {
     const launch = this.codexLaunch();
     if (typeof launch === 'string') return launch;
-    for (const view of this.chatViews()) view.codexDaemonChanged();
+    // Idle chats let go first, and are given a moment to (a hidden one is archived as it closes).
+    const closing = this.chatViews().map((view) => view.codexDaemonChanged());
+    await Promise.race([Promise.all(closing), new Promise((resolve) => setTimeout(resolve, 3_000))]);
     const error = await runCodex(launch, ['app-server', 'daemon', 'stop']);
     if (!error) {
-      this.startedCodexDaemon = false;
+      this.codexDaemonStarted = null;
       this.saveSoon();
     }
     return error;
@@ -3960,7 +3976,8 @@ export default class VaultClaudePlugin extends Plugin {
     this.reportTo = raw.reportTo && typeof raw.reportTo === 'object' ? raw.reportTo : {};
     this.chatReports = raw.chatReports && typeof raw.chatReports === 'object' ? raw.chatReports : {};
     this.codexThreadsNamed = raw.codexThreadsNamed === true;
-    this.startedCodexDaemon = raw.startedCodexDaemon === true;
+    // An older version kept only whether it had started one: taken as the one running now.
+    this.codexDaemonStarted = typeof raw.startedCodexDaemon === 'string' ? raw.startedCodexDaemon : raw.startedCodexDaemon === true ? codexDaemonIdentity(process.env) : null;
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
     this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};
     this.models = Array.isArray(raw.models) ? raw.models : [];
@@ -4022,7 +4039,7 @@ export default class VaultClaudePlugin extends Plugin {
       reportTo: this.reportTo,
       chatReports: this.chatReports,
       codexThreadsNamed: this.codexThreadsNamed,
-      startedCodexDaemon: this.startedCodexDaemon,
+      startedCodexDaemon: this.codexDaemonStarted ?? undefined,
     };
   }
 }

@@ -329,14 +329,14 @@ export class CodexSession {
       const { resume, fork } = this.config;
       // Kept archived (see hidden): Codex resumes or copies only a thread that is not.
       const archived = resume ?? fork;
-      const unarchived = this.config.hidden && archived ? await unarchiveQuietly((method, params) => this.request(method, params), archived) : false;
+      if (this.config.hidden && archived) await unarchiveQuietly((method, params) => this.request(method, params), archived);
       const opened = (await (resume
         ? this.request('thread/resume', { ...params, threadId: resume })
         : fork
           ? this.request('thread/fork', { ...params, threadId: fork, excludeTurns: true })
           : this.request('thread/start', params))) as { thread?: { id?: string }; model?: string };
-      // A copied thread (a side chat's) that was archived goes back to it; a resumed one is archived as it is let go of (see close).
-      if (unarchived && fork && !resume) await this.request('thread/archive', { threadId: fork }).catch(() => undefined);
+      // A resumed one is archived again as it is let go of (see close). A copied one (a side chat's) is
+      // left unarchived: its chat is open in the panel, and is archived as that chat is let go of.
       this.sessionId = opened.thread?.id ?? resume ?? null;
       this.model = opened.model ?? null;
       if (!this.sessionId) throw new Error('Codex started no thread');

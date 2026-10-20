@@ -750,6 +750,8 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(settings.phoneCodex).onChange(async (value) => {
           await this.plugin.setPhoneCodex(value);
+          // Turned off again when its app-server did not start.
+          this.display();
         }),
       );
 

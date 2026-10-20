@@ -777,7 +777,13 @@ export class ChatView extends ItemView {
     // Where it is, kept as the layout changes: by the time it closes, its leaf is already out of the
     // layout (Obsidian detaches it first), and says nothing of where it was (see onClose).
     this.wasInSidebar = this.inSidebar();
-    this.registerEvent(this.app.workspace.on('layout-change', () => (this.wasInSidebar = this.inSidebar())));
+    this.registerEvent(
+      this.app.workspace.on('layout-change', () => {
+        // Not once it is detached (its own root then), which says nothing of where it was.
+        const root = this.leaf?.getRoot?.();
+        if (root && root !== this.leaf) this.wasInSidebar = this.inSidebar();
+      }),
+    );
     try {
       this.buildPanel();
     } catch (error) {
@@ -1614,14 +1620,20 @@ export class ChatView extends ItemView {
   /** Codex's shared app-server is being started (see VaultClaudePlugin.setPhoneCodex). */
   codexDaemonStarting = false;
 
-  /** Codex's shared app-server started or stopped: the phone button follows, and an idle Codex chat reconnects through it (or not) with its next message. */
-  codexDaemonChanged(): void {
+  /**
+   * Codex's shared app-server started or stopped: the phone button follows, and an idle Codex chat
+   * reconnects through it (or not) with its next message. Settles once a chat let go of has ended.
+   */
+  codexDaemonChanged(): Promise<void> {
     this.updatePhoneButton();
     if (this.engine === 'codex' && this.session instanceof CodexSession && !this.busy && this.pending.size === 0 && this.tasks.size === 0) {
+      const session = this.session;
       this.sessionToken = null;
-      this.closeSession(this.session);
+      this.closeSession(session);
       this.session = null;
+      return session.ended;
     }
+    return Promise.resolve();
   }
 
   /** The phone menu: Claude Code and Codex, each on or off for the whole panel, with where to open what is on. */
