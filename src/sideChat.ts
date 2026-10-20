@@ -123,6 +123,15 @@ export class SideChat {
     this.component.load();
   }
 
+  /** The session answering or last answered, if any; and whether a reply is coming in. */
+  get session(): SideSession | null {
+    return this.run?.session ?? null;
+  }
+
+  get working(): boolean {
+    return this.busy;
+  }
+
   isOpen(): boolean {
     return this.el.isShown();
   }

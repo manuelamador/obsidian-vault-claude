@@ -1087,7 +1087,8 @@ export default class VaultClaudePlugin extends Plugin {
       const close = modal.onClose.bind(modal);
       modal.onClose = () => {
         close();
-        resolve(confirmed);
+        // After the button's own handler: Stop closes the dialog before it confirms.
+        void Promise.resolve().then(() => resolve(confirmed));
       };
       modal.open();
     });
@@ -1582,7 +1583,7 @@ export default class VaultClaudePlugin extends Plugin {
     // started elsewhere is not its to stop.
     const claim = () => {
       const identity = codexDaemonIdentity(launch.env);
-      if (this.codexDaemonStarted || !identity || identity === before) return;
+      if (!identity || identity === before || identity === this.codexDaemonStarted) return;
       this.codexDaemonStarted = identity;
       this.saveSoon();
     };
@@ -1592,8 +1593,9 @@ export default class VaultClaudePlugin extends Plugin {
     }
     claim();
     if (!this.codexDaemonRunning(launch.env)) {
-      // Not left running, unseen, by a switch that reads off.
-      if (this.startedCodexDaemon) await this.stopCodexDaemon();
+      // Not left running, unseen, by a switch that reads off: started here, claimed or not yet.
+      const stopped = await this.stopCodexDaemon();
+      if (stopped) log('stopping codex that did not start in time failed', stopped);
       return 'it did not start in time';
     }
     // Once it is up, so that it is there to take it.
@@ -2172,11 +2174,12 @@ export default class VaultClaudePlugin extends Plugin {
     return new Set(this.chatViews().flatMap((view) => [...view.chatStatuses().keys()]));
   }
 
-  /** Another panel, which can take over a closing panel's running chats. */
   /** Whether any panel has a session open on chat `id` (see ChatView.hasSessionOn). */
   chatHeldOpen(id: string): boolean {
     return this.chatViews().some((view) => view.hasSessionOn(id));
   }
+
+  /** Another panel, which can take over a closing panel's running chats. */
 
   otherChatView(except: ChatView): ChatView | null {
     return this.chatViews().find((view) => view !== except && !view.isClosing()) ?? null;

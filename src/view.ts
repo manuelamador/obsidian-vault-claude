@@ -1619,19 +1619,21 @@ export class ChatView extends ItemView {
 
   /** Whether this panel has a session open on chat `id`: the chat on screen, or one in its background. */
   hasSessionOn(id: string): boolean {
-    if (this.session && (this.chatId ?? this.resumeId) === id) return true;
+    const session = this.session;
+    if (session && !(session instanceof CodexSession && !session.live) && this.showsChat(id)) return true;
     return [...this.background].some((entry) => entry.chatId === id);
   }
 
   /** How many of this panel's Codex chats are working through Codex's shared app-server: on screen, or in the background. */
   workingSharedCodex(): number {
     const onScreen = this.session instanceof CodexSession && this.session.shared && (this.busy || this.pending.size > 0 || this.tasks.size > 0) ? 1 : 0;
-    return onScreen + [...this.background].filter((entry) => entry.session instanceof CodexSession && entry.session.shared).length;
+    const side = this.sideChat?.session instanceof CodexSession && this.sideChat.session.shared && this.sideChat.working ? 1 : 0;
+    return onScreen + side + [...this.background].filter((entry) => entry.session instanceof CodexSession && entry.session.shared).length;
   }
 
   /** Obsidian is quitting: this panel's Codex sessions on the shared app-server are let go of now, before it stops (see stopCodexDaemonAtQuit). Their ends. */
   releaseSharedCodex(): Promise<void>[] {
-    const sessions = [this.session, ...[...this.background].map((entry) => entry.session)].filter((session): session is CodexSession => session instanceof CodexSession && session.shared);
+    const sessions = [this.session, this.sideChat?.session ?? null, ...[...this.background].map((entry) => entry.session)].filter((session): session is CodexSession => session instanceof CodexSession && session.shared);
     for (const session of sessions) session.close();
     return sessions.map((session) => session.ended);
   }

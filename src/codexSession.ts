@@ -281,6 +281,11 @@ export class CodexSession {
   }
 
   /** Whether it runs through Codex's shared app-server, where Codex's phone app shares its thread (see CodexConnection.shared). */
+  /** Not closed nor ended: still usable. */
+  get live(): boolean {
+    return !this.closed;
+  }
+
   get shared(): boolean {
     return this.connection?.shared === true;
   }
@@ -331,7 +336,14 @@ export class CodexSession {
       const { resume, fork } = this.config;
       // Kept archived (see hidden): Codex resumes or copies only a thread that is not.
       const archived = resume ?? fork;
+      // Copies of one thread made at once (side chats in two panels): only the last to finish archives it again.
+      const copying = fork && !resume ? forksUnderWay.get(fork) ?? { count: 0, unarchived: false } : null;
+      if (copying && fork) {
+        copying.count++;
+        forksUnderWay.set(fork, copying);
+      }
       const unarchived = this.config.hidden && archived ? await unarchiveQuietly((method, params) => this.request(method, params), archived) : false;
+      if (copying && unarchived) copying.unarchived = true;
       let opened: { thread?: { id?: string }; model?: string };
       try {
         opened = (await (resume
@@ -342,7 +354,10 @@ export class CodexSession {
       } finally {
         // A resumed one is archived again as it is let go of (see close). A copied one (a side chat's)
         // goes back at once, copied or not, unless its own chat has it open, which archives it as it lets go.
-        if (unarchived && fork && !resume && this.config.forkLetGo?.()) await this.request('thread/archive', { threadId: fork }).catch(() => undefined);
+        if (copying && fork && --copying.count === 0) {
+          forksUnderWay.delete(fork);
+          if (copying.unarchived && this.config.forkLetGo?.()) await this.request('thread/archive', { threadId: fork }).catch(() => undefined);
+        }
       }
       this.sessionId = opened.thread?.id ?? resume ?? null;
       this.model = opened.model ?? null;
@@ -661,6 +676,9 @@ export async function archiveCodexThread(launch: CodexLaunch, threadId: string):
 }
 
 /** Unarchives thread `threadId`, if it is archived: Codex answers an error for one that is not, which is no failure here. */
+/** Codex threads being copied now (see CodexSession.start), how many copies, and whether one of them unarchived it. */
+const forksUnderWay = new Map<string, { count: number; unarchived: boolean }>();
+
 export async function unarchiveQuietly(request: (method: string, params: unknown) => Promise<unknown>, threadId: string): Promise<boolean> {
   return request('thread/unarchive', { threadId }).then(
     () => true,
