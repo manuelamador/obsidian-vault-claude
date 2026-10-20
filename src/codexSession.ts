@@ -772,18 +772,22 @@ export function codexTurnHolding(turns: CodexTurn[], itemId: string): CodexTurn 
 export async function revertCodexThread(launch: CodexLaunch, threadId: string, messageId: string, hidden = false): Promise<void> {
   await withAppServer(launch, async (request) => {
     if (hidden) await unarchiveQuietly(request, threadId);
-    const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };
-    const turn = codexTurnHolding(read.thread?.turns ?? [], messageId);
-    if (!turn?.id) throw new Error('that message was not found in the Codex conversation');
-    // Codex removes whole turns: a message sent while it worked shares its turn with the one before.
-    const first = (turn.items ?? []).find((item) => item.type === 'userMessage');
-    if (first && first.id !== messageId && first.clientId !== messageId) throw new Error('this message was sent while Codex worked, in the same turn as the one before it. Remove from that one instead');
-    // Codex reverts only a thread loaded in its process, and keeps it loaded until let go of.
-    await request('thread/resume', { threadId, cwd: launch.cwd, excludeTurns: true });
+    // Archived again whatever happens after, a removal refused or failed as well (see CodexSessionConfig.hidden).
     try {
-      await request('thread/revert', { threadId, beforeTurnId: turn.id });
+      const read = (await request('thread/read', { threadId, includeTurns: true })) as { thread?: { turns?: CodexTurn[] } };
+      const turn = codexTurnHolding(read.thread?.turns ?? [], messageId);
+      if (!turn?.id) throw new Error('that message was not found in the Codex conversation');
+      // Codex removes whole turns: a message sent while it worked shares its turn with the one before.
+      const first = (turn.items ?? []).find((item) => item.type === 'userMessage');
+      if (first && first.id !== messageId && first.clientId !== messageId) throw new Error('this message was sent while Codex worked, in the same turn as the one before it. Remove from that one instead');
+      // Codex reverts only a thread loaded in its process, and keeps it loaded until let go of.
+      await request('thread/resume', { threadId, cwd: launch.cwd, excludeTurns: true });
+      try {
+        await request('thread/revert', { threadId, beforeTurnId: turn.id });
+      } finally {
+        await request('thread/unsubscribe', { threadId }).catch(() => undefined);
+      }
     } finally {
-      await request('thread/unsubscribe', { threadId }).catch(() => undefined);
       if (hidden) await request('thread/archive', { threadId }).catch(() => undefined);
     }
   });

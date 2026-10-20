@@ -2329,7 +2329,7 @@ export class ChatView extends ItemView {
   private backgroundHandlers(entry: BackgroundChat): SessionHandlers {
     return {
       onMessage: (message) => {
-        this.noteTaskEnded(entry.chatId, entry.title ?? 'Untitled chat', entry.taskInfo, message, false);
+        this.noteTaskEnded(entry.chatId, entry.title ?? 'Untitled chat', entry.taskInfo, message);
         if (noteTask(entry.taskInfo, message)) this.tasksChanged();
         if (trackTask(entry.tasks, message)) {
           this.tasksChanged();
@@ -5883,15 +5883,13 @@ export class ChatView extends ItemView {
 
   /**
    * A background task of chat `chatId` ended (`message`, its notice): kept by the plugin for the task
-   * list, its output still readable there; a notice says so when its chat is not the one on screen.
+   * list, its output still readable there, and marked on the task button until seen; no notice, as a
+   * task is a step of its chat, whose own end its tab on the margin shows.
    */
-  private noteTaskEnded(chatId: string | null, title: string, infos: Map<string, TaskInfo>, message: SDKMessage, onScreen: boolean): void {
+  private noteTaskEnded(chatId: string | null, title: string, infos: Map<string, TaskInfo>, message: SDKMessage): void {
     if (message.type !== 'system' || message.subtype !== 'task_notification' || message.ambient || message.skip_transcript) return;
     const info = infos.get(message.task_id) ?? { id: message.task_id, type: 'task', description: message.summary, started: Date.now() };
     this.plugin.taskEnded({ chatId, chatTitle: title, info, status: message.status, ended: Date.now(), outputFile: message.output_file, summary: message.summary, seen: false });
-    if (onScreen && this.isOnScreen()) return;
-    const what = info.description || 'A background task';
-    new Notice(`${what} (in “${title}”) ${message.status === 'completed' ? 'finished' : message.status === 'failed' ? 'failed' : 'was stopped'}. Its output is in the task list.`);
   }
 
   /** The tasks changed elsewhere (one ended in another panel, or the list was seen): the button follows. */
@@ -5926,6 +5924,7 @@ export class ChatView extends ItemView {
       ],
       output: async (chatId, taskId) => (await sessionOf(chatId)?.taskOutput(taskId)) ?? null,
       finished: () => this.plugin.finishedTasks,
+      openChat: (chatId) => void this.app.workspace.revealLeaf(this.leaf).then(() => this.openChatId(chatId, this.plugin.chatTitleOf(chatId))),
       finishedOutput: (task) => this.plugin.taskFileTail(task.outputFile),
       seen: () => this.plugin.finishedTasksSeen(),
       clearFinished: () => this.plugin.clearFinishedTasks(),
@@ -6439,7 +6438,7 @@ export class ChatView extends ItemView {
 
   private onMessage(message: SDKMessage): void {
     if (message.type === 'assistant' && message.parent_tool_use_id === null) this.noticeQueuedTaken();
-    this.noteTaskEnded(this.chatId ?? this.resumeId, this.chatName ?? 'This chat', this.taskInfo, message, true);
+    this.noteTaskEnded(this.chatId ?? this.resumeId, this.chatName ?? 'This chat', this.taskInfo, message);
     const described = noteTask(this.taskInfo, message);
     if (trackTask(this.tasks, message)) {
       this.updateStopButton();

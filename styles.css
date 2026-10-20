@@ -3912,3 +3912,12 @@ a.vc-email-attachment:hover {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }
+
+/* The chat a task belongs to, in the task list: opens it. */
+.vc-task-chat-link {
+  cursor: pointer;
+}
+.vc-task-chat-link:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
+}

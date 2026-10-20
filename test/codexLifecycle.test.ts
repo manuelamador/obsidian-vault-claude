@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { CodexConnection } from '../src/codexConnection';
 import { unframe } from '../src/codexSocket';
-import { contextApart, CodexSession, runCodexOneShot, stopCodexReader } from '../src/codexSession';
+import { contextApart, CodexSession, revertCodexThread, runCodexOneShot, stopCodexReader } from '../src/codexSession';
 
 import { launchIn } from './fakeCodex';
 
@@ -112,6 +112,19 @@ test("a connector's confirmation (Gmail sending, say) reaches the approval card,
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+test('a hidden Codex chat whose removal fails (the message not found) is archived again', async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-`);
+  try {
+    await assert.rejects(revertCodexThread(launchIn(dir), 't1', 'missing', true), /not found/);
+    const methods = readFileSync(`${dir}/methods.log`, 'utf8').split('\n');
+    assert.ok(methods.includes('thread/unarchive'));
+    assert.ok(methods.includes('thread/archive'));
+  } finally {
+    stopCodexReader();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

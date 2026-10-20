@@ -22,6 +22,8 @@ export interface TasksHost {
   stopAll(chatId: string | null): void;
   /** Tasks that have ended, newest first, with their output still readable (see finishedOutput). */
   finished(): FinishedTask[];
+  /** Shows chat `chatId` in the panel. */
+  openChat(chatId: string): void;
   finishedOutput(task: FinishedTask): Promise<{ output: string; truncated: boolean } | null>;
   /** The list was looked at: the tasks that ended are seen. */
   seen(): void;
@@ -78,7 +80,7 @@ export class TasksModal extends Modal {
     if (chats.length === 0) contentEl.createDiv({ cls: 'vc-muted', text: 'No tasks running in the background.' });
     for (const chat of chats) {
       const head = contentEl.createDiv({ cls: 'vc-task-chat' });
-      head.createSpan({ cls: 'vc-task-chat-title', text: chat.title });
+      this.chatLink(head.createSpan({ cls: 'vc-task-chat-title', text: chat.title }), chat.chatId);
       if (chat.tasks.length > 1) {
         const all = head.createEl('button', { text: 'Stop all', attr: { 'aria-label': `Stop the ${chat.tasks.length} tasks of this chat` } });
         all.addEventListener('click', () => this.host.stopAll(chat.chatId));
@@ -94,6 +96,17 @@ export class TasksModal extends Modal {
       this.draw();
     });
     for (const task of finished) this.drawFinished(contentEl, task, scrolls.get(task.info.id));
+  }
+
+  /** `el`, naming chat `chatId`, opens it on click (the list closing), when the chat has an id. */
+  private chatLink(el: HTMLElement, chatId: string | null): void {
+    if (!chatId) return;
+    el.addClass('vc-task-chat-link');
+    el.setAttr('aria-label', 'Go to this chat');
+    el.addEventListener('click', () => {
+      this.close();
+      this.host.openChat(chatId);
+    });
   }
 
   /** A task that ended: how, when, in which chat, and its output from the file Claude Code keeps. */
@@ -112,7 +125,7 @@ export class TasksModal extends Modal {
       else this.shown.add(task.info.id);
       this.draw();
     });
-    row.createDiv({ cls: 'vc-task-progress', text: `In “${task.chatTitle}”` });
+    this.chatLink(row.createDiv({ cls: 'vc-task-progress', text: `In “${task.chatTitle}”` }), task.chatId);
     if (!shown) return;
     const out = row.createEl('pre', { cls: 'vc-task-output', attr: { 'data-task': task.info.id } });
     out.setText(this.outputs.get(task.info.id) ?? 'Reading…');

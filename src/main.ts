@@ -1073,6 +1073,14 @@ export default class VaultClaudePlugin extends Plugin {
         this.settings.phoneCodex = false;
         await this.saveSettings();
       }
+    } else if (on) {
+      // Running already, started elsewhere perhaps without remote control: the phone reaches it only with it on.
+      const launch = this.codexLaunch();
+      const remote = typeof launch === 'string' ? launch : await runCodex(launch, ['app-server', 'daemon', 'enable-remote-control']);
+      if (remote) {
+        log('enabling codex remote control failed', remote);
+        new Notice(`Codex's shared app-server runs, but remote control did not turn on, so the phone may not reach it: ${remote}`, 10_000);
+      }
     } else if (!on && this.startedCodexDaemon) {
       const error = await this.stopCodexDaemon();
       if (error) new Notice(`Could not stop Codex's shared app-server: ${error}`);
