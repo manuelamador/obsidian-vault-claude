@@ -1701,15 +1701,25 @@ export class ChatView extends ItemView {
     this.inputEl.value = '';
     this.saveDraft();
     const copy = await this.branchCodex(id, undefined, false, undefined, true, true);
-    if (!copy) {
-      this.inputEl.value = text;
-      this.inputEdited();
+    // Into the copy, or back where it came from when there is none; into that chat's draft if another
+    // chat was opened meanwhile, never into the input of whatever is on screen.
+    const into = copy ?? id;
+    this.putBackMessage(into, text);
+    if (copy && this.draftKey() === copy) {
+      this.heldBy = null;
+      this.inputEl.focus();
+    }
+  }
+
+  /** `text`, a message not sent, back at the start of chat `key`'s input if it is on screen, else of its draft (see unsend). */
+  private putBackMessage(key: string, text: string): void {
+    if (!text) return;
+    if (key === this.draftKey()) {
+      this.restoreUnsent(text, [], new Set(), key);
       return;
     }
-    this.heldBy = null;
-    this.inputEl.value = text;
-    this.inputEdited();
-    this.inputEl.focus();
+    const draft = this.readDraft(key) ?? {};
+    this.writeDraft(key, { ...draft, text: this.afterUnsent(key, draft.text ?? '', text) });
   }
 
   /**
@@ -1736,7 +1746,10 @@ export class ChatView extends ItemView {
     const held = this.heldBy === id;
     const typing = document.activeElement === this.inputEl ? { start: this.inputEl.selectionStart, end: this.inputEl.selectionEnd } : null;
     this.plugin.forgetCodexRead(id);
-    await this.showSavedChat({ id, title: this.chatName ?? this.plugin.chatTitleOf(id), updatedAt: Date.now(), fromPanel: this.plugin.isPanelChat(id) });
+    // Drawn again only if, once read, it is still the chat on screen and nothing was sent in it meanwhile.
+    const idle = () => (this.chatId ?? this.resumeId) === id && !this.busy && this.pending.size === 0 && this.openApprovals.length === 0;
+    await this.showSavedChat({ id, title: this.chatName ?? this.plugin.chatTitleOf(id), updatedAt: Date.now(), fromPanel: this.plugin.isPanelChat(id) }, undefined, idle);
+    if ((this.chatId ?? this.resumeId) !== id) return;
     if (typing) {
       this.inputEl.focus();
       this.inputEl.setSelectionRange(typing.start, typing.end);
@@ -3151,9 +3164,11 @@ export class ChatView extends ItemView {
   }
 
   /** Shows a chat read from its file; false when it could not be read (see openChat). */
-  private async showSavedChat(item: HistoryItem, branch?: BranchSource): Promise<boolean> {
+  private async showSavedChat(item: HistoryItem, branch?: BranchSource, wanted?: () => boolean): Promise<boolean> {
     const read = await this.readForOpening(item.id);
     if (!read) return true;
+    // No longer wanted once read (a refresh overtaken by a message sent meanwhile): what is on screen stays.
+    if (wanted && !wanted()) return true;
     const { chat } = read;
     if (!chat || chat.transcript.length === 0) {
       // No messages: its file holds only what Claude Code notes about a session, as when it was

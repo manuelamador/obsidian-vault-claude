@@ -4649,6 +4649,33 @@ async function main(): Promise<void> {
       turns = [...turns, turn(3, 'another phone reply')];
       await followView.followCodexChat();
       const heldKept = followView.messagesEl.textContent?.includes('another phone reply') === true && followView.messagesEl.querySelector('.vc-held') !== null && followView.inputEl.value.includes('hey from obsidian');
+      // A refresh overtaken by a message sent while it read: what is on screen stays.
+      const raceView = followView as unknown as { busy: boolean; chatId: string | null; branchCodex: unknown; continueHeldInCopy(id: string): Promise<void> };
+      let release: () => void = () => undefined;
+      followView.readForOpening = () => new Promise((resolve) => (release = () => resolve({ chat: codexTranscript('cx-follow', turns as never, '/tmp'), readMs: 0 })));
+      followView.messagesEl.createDiv({ cls: 'vc-race-marker' });
+      changed = true;
+      const racing = followView.followCodexChat();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      raceView.busy = true;
+      release();
+      await racing;
+      const notReset = followView.messagesEl.querySelector('.vc-race-marker') !== null;
+      raceView.busy = false;
+      // Continue in a copy that fails after another chat was opened: the message goes to its own chat's draft, not that chat's input.
+      followView.inputEl.value = 'unsent message A';
+      raceView.branchCodex = async () => {
+        raceView.chatId = 'cx-other';
+        followView.inputEl.value = 'draft in B';
+        return null;
+      };
+      await raceView.continueHeldInCopy('cx-follow');
+      const draftA = (plugin as unknown as { chatDraft(id: string): { text?: string } | undefined }).chatDraft('cx-follow')?.text ?? '';
+      const copyOk = followView.inputEl.value === 'draft in B' && draftA.includes('unsent message A');
+      delete (raceView as unknown as Record<string, unknown>).branchCodex;
+      raceView.chatId = 'cx-follow';
+      console.log(`Codex follow races: refresh overtaken by a send keeps the screen ${notReset}; failed copy after switching keeps B's input and A's draft ${copyOk} -> ${notReset && copyOk}`);
+      if (!notReset || !copyOk) process.exitCode = 1;
       Object.assign(host, was);
       delete (followView as unknown as Record<string, unknown>).readForOpening;
       followView.inputEl.value = '';
