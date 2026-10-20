@@ -4482,6 +4482,8 @@ export default class VaultClaudePlugin extends Plugin {
     }
     // Up to 0.13.0 a panel-wide switch, on by default; notes are now attached per chat, and none to start with.
     delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
+    // Up to 0.39 "Mail: drafts only": sending is left to Claude Code's and Codex's own permissions.
+    delete (this.settings as Partial<Record<'mailDraftsOnly', unknown>>).mailDraftsOnly;
     // The chat records, in a file of their own since 0.36.0 (see RECORDS_FILE); before, in data.json.
     const chats = raw.chats;
     this.deletedCodex = Array.isArray(records.deletedCodex) ? records.deletedCodex.filter((id): id is string => typeof id === 'string') : [];

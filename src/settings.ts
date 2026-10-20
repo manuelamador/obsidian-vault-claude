@@ -37,12 +37,9 @@ const DEFAULT_DENY_RULES = [
   'Bash(rm -rf:*)',
 ].join('\n');
 
-/** The Gmail connector's tools that send mail, refused while "Mail: drafts only" is on. */
-const MAIL_SEND_TOOLS = ['send_message', 'reply', 'forward', 'send_draft'].map((tool) => `mcp__claude_ai_Gmail__${tool}`);
-
-/** The rules every chat runs with: the deny rules set, and, with "Mail: drafts only", the Gmail tools that send. */
-export function sessionDenyRules(settings: Pick<VaultClaudeSettings, 'denyRules' | 'mailDraftsOnly'>): string[] {
-  return [...denyRuleList(settings.denyRules), ...(settings.mailDraftsOnly ? MAIL_SEND_TOOLS : [])];
+/** The rules every chat runs with: the deny rules set. */
+export function sessionDenyRules(settings: Pick<VaultClaudeSettings, 'denyRules'>): string[] {
+  return denyRuleList(settings.denyRules);
 }
 
 export function denyRuleList(value: string): string[] {
@@ -106,7 +103,6 @@ export interface VaultClaudeSettings {
   allowBypass: boolean;
   denyRules: string;
   /** Claude may read Gmail and write drafts through Claude Code's connector, but not send (see sessionDenyRules). */
-  mailDraftsOnly: boolean;
   /** The features for Claude Code's Gmail connector (email and draft cards, Make a todo, Draft an email, mail read by chats); off without Gmail. */
   gmailFeatures: boolean;
   /** The note todos made from the chat go to (an email card's "Make a todo"), and its section. */
@@ -177,7 +173,6 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   notifyAfterSeconds: 30,
   allowBypass: false,
   denyRules: DEFAULT_DENY_RULES,
-  mailDraftsOnly: true,
   gmailFeatures: true,
   todoNote: 'Todo.md',
   todoSection: 'Open',
@@ -627,16 +622,6 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         .addText((text) =>
           text.setPlaceholder('Section').setValue(settings.todoSection).onChange(async (value) => {
             settings.todoSection = value.trim() || 'Open';
-            await this.plugin.saveSettings();
-          }),
-        );
-
-      new Setting(containerEl)
-        .setName('Mail: drafts only')
-        .setDesc("With Claude Code's Gmail connector, Claude can search and read your mail and write drafts, but not send, reply or forward: you send the drafts from Gmail. Takes effect in new chats.")
-        .addToggle((toggle) =>
-          toggle.setValue(settings.mailDraftsOnly).onChange(async (value) => {
-            settings.mailDraftsOnly = value;
             await this.plugin.saveSettings();
           }),
         );
