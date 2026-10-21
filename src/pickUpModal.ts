@@ -3,6 +3,7 @@
 // a chat opens as it is, or with the suggested step added to its input, or is set aside until you
 // work on it again. Suggest again asks anew.
 import { Component, Modal, setIcon, type App } from 'obsidian';
+import { previewOnHover } from './hoverPreview';
 import { errorText, log } from './log';
 import { DAY_MS, REMINDER_DAYS, SHOWN_OLDER, SHOWN_RECENT, SKIP_DAYS, type Candidate, type Suggestion } from './pickUp';
 
@@ -76,8 +77,6 @@ export class PickUpModal extends Modal {
   private readonly component = new Component();
   private readonly drawnFor = new Map<HTMLElement, Component>();
   private status!: HTMLElement;
-  /** The note name the pointer is over, for a preview when ⌘ is pressed there. */
-  private over: { path: string; el: HTMLElement } | null = null;
   /** The fades on their way, cleared when the list closes. */
   private readonly timers = new Set<number>();
   /** The pane of the row clicked, beside the list; and the row it shows. */
@@ -103,9 +102,6 @@ export class PickUpModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     this.component.load();
-    this.component.registerDomEvent(contentEl.ownerDocument, 'keydown', (evt) => {
-      if (this.over?.el.isConnected && (evt.key === 'Meta' || evt.key === 'Control')) this.host.previewNote?.(this.over.path, evt, this.over.el, this);
-    });
     this.titleEl.setText('Pick up where you left off');
     contentEl.addClass('vc-pick-up');
     // The list on the left; a row clicked, its details in a pane on the right, the window widened for it.
@@ -366,9 +362,14 @@ export class PickUpModal extends Modal {
     });
   }
 
-  /** The component of what is drawn in `body` (a details pane, or a row opened), new each time it is drawn. */
+  /**
+   * The component of what is drawn in `body` (a details pane, or a row opened), new each time it is
+   * drawn: the one drawn before in it unloaded. Asked for once per drawing, so everything drawn in it
+   * stays live until it is drawn again or the list closes.
+   */
   private drawn(body: HTMLElement): Component {
-    this.drawnFor.get(body)?.unload();
+    const before = this.drawnFor.get(body);
+    if (before) this.component.removeChild(before);
     const child = this.component.addChild(new Component());
     this.drawnFor.set(body, child);
     return child;
@@ -405,7 +406,8 @@ export class PickUpModal extends Modal {
 
   /** The pane beside the list closed, the window narrowed back. */
   private closeDetail(): void {
-    this.drawnFor.get(this.detail)?.unload();
+    const drawn = this.drawnFor.get(this.detail);
+    if (drawn) this.component.removeChild(drawn);
     this.drawnFor.delete(this.detail);
     this.detailRow?.removeClass('is-open');
     this.detailRow = null;
@@ -416,6 +418,8 @@ export class PickUpModal extends Modal {
 
   /** A row opened: the next step, its buttons, and what the chat is about. */
   private drawBody(body: HTMLElement, chat: Candidate, suggestion: Suggestion, row: HTMLElement): void {
+    // What its exchanges' Markdown loads, all of it kept until the body is drawn again (see drawn).
+    const owner = this.drawn(body);
     // A reminder's why, left off its compact row, opened under it (the side pane says it already).
     if (row.hasClass('is-reminder') && body !== this.detail) body.createDiv({ cls: 'vc-pick-up-why', text: suggestion.why });
     const next = body.createDiv({ cls: 'vc-pick-up-next' });
@@ -447,10 +451,8 @@ export class PickUpModal extends Modal {
           this.close();
           this.host.openNote?.(path);
         });
-        el.addEventListener('mouseover', (event) => this.host.previewNote?.(path, event, el, this));
-        // ⌘ pressed while over it: its preview too.
-        el.addEventListener('mouseenter', () => (this.over = { path, el }));
-        el.addEventListener('mouseleave', () => (this.over = null));
+        // Its preview on the way in, and when ⌘ is pressed while over it.
+        owner.register(previewOnHover(el, (event) => this.host.previewNote?.(path, event, el, this)));
       }
     };
     // Tags as small pills, on a line of their own.
@@ -491,7 +493,7 @@ export class PickUpModal extends Modal {
       for (const exchange of chat.exchanges) {
         const item = exchanges.createDiv({ cls: `vc-pick-up-item vc-pick-up-exchange is-${exchange.who === 'You' ? 'you' : 'claude'}` });
         item.createDiv({ cls: 'vc-pick-up-who', text: exchange.who });
-        this.host.renderMarkdown(exchange.text, item.createDiv({ cls: 'vc-pick-up-said' }), this.drawn(body), () => this.close(), this);
+        this.host.renderMarkdown(exchange.text, item.createDiv({ cls: 'vc-pick-up-said' }), owner, () => this.close(), this);
       }
     }
   }

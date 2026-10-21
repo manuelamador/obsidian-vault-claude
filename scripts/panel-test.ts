@@ -3458,11 +3458,16 @@ async function main(): Promise<void> {
     const quoteShown = quoteBtn.isShown();
     // Scrolled out of view it goes; scrolled back, it returns.
     const scrolledAway = { ...box, top: -200, bottom: -180, y: -200 };
+    // Placed once a frame on scrolling (see scheduleQuoteButton).
+    const nextFrame = () => new Promise<void>((resolve) => dom.window.requestAnimationFrame(() => resolve()));
     (quoteRange as unknown as { getClientRects(): unknown[] }).getClientRects = () => [scrolledAway];
     quoteReply.dispatchEvent(new dom.window.Event('scroll'));
+    await nextFrame();
     const goneWhenAway = !quoteBtn.isShown();
     (quoteRange as unknown as { getClientRects(): unknown[] }).getClientRects = () => [box];
     quoteReply.dispatchEvent(new dom.window.Event('scroll'));
+    quoteReply.dispatchEvent(new dom.window.Event('scroll'));
+    await nextFrame();
     const backWhenBack = quoteBtn.isShown();
     console.log(`Quote button on scroll: gone when away ${goneWhenAway}; back when scrolled back ${backWhenBack}`);
     if (!goneWhenAway || !backWhenBack) process.exitCode = 1;
@@ -3567,24 +3572,28 @@ async function main(): Promise<void> {
         '<div class="math math-block" data-tex="c"><mjx-container><mjx-math></mjx-math></mjx-container></div>';
       const [inline, block, drawnOnly] = Array.from(shown.querySelectorAll<HTMLElement>('.math'));
       const afterText = shown.querySelectorAll('p')[1].firstChild as Text;
-      const select = (range: Range) => {
+      // Marked once a frame (see onSelection in ChatView.onOpen).
+      const nextFrame = () => new Promise<void>((resolve) => dom.window.requestAnimationFrame(() => resolve()));
+      const select = async (range: Range) => {
         dom.window.getSelection()?.removeAllRanges();
         dom.window.getSelection()?.addRange(range);
         document.dispatchEvent(new dom.window.Event('selectionchange'));
+        await nextFrame();
       };
       const marks = () => [inline, block].map((el) => el.classList.contains('vc-math-selected'));
       const across = document.createRange();
       across.setStart(shown.firstChild?.firstChild as Text, 4);
       across.setEnd(afterText, 3);
-      select(across);
+      await select(across);
       const acrossMarks = marks();
       const textOnly = document.createRange();
       textOnly.setStart(afterText, 0);
       textOnly.setEnd(afterText, 5);
-      select(textOnly);
+      await select(textOnly);
       const textMarks = marks();
       dom.window.getSelection()?.removeAllRanges();
       document.dispatchEvent(new dom.window.Event('selectionchange'));
+      await nextFrame();
       const clearedMarks = marks();
       // An equation selected alone, whose drawing holds no text, is still a selection to quote; a click in one is not.
       const quoting = view as unknown as { selectedInChat(): string | null };
@@ -4879,6 +4888,29 @@ async function main(): Promise<void> {
       const copyOk = followView.inputEl.value === 'draft in B' && draftA.includes('unsent message A');
       delete (raceView as unknown as Record<string, unknown>).branchCodex;
       raceView.chatId = 'cx-follow';
+      // A follow due while a picked chat is still being read waits: its read would take the place of the pick's, and the pick would not open.
+      const counter = followView as unknown as { chatGeneration: number };
+      const reads: (() => void)[] = [];
+      followView.readForOpening = (id: string) => {
+        const generation = ++counter.chatGeneration;
+        const said = id === 'cx-picked' ? [turn(9, 'the picked chat')] : turns;
+        return new Promise((resolve) => reads.push(() => resolve(counter.chatGeneration === generation ? { chat: codexTranscript(id, said as never, '/tmp'), readMs: 0 } : null)));
+      };
+      host.isCodexChat = (id: string) => id === 'cx-follow' || id === 'cx-picked';
+      changed = true;
+      const picking = followView.openChat({ id: 'cx-picked', title: 'Picked', updatedAt: 0, fromPanel: true });
+      while (reads.length === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+      const following = followView.followCodexChat();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const followWaited = reads.length === 1;
+      for (const read of reads.splice(0)) read();
+      const pickOpened = await picking;
+      await following;
+      const onScreen = (followView as unknown as { chatId: string | null; resumeId: string | null });
+      const pickShown = pickOpened && (onScreen.chatId ?? onScreen.resumeId) === 'cx-picked' && followView.messagesEl.textContent?.includes('the picked chat') === true;
+      host.isCodexChat = (id: string) => id === 'cx-follow';
+      console.log(`Codex follow during an open: follow waited ${followWaited}; picked chat shown ${pickShown} -> ${followWaited && pickShown}`);
+      if (!followWaited || !pickShown) process.exitCode = 1;
       console.log(`Codex follow races: refresh overtaken by a send keeps the screen ${notReset}; failed copy after switching keeps B's input and A's draft ${copyOk} -> ${notReset && copyOk}`);
       if (!notReset || !copyOk) process.exitCode = 1;
       Object.assign(host, was);
