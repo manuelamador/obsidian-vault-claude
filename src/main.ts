@@ -78,6 +78,8 @@ const CODEX_SETTLED_MS = 5_000;
 /** How long Zotero's works, once listed, are offered by the @ picker before they are listed again. */
 const ZOTERO_LIST_FRESH_MS = 5 * 60_000;
 const MAX_CHAT_RECORDS = 500;
+/** The scratch replies remembered as continued in a chat (see continuedTo). */
+const CONTINUED_KEPT = 50;
 /** How many ended background tasks the task list keeps, and how much of each one's output it reads. */
 const FINISHED_TASKS = 20;
 /** How long the history waits for Codex's list of threads (see refreshCodexStamps); a read cut off is tried again at the next listing. */
@@ -281,6 +283,7 @@ type RecordsData = Pick<
   | 'frontmatterGuidance'
   | 'reportTo'
   | 'chatReports'
+  | 'continuedTo'
 > & { deletedCodex?: string[]; deletedSessions?: Record<string, number> };
 
 /**
@@ -380,6 +383,7 @@ interface PluginData {
   reportTo?: Record<string, string>;
   /** Reports come back from such chats, by the chat they report to, until dismissed. */
   chatReports?: Record<string, ChatReport[]>;
+  continuedTo?: Record<string, string>;
 }
 
 export default class VaultClaudePlugin extends Plugin {
@@ -539,6 +543,20 @@ export default class VaultClaudePlugin extends Plugin {
       allow: (threadId: string, key: string) => void (byThread.get(threadId) ?? byThread.set(threadId, new Set()).get(threadId))?.add(key),
     };
   })();
+  /**
+   * The chat a scratch reply's note was continued in (Continue in a chat about "…"), by the reply's
+   * uuid: its line then links that chat rather than offering to continue again. The newest
+   * CONTINUED_KEPT are kept.
+   */
+  continuedTo: Record<string, string> = {};
+
+  /** Notes that scratch reply `uuid`'s note was continued in chat `id` (see continuedTo). */
+  markContinued(uuid: string, id: string): void {
+    const entries = [...Object.entries(this.continuedTo).filter(([key]) => key !== uuid), [uuid, id]];
+    this.continuedTo = Object.fromEntries(entries.slice(-CONTINUED_KEPT));
+    this.saveSoon();
+  }
+
   /** Codex chats deleted in the panel, whose threads stay in Codex's store: not recorded from it again. */
   deletedCodex: string[] = [];
   /**
@@ -4544,6 +4562,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.chatContext = raw.chatContext && typeof raw.chatContext === 'object' ? raw.chatContext : {};
     this.reportTo = raw.reportTo && typeof raw.reportTo === 'object' ? raw.reportTo : {};
     this.chatReports = raw.chatReports && typeof raw.chatReports === 'object' ? raw.chatReports : {};
+    this.continuedTo = raw.continuedTo && typeof raw.continuedTo === 'object' ? raw.continuedTo : {};
     this.codexThreadsNamed = raw.codexThreadsNamed === true;
     this.chatListRebuiltFor = typeof raw.chatListRebuiltFor === 'string' ? raw.chatListRebuiltFor : null;
     // An older version kept only whether it had started one: taken as the one running now.
@@ -4626,6 +4645,7 @@ export default class VaultClaudePlugin extends Plugin {
       frontmatterGuidance: this.frontmatterGuidance,
       reportTo: this.reportTo,
       chatReports: this.chatReports,
+      continuedTo: this.continuedTo,
     };
   }
 }

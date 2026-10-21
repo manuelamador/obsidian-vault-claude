@@ -3792,13 +3792,7 @@ export class ChatView extends ItemView {
       branch.addEventListener('click', (evt) => this.onBranchClick(evt, uuid));
       // A scratch reply that made a note offers, in view, to carry on with it in a chat of its own.
       const note = this.scratch ? this.changeCards.get(turn)?.createdNotes()[0] : undefined;
-      if (note) {
-        const button = turn.createDiv({ cls: 'vc-continue-line', attr: { 'data-no-find': '' } }).createEl('button', { cls: 'vc-continue-button' });
-        setIcon(button.createSpan({ cls: 'vc-continue-icon' }), 'message-square-plus');
-        button.createSpan({ text: `Continue in a chat about “${noteName(note)}”` });
-        // From where you choose: the scratch chat's other errands stay behind (see continueMenu).
-        button.addEventListener('click', (evt) => this.continueMenu(evt, note, turn, uuid));
-      }
+      if (note) this.drawContinueLine(turn.createDiv({ cls: 'vc-continue-line', attr: { 'data-no-find': '' } }), note, turn, uuid);
     }
   }
 
@@ -4258,7 +4252,33 @@ export class ChatView extends ItemView {
    * `turn` (newest first, the one that began the first exchange changing `note` marked suggested), or
    * the whole scratch chat. The copy goes up to `upTo`, the reply under `turn`.
    */
-  private continueMenu(evt: MouseEvent, note: string, turn: HTMLElement, upTo: string): void {
+  /**
+   * The line under a scratch reply that made `note`: once continued, a link to the chat it was continued
+   * in (see VaultClaudePlugin.continuedTo); else the button that asks where to continue from.
+   */
+  private drawContinueLine(line: HTMLElement, note: string, turn: HTMLElement, uuid: string): void {
+    line.empty();
+    const continued = this.plugin.continuedTo[uuid];
+    const button = line.createEl('button', { cls: 'vc-continue-button' });
+    if (continued && this.plugin.isPanelChat(continued)) {
+      const title = this.plugin.chatTitleOf(continued);
+      setIcon(button.createSpan({ cls: 'vc-continue-icon' }), 'arrow-right');
+      button.createSpan({ text: `Continued in “${title}”` });
+      button.addEventListener('click', () => void this.openChatId(continued, title));
+      return;
+    }
+    setIcon(button.createSpan({ cls: 'vc-continue-icon' }), 'message-square-plus');
+    button.createSpan({ text: `Continue in a chat about “${noteName(note)}”` });
+    // From where you choose: the scratch chat's other errands stay behind (see continueMenu).
+    button.addEventListener('click', (evt) =>
+      this.continueMenu(evt, note, turn, uuid, (id) => {
+        this.plugin.markContinued(uuid, id);
+        this.drawContinueLine(line, note, turn, uuid);
+      }),
+    );
+  }
+
+  private continueMenu(evt: MouseEvent, note: string, turn: HTMLElement, upTo: string, continued: (id: string) => void): void {
     const order = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user, .vc-turn')];
     const prompts = order
       .slice(0, order.indexOf(turn))
@@ -4275,11 +4295,11 @@ export class ChatView extends ItemView {
         item
           .setTitle(`“${words.length > 60 ? `${words.slice(0, 59)}…` : words}”${uuid === suggested ? ' · suggested' : ''}`)
           .setIcon(uuid === suggested ? 'star' : 'message-square')
-          .onClick(() => void this.branch(upTo, true, uuid)),
+          .onClick(() => void this.branch(upTo, true, uuid).then((id) => id && continued(id))),
       );
     }
     menu.addSeparator();
-    menu.addItem((item) => item.setTitle('Whole scratch chat').setIcon('messages-square').onClick(() => void this.branch(upTo, true)));
+    menu.addItem((item) => item.setTitle('Whole scratch chat').setIcon('messages-square').onClick(() => void this.branch(upTo, true).then((id) => id && continued(id))));
     menu.showAtMouseEvent(evt);
   }
 

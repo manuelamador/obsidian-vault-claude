@@ -170,6 +170,7 @@ async function main(): Promise<void> {
     backgroundChat: () => null,
     phoneChats: () => new Set<string>(),
     closeRunningChat: async () => false,
+    continuedTo: {} as Record<string, string>,
     loadAnyChat: async (id: string, root: string) => (await import('../src/history')).loadChat(id, root),
     mailOfChats: (): unknown[] => [],
     setHomeProject: async () => undefined,
@@ -1619,8 +1620,23 @@ async function main(): Promise<void> {
       const from = scratchView.firstPromptAbout('Topic.md', last);
       const none = scratchView.firstPromptAbout('Never.md', last);
       host.empty();
-      const continueOk = from === 'p2' && none === undefined;
-      console.log(`continue a scratch note from its first exchange: ${from}; a note never changed: ${none} -> ${continueOk}`);
+      // Its line, once the note has been continued, links the chat it went to.
+      const lineView = view as unknown as { drawContinueLine(line: HTMLElement, note: string, turn: HTMLElement, uuid: string): void };
+      const stubs = plugin as unknown as { continuedTo: Record<string, string>; isPanelChat(id: string): boolean; chatTitleOf(id: string): string };
+      const before = { continuedTo: stubs.continuedTo, isPanelChat: stubs.isPanelChat, chatTitleOf: stubs.chatTitleOf };
+      stubs.continuedTo = {};
+      stubs.isPanelChat = (id) => id === 'cont1';
+      stubs.chatTitleOf = () => 'Liquidity';
+      const line = document.body.appendChild(document.createElement('div'));
+      lineView.drawContinueLine(line, 'Topic.md', last, 'r3');
+      const offered = line.textContent;
+      stubs.continuedTo = { r3: 'cont1' };
+      lineView.drawContinueLine(line, 'Topic.md', last, 'r3');
+      const linked = line.textContent;
+      line.remove();
+      Object.assign(stubs, before);
+      const continueOk = from === 'p2' && none === undefined && offered === 'Continue in a chat about “Topic”' && linked === 'Continued in “Liquidity”';
+      console.log(`continue a scratch note from its first exchange: ${from}; a note never changed: ${none}; line ${JSON.stringify(offered)} then ${JSON.stringify(linked)} -> ${continueOk}`);
       if (!continueOk) process.exitCode = 1;
     }
 
