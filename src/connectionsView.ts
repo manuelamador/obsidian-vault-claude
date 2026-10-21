@@ -13,6 +13,8 @@ import { safeGmailUrl } from './emailSafety';
 import { folderOf } from './chatFolders';
 import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 import { previewOnHover } from './hoverPreview';
+import { folderChatsQuery, noteChatsQuery, projectChatsQuery } from './historyModal';
+import { projectShownName } from './projects';
 
 const SVG = 'http://www.w3.org/2000/svg';
 /** What a click on a chat does, said in its tooltip. */
@@ -46,6 +48,8 @@ interface MapActions {
   projectOfChat(id: string): string | null;
   /** Adds a link to chat `id` to the message being typed in the panel. */
   mentionChat(id: string): void;
+  /** Opens the history at `query`: the chats with a note, in a folder or of a project (see noteChatsQuery). */
+  showChats(query: string): void;
 }
 
 
@@ -393,6 +397,7 @@ function noteNode(group: SVGGElement, path: string, actions: MapActions, parent:
     evt.preventDefault();
     const menu = new Menu();
     menu.addItem((item) => item.setTitle('Open in a new tab').setIcon('file-text').onClick(() => actions.openNote(path, true)));
+    menu.addItem((item) => item.setTitle('Chats with this note').setIcon('messages-square').onClick(() => actions.showChats(noteChatsQuery(path))));
     const { localGraph } = actions;
     if (localGraph) menu.addItem((item) => item.setTitle('Open local graph').setIcon('git-fork').onClick(() => localGraph(path)));
     menu.showAtMouseEvent(evt);
@@ -884,6 +889,7 @@ export class ConnectionsView extends ItemView {
     const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
     if (this.project?.path !== path) add('Show the project', 'locate-fixed', () => void this.moveToProject(path));
     add('Open project note', 'file-text', () => host.openProjectNote(path));
+    add('Chats in this project', 'messages-square', () => host.showChats(projectChatsQuery(projectShownName({ basename: path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '') }))));
     const { localGraph } = host;
     if (localGraph) add('Open local graph', 'git-fork', () => localGraph(path));
     if (host.lookOnly) {
@@ -1009,6 +1015,9 @@ export class ConnectionsView extends ItemView {
     const holding = this.host?.projectHolding(folder) ?? null;
     // A folder inside a project acts as the project does.
     const actions = this.folderActions(holding && holding.folder !== folder ? holding.folder : folder);
+    const host = this.host;
+    // The folder's own chats, a folder inside a project included, whatever else it offers.
+    if (host) actions.unshift({ label: 'Chats in this folder', run: () => host.showChats(folderChatsQuery(folder)) });
     if (actions.length === 0) return;
     const menu = new Menu();
     for (const action of actions) menu.addItem((item) => item.setTitle(action.label).onClick(action.run));

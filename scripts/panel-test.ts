@@ -1093,6 +1093,15 @@ async function main(): Promise<void> {
         expanded.join() === `note ${pruning},c5 sent,c4 changed,c3 changed,c2 changed,c1 changed` &&
         JSON.stringify(opened) === JSON.stringify([pruning]) &&
         picked.join() === 'c5 new tab,c4';
+      // A note's whole path, as the map's Chats with this note types it: that note alone, every chat shown.
+      const fresh = new HistoryModal({} as never, chats, Promise.resolve(null), {
+        ...historyActions,
+        noteLinks: () => ({ changed: { [pruning]: ['c4', 'c3', 'c1', 'c2'], 'Projects/Orchard/Threads/Pruning notes.md': ['c1'] }, sent: { [pruning]: ['c5'] }, mentioned: {} }),
+      });
+      const wholePath = rowIds(await fresh.getSuggestions(`with:${pruning}`));
+      const wholeOk = wholePath.join() === `note ${pruning},c5 sent,c4 changed,c3 changed,c2 changed,c1 changed`;
+      console.log(`chats with a note by its whole path: ${wholePath.join()} -> ${wholeOk}`);
+      if (!wholeOk) process.exitCode = 1;
       console.log(`chats by note: tab ${tabbed}; ${rowIds(orchard).join(' | ')}; all notes ${all.join(' | ')}; after "+N more" ${expanded.length - 1} chats; opened ${opened} -> ${notesOk}`);
       if (!notesOk) process.exitCode = 1;
     }

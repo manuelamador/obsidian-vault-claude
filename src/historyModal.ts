@@ -70,6 +70,21 @@ const NOTES_PREFIX = 'with:';
 const FOLDERS_PREFIX = 'in:';
 /** A query that starts with this lists projects, and the chats of the project gone into (see readProjectQuery). */
 export const PROJECTS_PREFIX = 'project:';
+
+/** The history's query for the chats with note `path` (the notes view, that note alone; see noteRows). */
+export function noteChatsQuery(path: string): string {
+  return `${NOTES_PREFIX}${path}`;
+}
+
+/** The history's query for the chats in folder `folder` (the folders view, gone into it). */
+export function folderChatsQuery(folder: string): string {
+  return `${FOLDERS_PREFIX}${folder ? `${folder}/` : ''}`;
+}
+
+/** The history's query for the chats of project `name`, as the projects view names it. */
+export function projectChatsQuery(name: string): string {
+  return `${PROJECTS_PREFIX}${name}/`;
+}
 /** The chats shown under a note before "+N more". */
 const NOTE_CHATS_SHOWN = 3;
 /** The most rows the history draws (Obsidian's own limit is 100). */
@@ -301,8 +316,11 @@ export class HistoryModal extends SuggestModal<Match> {
   /** The notes view: notes whose path contains `term`, the most recent first, each with its chats beneath it. */
   private noteRows(term: string): Match[] {
     const { changed, sent, mentioned } = this.actions.noteLinks();
-    return chatsByNote(changed, sent, mentioned, this.items, term).flatMap((note) => {
-      const chats = this.expanded.has(note.path) ? note.chats : note.chats.slice(0, NOTE_CHATS_SHOWN);
+    const groups = chatsByNote(changed, sent, mentioned, this.items, term);
+    // A note's whole path (from its chats on the map, see noteChatsQuery): that note alone, all its chats shown.
+    const exact = groups.find((note) => note.path.toLowerCase() === term.trim().toLowerCase());
+    return (exact ? [exact] : groups).flatMap((note) => {
+      const chats = note === exact || this.expanded.has(note.path) ? note.chats : note.chats.slice(0, NOTE_CHATS_SHOWN);
       const rows: Match[] = [{ kind: 'note', note }, ...chats.map(({ item, why }) => ({ kind: 'chat' as const, item, why }))];
       if (chats.length < note.chats.length) rows.push({ kind: 'more', note });
       return rows;
