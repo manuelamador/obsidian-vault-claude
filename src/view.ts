@@ -2,7 +2,6 @@ import {
   Component,
   ItemView,
   Keymap,
-  MarkdownRenderer,
   MarkdownView,
   Menu,
   Notice,
@@ -72,7 +71,8 @@ import type { ChatDraft, ChatProjectState, MailThread } from './main';
 import { contextHash, type ContextPart } from './projects';
 import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
-import { neutralizeRemoteMedia, openableHref, sweepRemoteMedia } from './safeMarkdown';
+import { openableHref } from './safeMarkdown';
+import { renderOffPage, watchRemoteMedia } from './safeRender';
 import { CONNECTOR_DECLINED, ClaudeSession, type ConnectorRequest, type PermissionRequest, type SessionHandlers, type UserContent } from './session';
 import { CodexSession, forkCodexThread, revertCodexThread, type CodexModel } from './codexSession';
 
@@ -420,6 +420,28 @@ export function closedNotice(stopped: number, tasks: number, offPhone: number): 
   return null;
 }
 
+/**
+ * A Copy button in `parent` for a reply or a message: `text()` copied when it is clicked, a tick shown
+ * for a moment once it is copied, a notice when it could not be.
+ */
+function copyButton(parent: HTMLElement, cls: string, what: 'reply' | 'message', text: () => string): HTMLButtonElement {
+  const copy = parent.createEl('button', { cls, attr: { 'aria-label': `Copy ${what}` } });
+  setIcon(copy, 'copy');
+  copy.addEventListener('click', () => {
+    navigator.clipboard.writeText(text()).then(
+      () => {
+        setIcon(copy, 'check');
+        window.setTimeout(() => setIcon(copy, 'copy'), 1500);
+      },
+      (error: unknown) => {
+        log(`copying the ${what} failed`, error);
+        new Notice(`Could not copy the ${what}.`);
+      },
+    );
+  });
+  return copy;
+}
+
 /** Whether text typed at `at` in `text` starts a word: at its start, or after a space, a line break, or an opening bracket or quote. */
 export function startsWord(text: string, at: number): boolean {
   return at === 0 || /[\s([{"'“‘]/.test(text[at - 1] ?? '');
@@ -667,6 +689,10 @@ export class ChatView extends ItemView {
   private selectionTimer: number | null = null;
   /** Equations shown as selected (see markSelectedMath). */
   private selectedMath = new Set<HTMLElement>();
+  /** The frame the selected equations are marked in, once asked for (see onSelection in onOpen). */
+  private mathFrame = 0;
+  /** The frame the Quote button is placed in on a scroll, once asked for (see scheduleQuoteButton). */
+  private quoteFrame = 0;
   private attachments: Attachment[] = [];
   private trayEl!: HTMLElement;
   /** Mentioned notes to send by their path only, not with their text, by path (see renderTray). */
@@ -911,7 +937,7 @@ export class ChatView extends ItemView {
     this.registerDomEvent(newButton, 'contextmenu', (evt) => {
       evt.preventDefault();
       const menu = new Menu();
-      menu.addItem((item) => item.setTitle('New chat in a new tab').setIcon('square-pen').onClick(() => void this.plugin.openChatTab(this.leaf).then((view) => view?.focusInput())));
+      menu.addItem((item) => item.setTitle('New chat in a new tab').setIcon('square-pen').onClick(() => this.newChatInTab()));
       // The other engine than new chats run on (see New chats run on).
       if (this.plugin.settings.newChatEngine === 'codex') menu.addItem((item) => item.setTitle('New Claude chat').setIcon('message-square-plus').onClick(() => this.startClaudeChat()));
       else menu.addItem((item) => item.setTitle('New Codex chat').setIcon('terminal-square').onClick(() => this.startCodexChat()));
@@ -935,7 +961,7 @@ export class ChatView extends ItemView {
       menu.showAtMouseEvent(evt);
     });
     this.registerDomEvent(newButton, 'click', (evt) => {
-      if (Keymap.isModEvent(evt)) void this.plugin.openChatTab(this.leaf).then((view) => view?.focusInput());
+      if (Keymap.isModEvent(evt)) this.newChatInTab();
       else this.startNewChat();
     });
     this.setChatTitle(null);
@@ -958,6 +984,16 @@ export class ChatView extends ItemView {
     // The row's empty middle, rested on with no card open, brings out the bar of your messages (see PromptNav.peek).
     let peekTimer: number | null = null;
     let unpeekTimer: number | null = null;
+    // Whether the pointer was last over the row's empty middle, still in the meter: a card that hides
+    // by itself there lets the bar come out without the pointer moving again.
+    let inMiddle = false;
+    const peekSoon = () => {
+      if (peekTimer !== null) return;
+      peekTimer = window.setTimeout(() => {
+        peekTimer = null;
+        this.promptNav.peek(true);
+      }, PROMPT_BAR_PEEK_MS);
+    };
     const stopPeekTimers = () => {
       if (peekTimer !== null) window.clearTimeout(peekTimer);
       if (unpeekTimer !== null) window.clearTimeout(unpeekTimer);
@@ -991,26 +1027,24 @@ export class ChatView extends ItemView {
       hideTimer = window.setTimeout(() => {
         hideTimer = null;
         this.usageCard.hide();
+        if (inMiddle) peekSoon();
       }, USAGE_CARD_GRACE_MS);
     };
     this.registerDomEvent(this.meterEl, 'mouseover', (evt) => {
       const target = evt.target as HTMLElement;
       // The card sits inside the meter: moving onto it keeps it.
+      inMiddle = false;
       if (target.closest('.vc-usage-card')) return cancel();
       const part: UsageCardPart | null = target.closest('.vc-meter-context-group') ? 'context' : target.closest('.vc-meter-plan') ? 'usage' : null;
       if (!part) {
+        inMiddle = true;
         if (hoverTimer !== null) window.clearTimeout(hoverTimer);
         hoverTimer = null;
         // On the way to an open card: it waits; else, rested on a moment, the bar of your messages comes out.
         if (unpeekTimer !== null) window.clearTimeout(unpeekTimer);
         unpeekTimer = null;
         if (this.usageCard.isShown()) hideSoon();
-        else if (peekTimer === null) {
-          peekTimer = window.setTimeout(() => {
-            peekTimer = null;
-            this.promptNav.peek(true);
-          }, PROMPT_BAR_PEEK_MS);
-        }
+        else peekSoon();
         return;
       }
       unpeekSoon();
@@ -1026,6 +1060,7 @@ export class ChatView extends ItemView {
       }, 300);
     });
     this.registerDomEvent(this.meterEl, 'mouseleave', (evt) => {
+      inMiddle = false;
       if (hoverTimer !== null) window.clearTimeout(hoverTimer);
       hoverTimer = null;
       if (this.usageCard.isShown()) hideSoon();
@@ -1069,17 +1104,7 @@ export class ChatView extends ItemView {
     // What is drawn in the panel after a reply is rendered (an embed, another plugin's post-processor),
     // and the side chat's, is swept as it comes in (see sweepRemoteMedia): replies are swept before
     // they go in (see renderMarkdown), this catches the rest.
-    const sweeper = new MutationObserver((records) => {
-      for (const record of records) {
-        if (record.type === 'attributes') {
-          if (record.target instanceof Element) sweepRemoteMedia(record.target, true);
-          continue;
-        }
-        for (const node of Array.from(record.addedNodes)) if (node instanceof Element && node.isConnected) sweepRemoteMedia(node);
-      }
-    });
-    sweeper.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset', 'data', 'style', 'href', 'xlink:href', 'background', 'poster'] });
-    this.register(() => sweeper.disconnect());
+    this.register(watchRemoteMedia(root));
     this.draw = this.liveDraw = { parent: this.messagesEl, turn: null, group: null, liveText: null, turnHadText: false };
     this.promptNav = new PromptNav(messagesWrap, this.messagesEl, () => this.earlier?.listed() ?? []);
     this.doneTabs = new DoneTabs(messagesWrap, (tab) => void this.app.workspace.revealLeaf(this.leaf).then(() => this.openChatId(tab.id, tab.title)), () => this.plugin.doneTabsChanged());
@@ -1167,7 +1192,7 @@ export class ChatView extends ItemView {
       this.promptNav.schedule();
     });
     this.registerDomEvent(this.messagesEl, 'scroll', () => {
-      if (this.quoteTracking) this.placeQuoteButton();
+      if (this.quoteTracking) this.scheduleQuoteButton();
       this.checkEarlier();
       const el = this.messagesEl;
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -1336,7 +1361,13 @@ export class ChatView extends ItemView {
     // Selections in the editor and in reading view, and in the chat; redrawn shortly after the
     // selection settles. In every window: the panel's own (a popout, say) and the notes' may differ.
     const onSelection = () => {
-      this.markSelectedMath();
+      // Equations are marked once a frame: a drag changes the selection more often than the screen is drawn.
+      if (!this.mathFrame) {
+        this.mathFrame = window.requestAnimationFrame(() => {
+          this.mathFrame = 0;
+          this.markSelectedMath();
+        });
+      }
       if (this.selectionTimer !== null) window.clearTimeout(this.selectionTimer);
       this.selectionTimer = window.setTimeout(() => {
         this.selectionTimer = null;
@@ -1363,6 +1394,9 @@ export class ChatView extends ItemView {
     this.register(() => {
       stopMigrating?.();
       for (const doc of selectionDocs) doc.removeEventListener('selectionchange', onSelection);
+      if (this.mathFrame) window.cancelAnimationFrame(this.mathFrame);
+      if (this.quoteFrame) window.cancelAnimationFrame(this.quoteFrame);
+      this.mathFrame = this.quoteFrame = 0;
     });
     this.updateContextChip();
 
@@ -1780,6 +1814,24 @@ export class ChatView extends ItemView {
   private heldBy: string | null = null;
   /** A follow of the chat on screen under way (see followCodexChat). */
   private following = false;
+  /**
+   * Chats being opened here, picked or brought back from the background (see whileOpening). A follow
+   * waits while there are any: its own read would take the place of theirs (see readForOpening), and
+   * the chat picked would not open.
+   */
+  private opening = 0;
+  /** Picks of a chat to open, counted: an open overtaken by a later pick is not remembered as a place visited (see openChat). */
+  private picks = 0;
+
+  /** `work`, opening a chat, counted in `opening` while it runs. */
+  private async whileOpening<T>(work: () => Promise<T>): Promise<T> {
+    this.opening += 1;
+    try {
+      return await work();
+    } finally {
+      this.opening -= 1;
+    }
+  }
 
   /**
    * The Codex chat on screen could not be written: another Codex app (the ChatGPT app, written in
@@ -1863,12 +1915,13 @@ export class ChatView extends ItemView {
    */
   private async followCodexChat(): Promise<void> {
     const id = this.chatId ?? this.resumeId;
-    if (this.following || !id || this.engine !== 'codex' || this.scratch || !this.isOnScreen()) return;
+    if (this.following || this.opening > 0 || !id || this.engine !== 'codex' || this.scratch || !this.isOnScreen()) return;
     if (this.busy || this.pending.size > 0 || this.tasks.size > 0 || this.openApprovals.length > 0) return;
     this.following = true;
     try {
       if (!(await this.plugin.codexThreadChanged(id))) return;
-      if ((this.chatId ?? this.resumeId) !== id || this.busy) return;
+      // A chat picked while Codex was asked opens undisturbed.
+      if ((this.chatId ?? this.resumeId) !== id || this.busy || this.opening > 0) return;
       await this.refreshCodexChat(id);
     } finally {
       this.following = false;
@@ -2899,7 +2952,7 @@ export class ChatView extends ItemView {
   private async attachBackground(entry: BackgroundChat): Promise<void> {
     const opening = this.showOpening(entry.title);
     try {
-      await this.showBackground(entry);
+      await this.whileOpening(() => this.showBackground(entry));
     } finally {
       opening.remove();
     }
@@ -3317,10 +3370,13 @@ export class ChatView extends ItemView {
     }
     const started = performance.now();
     const from = this.navPlace();
-    const opened = await this.openChatHere(item, branch);
+    const pick = ++this.picks;
+    const opened = await this.whileOpening(() => this.openChatHere(item, branch));
     const shown = performance.now();
-    if (opened) this.remember(from);
-    if (opened) this.doneTabs.remove(item.id);
+    // Overtaken by a later pick, it did not open: the place it left is not remembered, its tab not taken.
+    const current = pick === this.picks;
+    if (opened && current) this.remember(from);
+    if (opened && current) this.doneTabs.remove(item.id);
     this.plugin.chatShown(this);
     // Once the browser has laid out and painted what was drawn: the wait as seen.
     window.requestAnimationFrame(() =>
@@ -3860,20 +3916,7 @@ export class ChatView extends ItemView {
       const reply = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Reply to this' } });
       setIcon(reply, 'reply');
       reply.addEventListener('click', () => this.quoteText(this.replyMarkdown(textEls)));
-      const copy = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Copy reply' } });
-      setIcon(copy, 'copy');
-      copy.addEventListener('click', () => {
-        navigator.clipboard.writeText(this.replyMarkdown(textEls)).then(
-          () => {
-            setIcon(copy, 'check');
-            window.setTimeout(() => setIcon(copy, 'copy'), 1500);
-          },
-          (error: unknown) => {
-            log('copying the reply failed', error);
-            new Notice('Could not copy the reply.');
-          },
-        );
-      });
+      copyButton(actions, 'clickable-icon', 'reply', () => this.replyMarkdown(textEls));
       const insert = actions.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Insert into note' } });
       setIcon(insert, 'file-input');
       insert.addEventListener('click', (evt) => this.onInsertClick(evt, this.replyMarkdown(textEls)));
@@ -4660,7 +4703,8 @@ export class ChatView extends ItemView {
       head.createSpan({ text: `${report.failed ? 'Stopped with an error' : 'Report'} from “${report.title}”` });
       head.createSpan({ cls: 'vc-report-when', text: formatDate(report.at) });
       const body = card.createDiv({ cls: 'vc-report-text vc-markdown' });
-      void MarkdownRenderer.render(this.app, neutralizeRemoteMedia(report.text), body, '', this.chatComponent).then(() => sweepRemoteMedia(body));
+      // Rendered off the page and swept before it goes in, as replies are (see renderOffPage).
+      void renderOffPage(this.app, report.text, body, this.chatComponent).catch((error: unknown) => log('rendering a report failed', error));
       const buttons = card.createDiv({ cls: 'vc-report-buttons' });
       const button = (label: string, run: () => void) => buttons.createEl('button', { text: label }).addEventListener('click', run);
       button('Add to my message', () => {
@@ -4949,20 +4993,7 @@ export class ChatView extends ItemView {
     }
     // The message as sent, all of it however folded, without its attachments.
     if (text) {
-      const copy = actions.createEl('button', { cls: 'clickable-icon vc-user-action vc-user-copy', attr: { 'aria-label': 'Copy message' } });
-      setIcon(copy, 'copy');
-      copy.addEventListener('click', () => {
-        navigator.clipboard.writeText(text).then(
-          () => {
-            setIcon(copy, 'check');
-            window.setTimeout(() => setIcon(copy, 'copy'), 1500);
-          },
-          (error: unknown) => {
-            log('copying the message failed', error);
-            new Notice('Could not copy the message.');
-          },
-        );
-      });
+      copyButton(actions, 'clickable-icon vc-user-action vc-user-copy', 'message', () => text);
     }
     if (text) {
       bubble.createDiv({ cls: 'vc-user-text', text });
@@ -6069,6 +6100,11 @@ export class ChatView extends ItemView {
     this.backButton.setAttr('aria-label', back ? `Back to “${back.title}” (${backKey})` : 'No chat to go back to');
     this.forwardButton.toggleClass('is-disabled', !forward);
     this.forwardButton.setAttr('aria-label', forward ? `Forward to “${forward.title}” (${forwardKey})` : 'No chat to go forward to');
+  }
+
+  /** A new chat in a tab of its own beside this one, its input ready to type in (the New chat button's ⌘-click and menu). */
+  private newChatInTab(): void {
+    void this.plugin.openChatTab(this.leaf).then((view) => view?.focusInput());
   }
 
   /** New chat, as its button and command start one: the chat left can be gone back to. */
@@ -8246,6 +8282,18 @@ export class ChatView extends ItemView {
   }
 
   /**
+   * The Quote button placed in the next frame, once however many scroll events come before it: placing
+   * it reads the layout, which a scroll changes every frame.
+   */
+  private scheduleQuoteButton(): void {
+    if (this.quoteFrame) return;
+    this.quoteFrame = window.requestAnimationFrame(() => {
+      this.quoteFrame = 0;
+      this.placeQuoteButton();
+    });
+  }
+
+  /**
    * Shows the Quote button just above a selection in the chat, clear of the selected lines, or hides
    * it when there is none. Placed within the messages' wrapper, and kept inside it at the edges.
    */
@@ -8831,18 +8879,9 @@ export class ChatView extends ItemView {
     if (renderPlainText(markdown, el)) return Promise.resolve();
     // The chat's own text (not a side chat's) records its mentions once its links are in.
     const chat = component === this.chatComponent ? this.mentionsChat() : null;
-    // Rendered off the page and swept before it goes in, so an inline style that would load
-    // something is gone before it is ever applied; what is drawn later is moved in when it is done.
-    const holder = createDiv();
-    const rendering = MarkdownRenderer.render(this.app, neutralizeRemoteMedia(markdown), holder, '', component);
-    const moveIn = () => {
-      sweepRemoteMedia(holder);
-      el.append(...Array.from(holder.childNodes));
-    };
-    moveIn();
-    // Whatever was drawn goes in, the render failed or not.
-    return rendering
-      .finally(moveIn)
+    // Rendered off the page and swept before it goes in (see renderOffPage); whatever was drawn goes
+    // in, the render failed or not.
+    return renderOffPage(this.app, markdown, el, component)
       .then(() => {
         linkFileNames(el, (name) => this.vaultFileOf(name), (name) => {
           const disk = diskPath(name, this.plugin.vaultRoot() ?? '', homedir());

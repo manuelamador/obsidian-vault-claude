@@ -67,8 +67,12 @@ export class SideChat {
   /** The reply streaming in, drawn as plain text until its message is complete. */
   private live: HTMLElement | null = null;
   private busy = false;
-  /** Owns the components of the replies' Markdown; replaced whenever they are cleared. */
+  /**
+   * Owns the components of the replies' Markdown; replaced whenever they are cleared. Loaded when the
+   * first reply is drawn in it (see rendering), so a side chat closed is left holding nothing loaded.
+   */
   private component = new Component();
+  private componentLoaded = false;
   /** Counts the side chat's ends, so a session that finishes starting after one is not used. */
   private ends = 0;
   /** The scroll asked for this frame (see scrollToEnd). */
@@ -120,7 +124,15 @@ export class SideChat {
         if (ends === this.ends) this.attach(images.filter((image): image is ImageAttachment => image !== null));
       });
     });
-    this.component.load();
+  }
+
+  /** The component the replies' Markdown is drawn under, loaded on first use (see clear). */
+  private rendering(): Component {
+    if (!this.componentLoaded) {
+      this.component.load();
+      this.componentLoaded = true;
+    }
+    return this.component;
   }
 
   isOpen(): boolean {
@@ -178,6 +190,8 @@ export class SideChat {
     this.setImages([]);
     if (this.isMinimised()) this.restore();
     this.lastQuestion.setText('');
+    if (this.scrollFrame !== null) (this.el.ownerDocument.defaultView ?? window).cancelAnimationFrame(this.scrollFrame);
+    this.scrollFrame = null;
     this.el.hide();
   }
 
@@ -236,9 +250,10 @@ export class SideChat {
   /** Takes the questions and replies away, unloading what their Markdown loaded. */
   private clear(): void {
     this.messages.empty();
-    this.component.unload();
+    if (this.componentLoaded) this.component.unload();
+    // A fresh one, loaded only once something is drawn in it.
     this.component = new Component();
-    this.component.load();
+    this.componentLoaded = false;
   }
 
   /** Ends the session, and then deletes or keeps it (see Run.then). */
@@ -285,7 +300,7 @@ export class SideChat {
     if ((!text && images.length === 0) || this.busy) return;
     const bubble = this.messages.createDiv({ cls: 'vc-side-chat-question' });
     this.lastQuestion.setText(text ? text.replace(/\s+/g, ' ') : 'Image');
-    if (text) this.host.renderMarkdown(text, bubble, this.component);
+    if (text) this.host.renderMarkdown(text, bubble, this.rendering());
     if (images.length > 0) {
       const row = bubble.createDiv({ cls: 'vc-user-attachments' });
       for (const image of images) renderChip(row, chipFor(image));
@@ -366,7 +381,7 @@ export class SideChat {
         const el = this.live ?? this.messages.createDiv({ cls: 'vc-side-chat-reply vc-text' });
         el.empty();
         el.removeClass('is-live');
-        this.host.renderMarkdown(text, el, this.component);
+        this.host.renderMarkdown(text, el, this.rendering());
       } else {
         this.live?.remove();
       }

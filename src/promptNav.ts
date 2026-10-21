@@ -84,6 +84,9 @@ export class PromptNav {
     return this.peeking;
   }
 
+  /** The document listening for a click outside the open list (see openList). */
+  private outsideDoc: Document | null = null;
+
   /** Updates on the next frame, so a burst of scroll events costs one pass. */
   schedule(): void {
     if (this.frame) return;
@@ -167,16 +170,25 @@ export class PromptNav {
     this.list.show();
     this.select(Math.max(0, at), true);
     this.list.focus();
-    this.list.ownerDocument.addEventListener('mousedown', this.onOutside, true);
+    // Removed from the document it was added to, which is no longer the list's once the panel moves to another window.
+    this.stopOutside();
+    this.outsideDoc = this.list.ownerDocument;
+    this.outsideDoc.addEventListener('mousedown', this.onOutside, true);
   }
 
   closeList(): void {
+    this.stopOutside();
     if (!this.list.isShown()) return;
     this.list.hide();
     this.list.empty();
     this.items = [];
-    this.list.ownerDocument.removeEventListener('mousedown', this.onOutside, true);
     this.schedule();
+  }
+
+  /** The listener for a click outside the open list taken off its document (see openList). */
+  private stopOutside(): void {
+    this.outsideDoc?.removeEventListener('mousedown', this.onOutside, true);
+    this.outsideDoc = null;
   }
 
   /** The text in the bar, for tests; empty while hidden. */

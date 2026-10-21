@@ -12,6 +12,7 @@ import { mailThreadTitle } from './emailMessages';
 import { safeGmailUrl } from './emailSafety';
 import { folderOf } from './chatFolders';
 import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
+import { previewOnHover } from './hoverPreview';
 
 const SVG = 'http://www.w3.org/2000/svg';
 /** What a click on a chat does, said in its tooltip. */
@@ -379,24 +380,6 @@ class MapDrawing {
     }
     for (const [each, group] of this.groups) group.toggleClass('is-lit', lit.has(each));
   }
-}
-
-/**
- * Shows Obsidian's page preview for `el` once per entry, or when ⌘ is pressed while over it. Not on
- * every mouseover: those repeat as the pointer crosses the node's parts, and each preview asked for
- * replaces the one open, which then showed and went away.
- */
-function previewOnHover(el: SVGGElement, show: (evt: MouseEvent | KeyboardEvent) => void): void {
-  const key = (evt: KeyboardEvent) => {
-    // Drawn away under the pointer (the map redrawn), which no mouseleave says: the listener goes.
-    if (!el.isConnected) return el.doc.removeEventListener('keydown', key);
-    if (evt.key === 'Meta' || evt.key === 'Control') show(evt);
-  };
-  el.addEventListener('mouseenter', (evt) => {
-    show(evt);
-    el.doc.addEventListener('keydown', key);
-  });
-  el.addEventListener('mouseleave', () => el.doc.removeEventListener('keydown', key));
 }
 
 /** Makes a note open in a new tab on a click and show Obsidian's preview on ⌘-hover, its path in its tooltip. */
