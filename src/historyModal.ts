@@ -63,6 +63,11 @@ const ROW_LIMIT = 2000;
 /** Shorter queries match titles only; reading every transcript for one or two letters is wasted work. */
 const MIN_CONTENT_QUERY = 3;
 const SNIPPET_RADIUS = 60;
+/**
+ * How long typing must pause before the chats' texts are searched (ms): each search reads every
+ * listed chat's whole text, while titles are matched at every key.
+ */
+const CONTENT_SEARCH_DELAY_MS = 200;
 
 /**
  * Where `needle` (lower case) first is in a chat's text, as an offset into its text as it is: its
@@ -99,6 +104,9 @@ export class HistoryModal extends SuggestModal<Match> {
   private readonly expanded = new Set<string>();
   /** Which view the hint line names the keys of (see showKeys). */
   private keysFor: HistoryView | null = null;
+  /** When a key was last pressed in the history (performance.now()), and the search of the chats' texts waiting for typing to pause. */
+  private lastKeyAt = -Infinity;
+  private contentTimer: number | null = null;
 
   /**
    * `shown`: the chats as listed before, shown at once, or null; `listing`: the chats listed now,
@@ -116,6 +124,8 @@ export class HistoryModal extends SuggestModal<Match> {
     // Every chat, and in the notes view every note, rather than Obsidian's first 100 rows.
     this.limit = ROW_LIMIT;
     this.showKeys('chats');
+    // Seen before Obsidian's own handlers, which run the query on the input that follows.
+    this.modalEl.addEventListener('keydown', () => (this.lastKeyAt = performance.now()), true);
     this.scope.register([], 'Tab', () => {
       this.switchView();
       return false;
@@ -151,6 +161,17 @@ export class HistoryModal extends SuggestModal<Match> {
   onClose(): void {
     super.onClose();
     this.dismissed = true;
+    if (this.contentTimer !== null) window.clearTimeout(this.contentTimer);
+    this.contentTimer = null;
+  }
+
+  /** Runs `query` again in `ms`, if it is still the one typed then (see CONTENT_SEARCH_DELAY_MS). */
+  private searchAfter(query: string, ms: number): void {
+    if (this.contentTimer !== null) window.clearTimeout(this.contentTimer);
+    this.contentTimer = window.setTimeout(() => {
+      this.contentTimer = null;
+      if (!this.dismissed && this.inputEl.value === query) this.refresh();
+    }, ms);
   }
 
   async getSuggestions(query: string): Promise<Match[]> {
@@ -170,13 +191,20 @@ export class HistoryModal extends SuggestModal<Match> {
     // Titles first, then the chats of the projects whose names hold it.
     const inProject = (item: HistoryItem) => this.actions.projectName?.(item)?.toLowerCase().includes(needle) ?? false;
     const titled = ordered.filter((item) => item.title.toLowerCase().includes(needle));
-    const byTitle: Match[] = [...titled, ...ordered.filter((item) => !titled.includes(item) && inProject(item))].map((item) => ({ kind: 'chat', item }));
+    const inTitles = new Set(titled);
+    const byTitle: Match[] = [...titled, ...ordered.filter((item) => !inTitles.has(item) && inProject(item))].map((item) => ({ kind: 'chat', item }));
     if (needle.length < MIN_CONTENT_QUERY) return byTitle;
     // Titles at once, with the chats whose text is read so far; once the rest is in, the search runs again.
     if (this.items.some((item) => !this.texts.has(item.id))) {
       void this.readTexts().then(() => {
         if (this.inputEl.value === query) this.refresh();
       });
+    }
+    // While keys are typed, titles only: the chats' texts are searched once typing pauses.
+    const sinceKey = performance.now() - this.lastKeyAt;
+    if (sinceKey < CONTENT_SEARCH_DELAY_MS) {
+      this.searchAfter(query, CONTENT_SEARCH_DELAY_MS - sinceKey);
+      return byTitle;
     }
     const texts = this.texts;
     const inTitle = new Set(byTitle.map((match) => (match.kind === 'chat' ? match.item : null)));

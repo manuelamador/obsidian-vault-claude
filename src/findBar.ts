@@ -2,10 +2,16 @@ import { setIcon } from 'obsidian';
 import type { FindEarlier } from './earlierTurns';
 import { escapeRegExp } from './pathFilter';
 
-/** Ranges of every case-insensitive occurrence of `query` in the shown text under `root`. */
-export function findRanges(root: HTMLElement, query: string): Range[] {
+/** The most matches the bar marks and counts among the drawn turns; past it, the count reads "1000+". */
+export const MAX_FIND_MATCHES = 1000;
+
+/** How long typing in the bar must pause before the chat is searched again, once a search has just run (ms). */
+const FIND_DELAY_MS = 150;
+
+/** Ranges of the case-insensitive occurrences of `query` in the shown text under `root`, the first `max` of them. */
+export function findRanges(root: HTMLElement, query: string, max = Infinity): Range[] {
   const ranges: Range[] = [];
-  if (!query) return ranges;
+  if (!query || max <= 0) return ranges;
   // Matched in the text as it is, case aside: lowercasing first would move the offsets where a
   // character lowercases to more than one (İ), and a range would fall outside its text.
   const needle = new RegExp(escapeRegExp(query), 'giu');
@@ -19,7 +25,7 @@ export function findRanges(root: HTMLElement, query: string): Range[] {
       const range = doc.createRange();
       range.setStart(node, match.index);
       range.setEnd(node, match.index + match[0].length);
-      ranges.push(range);
+      if (ranges.push(range) >= max) return ranges;
     }
   }
   return ranges;
@@ -44,6 +50,15 @@ export class FindBar {
   private index = -1;
   /** Matches in the turns not drawn yet. */
   private hidden = 0;
+  /** More than MAX_FIND_MATCHES matches drawn: only the first of them are marked. */
+  private capped = false;
+  /**
+   * Typing: the first key searches at once, and keys that follow within FIND_DELAY_MS of the last
+   * wait for a pause (`queued`), so that a word typed fast walks the chat twice rather than at
+   * every letter.
+   */
+  private timer: number | null = null;
+  private queued = false;
   /** Counts closes, new queries and steps: a step still drawing the chat back gives way to any of them. */
   private generation = 0;
 
@@ -68,7 +83,17 @@ export class FindBar {
     button('x', 'Close (Esc)', () => this.close());
     this.input.addEventListener('input', () => {
       this.generation += 1;
-      this.search(true);
+      const win = this.root.ownerDocument.defaultView ?? window;
+      const ready = this.timer === null;
+      if (this.timer !== null) win.clearTimeout(this.timer);
+      this.queued = !ready;
+      if (ready) this.search(true);
+      this.timer = win.setTimeout(() => {
+        this.timer = null;
+        if (!this.queued) return;
+        this.queued = false;
+        if (this.isOpen()) this.search(true);
+      }, FIND_DELAY_MS);
     });
     this.input.addEventListener('keydown', (evt) => {
       if (evt.key === 'Enter' && !evt.isComposing) {
@@ -86,7 +111,17 @@ export class FindBar {
     return this.el.isShown();
   }
 
+  /** Stops the wait for a pause in typing (see timer); `run`: and runs the search it held back, if any, without scrolling. */
+  private stopWaiting(run: boolean): void {
+    if (this.timer !== null) (this.root.ownerDocument.defaultView ?? window).clearTimeout(this.timer);
+    this.timer = null;
+    const queued = this.queued;
+    this.queued = false;
+    if (run && queued) this.search(true, false);
+  }
+
   open(): void {
+    this.stopWaiting(false);
     this.el.show();
     this.input.focus();
     this.input.select();
@@ -99,6 +134,7 @@ export class FindBar {
    */
   async find(needle: string): Promise<boolean> {
     this.generation += 1;
+    this.stopWaiting(false);
     this.input.value = needle;
     this.el.show();
     this.search(true);
@@ -111,8 +147,10 @@ export class FindBar {
 
   close(): void {
     this.generation += 1;
+    this.stopWaiting(false);
     this.el.hide();
     this.ranges = [];
+    this.capped = false;
     this.index = -1;
     this.hidden = 0;
     this.paint();
@@ -134,7 +172,10 @@ export class FindBar {
   }
 
   private measure(): void {
-    this.ranges = findRanges(this.root, this.input.value);
+    // One past the cap, to tell more than it from exactly it.
+    const ranges = findRanges(this.root, this.input.value, MAX_FIND_MATCHES + 1);
+    this.capped = ranges.length > MAX_FIND_MATCHES;
+    this.ranges = this.capped ? ranges.slice(0, MAX_FIND_MATCHES) : ranges;
     this.hidden = this.earlier?.count(this.input.value.toLowerCase()) ?? 0;
   }
 
@@ -157,6 +198,8 @@ export class FindBar {
    */
   private async step(delta: number): Promise<void> {
     this.generation += 1;
+    // A query typed but not searched yet: searched first, from its first match, as it would have been.
+    this.stopWaiting(true);
     const unset = this.index < 0;
     this.search(false, false);
     if (this.hidden > 0 && (this.ranges.length === 0 || (delta < 0 && this.index <= 0))) {
@@ -175,12 +218,16 @@ export class FindBar {
     this.countEl.setText('…');
     while (this.earlier && this.hidden > 0) {
       const before = this.ranges.length;
+      const first = this.ranges[0];
       const drawn = await this.earlier.drawTo(needle);
       // Closed, a new query, or another step while the chat was drawn: that one has the bar now.
       if (generation !== this.generation || !this.isOpen()) return true;
       if (!drawn) break;
       this.measure();
-      const added = this.ranges.length - before;
+      // Past the cap the count stays put: the new matches are those before the first one drawn
+      // before, all of them when it fell past the cap.
+      const was = this.capped && first ? this.ranges.findIndex((range) => range.startContainer === first.startContainer && range.startOffset === first.startOffset) : -1;
+      const added = !this.capped ? this.ranges.length - before : was === -1 ? this.ranges.length : was;
       if (added > 0) {
         // The drawn turns went in above the drawn matches, so their matches come first; the newest is the last of them.
         this.index = added - 1;
@@ -196,7 +243,7 @@ export class FindBar {
   private paint(): void {
     const total = this.hidden + this.ranges.length;
     const at = this.index < 0 ? '–' : String(this.hidden + this.index + 1);
-    this.countEl.setText(this.input.value ? (total > 0 ? `${at}/${total}` : 'No matches') : '');
+    this.countEl.setText(this.input.value ? (total > 0 ? `${at}/${total}${this.capped ? '+' : ''}` : 'No matches') : '');
     // One set of highlight names for the whole app: the find bar last used wins, and a bar clears
     // them only while they are its own, so that closing one panel leaves another's matches lit.
     const registry = (globalThis as { CSS?: { highlights?: Map<string, object> } }).CSS?.highlights;
