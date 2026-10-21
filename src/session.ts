@@ -21,6 +21,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { contextBlock, type ContextPart } from './projects';
 import { log } from './log';
+import { PendingContext } from './pendingContext';
+import { StderrTail } from './stderrTail';
+import { withTimeout } from './timeout';
 
 /** A user message: plain text, or content blocks (text and images). */
 export type UserContent = SDKUserMessage['message']['content'];
@@ -232,15 +235,9 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-/** Context waiting for the next message (see ClaudeSession.addContext). */
-interface PendingContext {
-  parts: ContextPart[];
-  delivered: (sessionId: string | null, keys: string[]) => void;
-}
-
 export class ClaudeSession {
   /** Context waiting for the next message (see addContext). */
-  private pendingContext: PendingContext[] = [];
+  private readonly pendingContext = new PendingContext();
   sessionId: string | null = null;
   /**
    * Resolves once the session has ended: its process gone (at once for one never started). Claude
@@ -251,7 +248,7 @@ export class ClaudeSession {
   private readonly input = new InputQueue();
   private readonly abortController = new AbortController();
   private stream: Query | null = null;
-  private stderrLines: string[] = [];
+  private readonly stderrTail = new StderrTail();
   private closed = false;
 
   private handlers: SessionHandlers;
@@ -278,17 +275,17 @@ export class ClaudeSession {
    * then (see waitingContext); `delivered` runs once it has gone, with the chat's session id.
    */
   addContext(parts: ContextPart[], delivered: (sessionId: string | null, keys: string[]) => void): void {
-    if (parts.length > 0) this.pendingContext.push({ parts, delivered });
+    this.pendingContext.add(parts, delivered);
   }
 
   /** What context is waiting to go (see addContext): not to be given again meanwhile. */
   waitingContext(): Set<string> {
-    return new Set(this.pendingContext.flatMap((each) => each.parts.map((part) => part.key)));
+    return this.pendingContext.keys();
   }
 
   /** Takes back the context waiting to go whose key `unwanted` names: a chat no longer included, a project the chat left. */
   withdrawContext(unwanted: (key: string) => boolean): void {
-    for (const each of this.pendingContext) each.parts = each.parts.filter((part) => !unwanted(part.key));
+    this.pendingContext.withdraw(unwanted);
   }
 
   /**
@@ -308,7 +305,7 @@ export class ClaudeSession {
       } catch (error) {
         log('query() failed to start', error);
         this.markEnded();
-        this.handlers.onEnd(error instanceof Error ? error : new Error(String(error)), this.stderrLines.join('\n'));
+        this.handlers.onEnd(error instanceof Error ? error : new Error(String(error)), this.stderrTail.text());
         return;
       }
     }
@@ -457,7 +454,7 @@ export class ClaudeSession {
             {
               hooks: [
                 async (input) => {
-                  const context = this.pendingContext.splice(0);
+                  const context = this.pendingContext.take();
                   const parts = context.flatMap((each) => each.parts);
                   if (parts.length === 0) return {};
                   // Only what fits goes, and only that is marked as gone (see contextBlock); the rest is offered again.
@@ -483,11 +480,7 @@ export class ClaudeSession {
             decisionReason: options.decisionReason,
             blockedPath: options.blockedPath,
           }),
-        spawnClaudeCodeProcess: (options) =>
-          spawnClaudeProcess(options, (lines) => {
-            this.stderrLines.push(...lines);
-            if (this.stderrLines.length > 40) this.stderrLines = this.stderrLines.slice(-40);
-          }),
+        spawnClaudeCodeProcess: (options) => spawnClaudeProcess(options, this.stderrTail),
       },
     });
     // Sent before the first message, like the other settings the chat starts with.
@@ -504,7 +497,13 @@ export class ClaudeSession {
         } else if (message.type === 'result') {
           log('turn ended', { subtype: message.subtype, isError: message.is_error });
         }
-        this.handlers.onMessage(message);
+        // A handler that throws (a message of a shape not expected, a drawing error) does not end the
+        // chat: the messages after it are still taken.
+        try {
+          this.handlers.onMessage(message);
+        } catch (error) {
+          log('handling a message failed', message.type, error);
+        }
       }
       log('query stream closed');
       this.markEnded();
@@ -516,7 +515,7 @@ export class ClaudeSession {
         this.handlers.onEnd();
       } else {
         log('query stream failed', error);
-        this.handlers.onEnd(error instanceof Error ? error : new Error(String(error)), this.stderrLines.join('\n'));
+        this.handlers.onEnd(error instanceof Error ? error : new Error(String(error)), this.stderrTail.text());
       }
     }
   }
@@ -525,7 +524,7 @@ export class ClaudeSession {
 
 // The SDK's default spawn hands its AbortSignal to Node's spawn(), which rejects
 // signals created in Obsidian's renderer realm. Abort is wired up by hand here.
-function spawnClaudeProcess(options: SpawnOptions, onStderr: (lines: string[]) => void): SpawnedProcess {
+function spawnClaudeProcess(options: SpawnOptions, stderr = new StderrTail()): SpawnedProcess {
   log('spawning', options.command, options.args.join(' '));
   const child = spawn(options.command, options.args, {
     cwd: options.cwd,
@@ -536,9 +535,7 @@ function spawnClaudeProcess(options: SpawnOptions, onStderr: (lines: string[]) =
   child.on('exit', (code, signal) => log('claude exited', { code, signal }));
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {
-    const lines = chunk.split('\n').filter((line) => line.trim().length > 0);
-    for (const line of lines) log('stderr', line);
-    onStderr(lines);
+    for (const line of stderr.push(chunk)) log('stderr', line);
   });
   const kill = () => {
     if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
@@ -548,13 +545,8 @@ function spawnClaudeProcess(options: SpawnOptions, onStderr: (lines: string[]) =
   return child as unknown as SpawnedProcess;
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Timed out waiting for ${what}`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
+/** How long a one-off request (see runOneShot) is given in all before it is stopped. */
+export const ONE_SHOT_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * A one-off request (inline edit, chat summary): a single request with no tools and none of the Claude Code settings files
@@ -566,6 +558,7 @@ export async function runOneShot(
   request: { system: string; prompt: string; model?: string; effort?: EffortLevel },
   onText: (text: string) => void,
   signal: AbortSignal,
+  timeoutMs = ONE_SHOT_TIMEOUT_MS,
 ): Promise<string> {
   const abortController = new AbortController();
   const onAbort = () => abortController.abort();
@@ -586,12 +579,12 @@ export async function runOneShot(
       persistSession: false,
       includePartialMessages: true,
       abortController,
-      spawnClaudeCodeProcess: (options) => spawnClaudeProcess(options, () => undefined),
+      spawnClaudeCodeProcess: (options) => spawnClaudeProcess(options),
     },
   });
   let streamed = '';
   let answer = '';
-  try {
+  const read = async () => {
     for await (const message of stream) {
       if (message.type === 'stream_event' && message.parent_tool_use_id === null) {
         const { event } = message;
@@ -606,6 +599,13 @@ export async function runOneShot(
         if (message.is_error) throw new Error(message.result || 'Claude Code reported an error');
       }
     }
+  };
+  try {
+    // A request that never finishes (a stalled turn) is stopped, rather than left running.
+    await withTimeout(read(), timeoutMs, () => {
+      abortController.abort();
+      return new Error('Claude did not finish the request in time');
+    });
   } finally {
     signal.removeEventListener('abort', onAbort);
   }
@@ -637,7 +637,7 @@ export async function probeClaude(
       settingSources: ['user', 'project', 'local'],
       persistSession: false,
       abortController,
-      spawnClaudeCodeProcess: (options) => spawnClaudeProcess(options, () => undefined),
+      spawnClaudeCodeProcess: (options) => spawnClaudeProcess(options),
     },
   });
   // Keep the message stream drained while the control request is answered.
@@ -649,10 +649,10 @@ export async function probeClaude(
     }
   })();
   try {
-    const models = await withTimeout(stream.supportedModels(), timeoutMs, 'the model list');
+    const models = await withTimeout(stream.supportedModels(), timeoutMs, () => new Error('Timed out waiting for the model list'));
     let commands: SlashCommand[] = [];
     try {
-      commands = await withTimeout(stream.supportedCommands(), timeoutMs, 'the command list');
+      commands = await withTimeout(stream.supportedCommands(), timeoutMs, () => new Error('Timed out waiting for the command list'));
     } catch (error) {
       log('probe: command list failed', error);
     }
@@ -661,7 +661,7 @@ export async function probeClaude(
       plan = await withTimeout(
         stream.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }),
         timeoutMs,
-        'plan usage',
+        () => new Error('Timed out waiting for plan usage'),
       );
     } catch (error) {
       log('probe: plan usage failed', error);

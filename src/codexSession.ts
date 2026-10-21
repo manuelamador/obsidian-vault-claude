@@ -11,6 +11,8 @@ import type { SDKControlGetContextUsageResponse } from '@anthropic-ai/claude-age
 import { splitContext } from './history';
 import { log } from './log';
 import { contextBlock, type ContextPart } from './projects';
+import { PendingContext } from './pendingContext';
+import { withTimeout } from './timeout';
 import { CONNECTOR_DECLINED, type ConnectorRequest, type SessionHandlers, type UserContent } from './session';
 import { codexTurnAccess, type CodexAccess } from './codexAccess';
 
@@ -104,7 +106,7 @@ export class CodexSession {
   /** Connectors' requests waiting on their cards, by request id (see onElicitation). */
   private readonly elicitations = new Map<string, AbortController>();
   /** Context given to go with the next message (see addContext): a project's notes, included chats. */
-  private pendingContext: { parts: ContextPart[]; delivered: (sessionId: string | null, keys: string[]) => void }[] = [];
+  private readonly pendingContext = new PendingContext();
   /** The files each change in this turn touches, by item: what its approval card names. */
   private readonly changes = new Map<string, string[]>();
 
@@ -131,7 +133,7 @@ export class CodexSession {
       .then(() => (this.closed ? Promise.reject(new Error('the Codex session was closed')) : this.start()))
       .then(async () => {
         // The context waiting goes before the message, as Claude Code's hook adds it (see ClaudeSession.addContext).
-        const context = this.pendingContext.splice(0);
+        const context = this.pendingContext.take();
         const block = contextBlock(context.flatMap((each) => each.parts));
         const input = [...(block.text ? codexInput(block.text) : []), ...codexInput(content)];
         // Starting a turn, the context (the projects', the attached note, mentions) goes to the model on
@@ -193,7 +195,9 @@ export class CodexSession {
 
   async interrupt(): Promise<void> {
     // A turn still starting is stopped once Codex has said which it is, if it says so soon.
-    await Promise.race([this.sending, new Promise((resolve) => setTimeout(resolve, INTERRUPT_WAIT_MS))]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([this.sending, new Promise((resolve) => (timer = setTimeout(resolve, INTERRUPT_WAIT_MS)))]);
+    clearTimeout(timer);
     if (!this.turnId || !this.sessionId) return;
     await this.request('turn/interrupt', { threadId: this.sessionId, turnId: this.turnId }).catch((error: unknown) => log('interrupting codex failed', error));
   }
@@ -267,16 +271,16 @@ export class CodexSession {
 
   /** Context to go with the next message: given with it to Codex, then marked delivered. */
   addContext(parts: ContextPart[], delivered: (sessionId: string | null, keys: string[]) => void): void {
-    if (parts.length > 0) this.pendingContext.push({ parts, delivered });
+    this.pendingContext.add(parts, delivered);
   }
 
   /** What context is waiting to go (see addContext). */
   waitingContext(): Set<string> {
-    return new Set(this.pendingContext.flatMap((each) => each.parts.map((part) => part.key)));
+    return this.pendingContext.keys();
   }
 
   withdrawContext(unwanted: (key: string) => boolean): void {
-    for (const each of this.pendingContext) each.parts = each.parts.filter((part) => !unwanted(part.key));
+    this.pendingContext.withdraw(unwanted);
   }
 
   // What Claude Code offers and Codex does not, or not yet here: nothing to do, or nothing to read.
@@ -654,12 +658,16 @@ const CODEX_FAST_TIER = 'priority';
 /** How long a read is given before the reader is stopped, and how long an idle reader is kept (see withAppServer). */
 const APP_SERVER_TIMEOUT_MS = 20_000;
 const APP_SERVER_IDLE_MS = 10 * 60_000;
+/** How long a one-off request (see runCodexOneShot) is given in all before its turn is interrupted and it fails. */
+export const CODEX_ONE_SHOT_TIMEOUT_MS = 5 * 60_000;
 
 /** A Codex app-server kept for reads (threads, models, limits, small jobs): started once, stopped after APP_SERVER_IDLE_MS unused. */
 class CodexReader {
   private readonly connection: CodexConnection;
   private idle: ReturnType<typeof setTimeout> | null = null;
   private users = 0;
+  /** Replaced by a reader for another launch (see withAppServer): stopped at its last release, not kept idle. */
+  private retiring = false;
   /** What hears Codex's notifications: a one-off request's text as it comes (see runCodexOneShot). */
   private readonly listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
   readonly ready: Promise<void>;
@@ -710,7 +718,14 @@ class CodexReader {
   release(): void {
     this.users -= 1;
     if (this.users > 0 || this.dead) return;
+    if (this.retiring) return this.stop();
     this.idle = setTimeout(() => this.stop(), APP_SERVER_IDLE_MS);
+  }
+
+  /** No longer the reader reads go to: stopped now if nothing holds it, else at its last release (a small job running is let finish). */
+  retire(): void {
+    this.retiring = true;
+    if (this.users <= 0) this.stop();
   }
 
   stop(): void {
@@ -734,10 +749,12 @@ class CodexReader {
 const READER_STOPPED = 'vault-claude/stopped';
 
 let reader: CodexReader | null = null;
+/** Every reader not yet stopped: the current one, and any retiring (see CodexReader.retire). */
+const readers = new Set<CodexReader>();
 
-/** Stops the reader kept for reads (see CodexReader): when the plugin unloads. */
+/** Stops the readers kept for reads (see CodexReader), retiring ones included: when the plugin unloads. */
 export function stopCodexReader(): void {
-  reader?.stop();
+  for (const each of [...readers]) each.stop();
 }
 
 /** Starts the reader kept for reads (see CodexReader) ahead of a read, so that the read does not wait for Codex to start. */
@@ -748,10 +765,22 @@ export function warmCodexReader(launch: CodexLaunch): void {
 /** Runs `use` against the Codex app-server kept for reads (see CodexReader), started for `launch` if need be. */
 async function withAppServer<T>(launch: CodexLaunch, use: (request: (method: string, params: unknown) => Promise<unknown>, reader: CodexReader) => Promise<T>): Promise<T> {
   const key = JSON.stringify([launch.codexPath, launch.cwd, launch.env.PATH, launch.shared === true]);
-  if (reader && (!reader.usable || reader.key !== key)) reader.stop();
-  const current = reader?.usable ? reader : new CodexReader(key, launch, (gone) => {
-    if (reader === gone) reader = null;
-  });
+  // One that no longer works is stopped; one for another launch (Codex's path or the vault changed)
+  // retires, so that a job still running on it is not cut off.
+  if (reader && !reader.usable) reader.stop();
+  else if (reader && reader.key !== key) {
+    const old = reader;
+    reader = null;
+    old.retire();
+  }
+  let current = reader;
+  if (!current?.usable) {
+    current = new CodexReader(key, launch, (gone) => {
+      readers.delete(gone);
+      if (reader === gone) reader = null;
+    });
+    readers.add(current);
+  }
   reader = current;
   current.hold();
   try {
@@ -1051,7 +1080,9 @@ export async function runCodexOneShot(
   request: { system: string; prompt: string; model?: string; effort?: string },
   onText: (text: string) => void,
   signal: AbortSignal,
+  timeoutMs = CODEX_ONE_SHOT_TIMEOUT_MS,
 ): Promise<string> {
+  const begun = Date.now();
   // Given up before it began: nothing is started.
   if (signal.aborted) return '';
   return withAppServer(launch, async (call, reader) => {
@@ -1108,7 +1139,12 @@ export async function runCodexOneShot(
       throw error;
     }
     if (signal.aborted && turnId) void call('turn/interrupt', { threadId, turnId }).catch(() => undefined);
-    await finished;
+    // A turn that never ends (Codex stalled) is interrupted, and the request fails, so the reader is released.
+    await withTimeout(finished, Math.max(0, timeoutMs - (Date.now() - begun)), () => {
+      cleanup();
+      if (turnId) void call('turn/interrupt', { threadId, turnId }).catch(() => undefined);
+      return new Error('Codex did not finish the request in time');
+    });
     return answer || streamed;
   });
 }
