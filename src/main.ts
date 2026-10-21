@@ -57,9 +57,8 @@ function runCodex(launch: CodexLaunch, args: string[]): Promise<string | null> {
  * that a pid used again by another process is not taken for it); null when none is recorded.
  */
 export function codexDaemonIdentity(env: Record<string, string | undefined>): string | null {
-  const home = env.CODEX_HOME || joinPath(homedir(), '.codex');
   try {
-    const record = JSON.parse(readFileSync(joinPath(home, 'app-server-daemon', 'daemon.pid'), 'utf8')) as { pid?: unknown; processStartTime?: unknown };
+    const record = JSON.parse(readFileSync(joinPath(codexHome(env), 'app-server-daemon', 'daemon.pid'), 'utf8')) as { pid?: unknown; processStartTime?: unknown };
     return typeof record.pid === 'number' ? `${record.pid} ${String(record.processStartTime ?? '')}` : null;
   } catch {
     return null;
@@ -104,6 +103,14 @@ const MAIL_PER_CHAT = 40;
 const LISTING_FRESH_MS = 5000;
 /** How long after Obsidian is ready the chats are first listed (see listChats), out of the way of its start. */
 const FIRST_LISTING_DELAY_MS = 3000;
+
+/**
+ * Lets save `save` run without being waited for: its failure is logged where it happens (see
+ * saveSettings), and is not left as an unhandled rejection to be logged a second time.
+ */
+export function unawaited(save: Promise<void>): void {
+  save.catch(() => undefined);
+}
 
 /** Resolves when `promise` does, or after `ms` at the latest. */
 function waitAtMost(promise: Promise<void>, ms: number): Promise<void> {
@@ -291,8 +298,12 @@ type RecordsData = Pick<
  * whole is copied to the backup. Obsidian's own loadData returns null for both, and the defaults
  * saved over it then lost every chat record (2026-10-20, a file left empty by an app quit in the
  * middle of a write).
+ *
+ * `holds` says whether data read holds anything worth keeping (for chats.json, any chat). A file
+ * read whole that does not is not copied over a backup that does: a file saved empty after a
+ * failed read would otherwise replace, at the next start, the one copy left of what was lost.
  */
-async function readWhole(file: string): Promise<unknown> {
+async function readWhole(file: string, holds?: (data: unknown) => boolean): Promise<unknown> {
   const read = async (path: string): Promise<unknown> => {
     const text = await fsPromises.readFile(path, 'utf8').catch(() => null);
     if (text === null || !text.trim()) return null;
@@ -304,7 +315,9 @@ async function readWhole(file: string): Promise<unknown> {
   };
   const data = await read(file);
   if (data !== null) {
-    await fsPromises.copyFile(file, `${file}.bak`).catch((error: unknown) => log('backing up the plugin data failed', error));
+    const keepBackup = holds !== undefined && !holds(data) && (await read(`${file}.bak`).then((backup) => backup !== null && holds(backup)));
+    if (keepBackup) log('plugin data holds less than its backup: backup kept', { file });
+    else await fsPromises.copyFile(file, `${file}.bak`).catch((error: unknown) => log('backing up the plugin data failed', error));
     return data;
   }
   const backup = await read(`${file}.bak`);
@@ -312,20 +325,37 @@ async function readWhole(file: string): Promise<unknown> {
   return backup;
 }
 
+/** Whether chats.json's data `data` holds any chat record (see readWhole). */
+function holdsChats(data: unknown): boolean {
+  const chats = (data as { chats?: unknown } | null)?.chats;
+  return Array.isArray(chats) && chats.length > 0;
+}
+
+/** Stored field `value` when it is an object, else an empty one (a hand-edited or older file; see loadSettings). */
+function objectOr<T extends object>(value: T | null | undefined): T {
+  return value && typeof value === 'object' ? value : ({} as T);
+}
+
+/** Removes settings `keys` an earlier version kept and this one no longer has (see loadSettings). */
+function dropLegacy(settings: object, ...keys: string[]): void {
+  for (const key of keys) delete (settings as Record<string, unknown>)[key];
+}
+
 /** How many days of copies keepDailyBackup keeps of each file. */
 const BACKUP_DAYS = 7;
 
 /**
- * Copies `file` to `backups/<name>-YYYY-MM-DD.json` beside it, once a day (the first time it is
- * saved that day), and removes copies past the BACKUP_DAYS newest: so that a bad save, which writing
- * whole does not prevent, can be undone from an earlier day's copy.
+ * Copies `file` to `backups/<name>-YYYY-MM-DD.json` beside it, once a day (before the first time it
+ * is saved that day, so that the copy is of what the day began with), and removes copies past the
+ * BACKUP_DAYS newest: so that a bad save, which writing whole does not prevent, can be undone from
+ * an earlier day's copy.
  */
 async function keepDailyBackup(file: string): Promise<void> {
   const folder = joinPath(file, '..', 'backups');
   const name = file.split(/[\\/]/).pop()?.replace(/\.json$/, '') ?? 'data';
   const today = localDay(Date.now());
   const copy = joinPath(folder, `${name}-${today}.json`);
-  if (existsSync(copy)) return;
+  if (existsSync(copy) || !existsSync(file)) return;
   try {
     await fsPromises.mkdir(folder, { recursive: true });
     await fsPromises.copyFile(file, copy);
@@ -336,11 +366,25 @@ async function keepDailyBackup(file: string): Promise<void> {
   }
 }
 
-/** Writes `data` to `file` whole or not at all: to a temporary file, then renamed over it. */
+/**
+ * Writes `data` to `file` whole or not at all: to a temporary file, flushed to the disk, then
+ * renamed over it (without the flush, a crash soon after the rename can leave the file empty).
+ */
 async function writeWhole(file: string, data: unknown): Promise<void> {
   const temporary = `${file}.tmp`;
-  await fsPromises.writeFile(temporary, JSON.stringify(data, null, 2));
+  const handle = await fsPromises.open(temporary, 'w');
+  try {
+    await handle.writeFile(JSON.stringify(data, null, 2));
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
   await fsPromises.rename(temporary, file);
+}
+
+/** The folder Codex keeps its state in: CODEX_HOME, else ~/.codex. */
+function codexHome(env: Record<string, string | undefined>): string {
+  return env.CODEX_HOME || joinPath(homedir(), '.codex');
 }
 
 interface PluginData {
@@ -586,6 +630,8 @@ export default class VaultClaudePlugin extends Plugin {
   /** The last write of data.json asked for, and whether it waits to start (see saveSettings). */
   private saving: Promise<void> = Promise.resolve();
   private saveWaiting = false;
+  /** chats.json was there but could not be read, nor its backup: not written until a chat is recorded (see saveSettings). */
+  private recordsUnread = false;
   /** Sessions whose process is still ending (a kept side chat's), each with what resolves when it has. */
   private readonly endingSessions = new Map<string, Promise<void>>();
   /** Model and effort from Claude Code's settings files: what "Default" means for a new chat. */
@@ -622,17 +668,6 @@ export default class VaultClaudePlugin extends Plugin {
       if (ours(evt.reason)) log('unhandled rejection', evt.reason);
     });
     await this.loadSettings();
-    this.registerEvent(
-      this.app.workspace.on('quit', () => {
-        this.quitting = true;
-        this.stopCodexDaemonAtQuit();
-        // Obsidian does not close the panels as it quits: their chats' processes are ended here.
-        for (const view of this.chatViews()) view.endAllAtQuit();
-        // Obsidian does not unload plugins when it quits, and `claude remote-control` does not end
-        // when its input closes: stopped here, or it outlives the app and holds the vault.
-        this.remote.stop();
-      }),
-    );
     // A window closed or reloaded without the quit event (e.g. Cmd+R): the same.
     this.registerDomEvent(window, 'beforeunload', () => this.remote.stop());
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
@@ -897,19 +932,14 @@ export default class VaultClaudePlugin extends Plugin {
         }
       }),
     );
-    this.registerNoteEvents();
+    this.registerAppEvents();
     this.registerEvent(this.app.workspace.on('files-menu', (menu, files) => attachItem(menu, files)));
-    // A memo's Send box ticked or cleared, in the Memos base: the memo goes into the chat's input, or out of it (see followMemoBox).
+    // Memos' Send boxes as they are now; each one ticked or cleared later follows (see registerAppEvents).
     this.app.workspace.onLayoutReady(() => {
       this.seedMemoBoxes();
       void this.renameDoneMemos();
       void this.upgradeMemosBase();
     });
-    this.registerEvent(
-      this.app.metadataCache.on('changed', (file, _data, cache) => {
-        if (cache.frontmatter?.type === 'memo') void this.followMemoBox(file, cache.frontmatter.send === true);
-      }),
-    );
     this.registerEvent(
       this.app.workspace.on('editor-menu', (menu, editor, info) => {
         const file = info.file;
@@ -966,14 +996,9 @@ export default class VaultClaudePlugin extends Plugin {
     let changed = false;
     // Ticks, pins and unseen replies of chats whose sessions are gone: nothing left to show them on.
     if (ids) {
-      for (const id of Object.keys(this.ticks)) if (!ids.has(id)) changed = delete this.ticks[id] || changed;
-      for (const id of Object.keys(this.unseen)) if (!ids.has(id)) changed = delete this.unseen[id] || changed;
-      for (const id of Object.keys(this.chatProjects)) if (!ids.has(id)) changed = delete this.chatProjects[id] || changed;
-      for (const id of Object.keys(this.chatSummaries)) if (!ids.has(id)) changed = delete this.chatSummaries[id] || changed;
-      for (const id of Object.keys(this.chatMail)) if (!ids.has(id)) changed = delete this.chatMail[id] || changed;
-      for (const id of Object.keys(this.chatContext)) if (!ids.has(id)) changed = delete this.chatContext[id] || changed;
+      const byChat: Record<string, unknown>[] = [this.ticks, this.unseen, this.chatProjects, this.chatSummaries, this.chatMail, this.chatContext, this.pickUp.hidden, this.pickUp.later ?? {}, this.pickUp.skipped ?? {}];
+      for (const record of byChat) for (const id of Object.keys(record)) if (!ids.has(id)) changed = delete record[id] || changed;
       changed = this.pruneChatLinks((id) => ids.has(id)) || changed;
-      for (const record of [this.pickUp.hidden, this.pickUp.later ?? {}, this.pickUp.skipped ?? {}]) for (const id of Object.keys(record)) if (!ids.has(id)) changed = delete record[id] || changed;
       // Skips that have run out.
       for (const [id, until] of Object.entries(this.pickUp.skipped ?? {})) if (until <= Date.now()) changed = delete this.pickUp.skipped?.[id] || changed;
       const pinned = this.pinned.filter((id) => ids.has(id));
@@ -1115,11 +1140,12 @@ export default class VaultClaudePlugin extends Plugin {
 
   /**
    * A note that moves keeps its chats, and the chats it is attached to; a deleted one lets them go
-   * (see noteMoved). Quitting Obsidian does not unload plugins, so a save still waiting is started
-   * when it quits, as a best effort: no quit task is added to wait for it, since that makes "Reload
-   * app without saving" quit the app instead (a reported Obsidian bug).
+   * (see noteMoved). Quitting Obsidian does not unload plugins, so what unloading would do is done
+   * when it quits, and a save still waiting is started last, as a best effort: no quit task is added
+   * to wait for it, since that makes "Reload app without saving" quit the app instead (a reported
+   * Obsidian bug).
    */
-  registerNoteEvents(): void {
+  registerAppEvents(): void {
     this.registerEvent(
       this.app.vault.on('rename', (file, oldPath) => {
         this.noteMoved(oldPath, file.path);
@@ -1127,9 +1153,9 @@ export default class VaultClaudePlugin extends Plugin {
       }),
     );
     this.registerEvent(this.app.vault.on('delete', (file) => this.noteMoved(file.path, null)));
-    // The projects are found again when a note becomes, or stops being, one.
     this.registerEvent(
-      this.app.metadataCache.on('changed', (file) => {
+      this.app.metadataCache.on('changed', (file, _data, cache) => {
+        // The projects are found again when a note becomes, or stops being, one.
         const isProject = this.isProjectNote(file);
         if (this.projectCache && isProject !== this.projectCache.includes(file)) this.projectCache = null;
         // A project's folder or added chats may have changed: only the chats' homes follow from those.
@@ -1138,9 +1164,23 @@ export default class VaultClaudePlugin extends Plugin {
           this.projectHashes.delete(file.path);
           this.projectHashNow(file.path);
         }
+        // A memo's Send box ticked or cleared, in the Memos base: the memo goes into the chat's input, or out of it (see followMemoBox).
+        if (cache.frontmatter?.type === 'memo') void this.followMemoBox(file, cache.frontmatter.send === true);
       }),
     );
-    this.registerEvent(this.app.workspace.on('quit', () => void this.flushSave()));
+    this.registerEvent(
+      this.app.workspace.on('quit', () => {
+        this.quitting = true;
+        this.stopCodexDaemonAtQuit();
+        // Obsidian does not close the panels as it quits: their chats' processes are ended here.
+        for (const view of this.chatViews()) view.endAllAtQuit();
+        // Obsidian does not unload plugins when it quits, and `claude remote-control` does not end
+        // when its input closes: stopped here, or it outlives the app and holds the vault.
+        this.remote.stop();
+        // Last, so that it takes along what the steps above changed (stopCodexDaemonAtQuit's record).
+        unawaited(this.flushSave());
+      }),
+    );
     // A project note's lists of chats and notes follow from the notes: brought up to date when it is opened.
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
@@ -1163,7 +1203,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
     window.clearTimeout(this.remoteRetryTimer);
     this.remote.stop();
-    void this.flushSave();
+    unawaited(this.flushSave());
   }
 
   /** Makes a save still waiting (see saveSoon) at once; resolves once the saves under way are written. */
@@ -1174,12 +1214,12 @@ export default class VaultClaudePlugin extends Plugin {
     return this.saveSettings();
   }
 
-  /** Saves the plugin's data once for a burst of changes, SAVE_SOON_MS after the first. */
-  private saveSoon(): void {
+  /** Saves the plugin's data once for a burst of changes (or of keystrokes in the settings), SAVE_SOON_MS after the first. */
+  saveSoon(): void {
     if (this.saveTimer !== null) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void this.saveSettings();
+      unawaited(this.saveSettings());
     }, SAVE_SOON_MS);
   }
 
@@ -1418,13 +1458,13 @@ export default class VaultClaudePlugin extends Plugin {
   /** The session a panel started for the scratch chat; it is not added to the history list. */
   setScratch(id: string, engine?: 'codex'): void {
     this.scratch = { id, usedAt: Date.now(), ...(engine ? { engine } : {}) };
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   touchScratch(): void {
     if (!this.scratch) return;
     this.scratch.usedAt = Date.now();
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /**
@@ -1532,14 +1572,14 @@ export default class VaultClaudePlugin extends Plugin {
   holdSideSession(id: string): void {
     if (this.sideSessions.includes(id)) return;
     this.sideSessions.push(id);
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /** Forgets a side chat's session: deleted, or kept as a chat. */
   releaseSideSession(id: string): void {
     if (!this.sideSessions.includes(id)) return;
     this.sideSessions = this.sideSessions.filter((held) => held !== id);
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /** Deletes the side chats' sessions `ids`, left from the last run, and forgets them; one that failed to go is tried again at the next start. */
@@ -1555,7 +1595,7 @@ export default class VaultClaudePlugin extends Plugin {
   forgetScratch(): string | undefined {
     const old = this.scratch?.id;
     this.scratch = null;
-    void this.saveSettings();
+    unawaited(this.saveSettings());
     return old;
   }
 
@@ -1674,7 +1714,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (before.text === next.text && before.note === next.note && before.composing === next.composing) return;
     if (next.text !== undefined || next.note !== undefined || next.composing !== undefined) this.drafts[id] = { ...next, at: Date.now() };
     else delete this.drafts[id];
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /** Records that a note went with a message in a chat: as the attached note, or mentioned. */
@@ -1780,8 +1820,7 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Where Codex's shared app-server listens: its control socket, under Codex's home. */
   private codexSocketPath(env: Record<string, string | undefined>): string {
-    const home = env.CODEX_HOME || joinPath(homedir(), '.codex');
-    return joinPath(home, 'app-server-control', 'app-server-control.sock');
+    return joinPath(codexHome(env), 'app-server-control', 'app-server-control.sock');
   }
 
   /**
@@ -2182,7 +2221,7 @@ export default class VaultClaudePlugin extends Plugin {
     const kept = readCodexChoices(choices);
     if (JSON.stringify(kept) === JSON.stringify(record.codex)) return;
     record.codex = kept;
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /** Claude chat `id`'s model, effort and permission mode as chosen in the panel; none for a chat with no record of them. */
@@ -2197,7 +2236,7 @@ export default class VaultClaudePlugin extends Plugin {
     const kept = readClaudeChoices(choices);
     if (JSON.stringify(kept) === JSON.stringify(record.claude)) return;
     record.claude = kept;
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /** What runs a new scratch chat, and on which model (see Scratch chat model); undefined for that one's default. */
@@ -2403,20 +2442,20 @@ export default class VaultClaudePlugin extends Plugin {
     // note) stays. A Codex chat's record is its only listing, and is never dropped.
     let claude = 0;
     this.chats = this.chats.filter((chat) => chat.engine === 'codex' || (claude += 1) <= MAX_CHAT_RECORDS);
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /** Records chat `id`'s plan note, at `path`, made from `plan`. */
   setPlanNote(id: string, path: string, plan: string): void {
     this.planNotes[id] = { path, plan };
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /** Forgets the plan note at `path`, whichever chat it was kept for: it has been answered, or put away. */
   forgetPlanNote(path: string): void {
     const ids = Object.keys(this.planNotes).filter((id) => this.planNotes[id].path === path);
     for (const id of ids) delete this.planNotes[id];
-    if (ids.length > 0) void this.saveSettings();
+    if (ids.length > 0) unawaited(this.saveSettings());
   }
 
   /**
@@ -2496,7 +2535,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (toggled.size > 0) chatTicks[replyKey] = [...toggled].sort((a, b) => a - b);
     else delete chatTicks[replyKey];
     if (Object.keys(chatTicks).length === 0) delete this.ticks[chat];
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   private versionChecked = false;
@@ -2678,13 +2717,13 @@ export default class VaultClaudePlugin extends Plugin {
   markChatUnseen(id: string, outcome: 'done' | 'error'): void {
     if (this.unseen[id] === outcome) return;
     this.unseen[id] = outcome;
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   markChatSeen(id: string): void {
     if (!(id in this.unseen)) return;
     delete this.unseen[id];
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   phoneChatCount(): number {
@@ -2710,7 +2749,7 @@ export default class VaultClaudePlugin extends Plugin {
   togglePin(id: string): boolean {
     const pinned = !this.pinned.includes(id);
     this.pinned = pinned ? [...this.pinned, id] : this.pinned.filter((other) => other !== id);
-    void this.saveSettings();
+    unawaited(this.saveSettings());
     return pinned;
   }
 
@@ -2751,7 +2790,7 @@ export default class VaultClaudePlugin extends Plugin {
   clearIgnoredChats(): void {
     const count = this.ignoredChats();
     this.pickUp.hidden = {};
-    void this.saveSettings();
+    unawaited(this.saveSettings());
     new Notice(count > 0 ? `${count} ignored chat${count === 1 ? '' : 's'} can be suggested again.` : 'No chats were ignored.');
   }
 
@@ -3297,7 +3336,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (Object.keys(kept).length > 0) this.chatProjects[id] = kept;
     else delete this.chatProjects[id];
     this.homeCache.delete(id);
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   /**
@@ -3375,12 +3414,10 @@ export default class VaultClaudePlugin extends Plugin {
       const listed = this.projectAdded(project).includes(id);
       if (isHome ? listed : !listed) continue;
       // From the frontmatter as written, which the index may not have caught up with.
-      await this.app.fileManager.processFrontMatter(project, (front: Record<string, unknown>) => {
+      await this.editProjectFront(project, (front) => {
         const added = idList(front.added).filter((each) => each !== id);
         front.added = isHome ? [...added, id] : added;
-        front.updated = today();
       });
-      await this.indexed(project);
     }
     // A new home's context (with its enclosing projects' Instructions) goes with the chat's next message, however it was chosen.
     const state = this.projectState(id);
@@ -3411,11 +3448,22 @@ export default class VaultClaudePlugin extends Plugin {
       const folder = this.projectFolder(file);
       const moved = folder ? movedPath(folder, from, to) : undefined;
       if (!moved) continue;
-      void this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
-        front.folder = moved;
-        front.updated = today();
-      });
+      this.app.fileManager
+        .processFrontMatter(file, (front: Record<string, unknown>) => {
+          front.folder = moved;
+          front.updated = today();
+        })
+        .catch((error: unknown) => log('moving a project\'s folder failed', { file: file.path, error }));
     }
+  }
+
+  /** Changes project note `file`'s frontmatter with `change`, stamped updated today; resolves once Obsidian has read it again. */
+  private async editProjectFront(file: TFile, change: (front: Record<string, unknown>) => void): Promise<void> {
+    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
+      change(front);
+      front.updated = today();
+    });
+    await this.indexed(file);
   }
 
   /** The panels draw their project chips again. */
@@ -3624,11 +3672,9 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** Makes `folder` project `file`'s folder. */
   private async setProjectFolder(file: TFile, folder: string): Promise<boolean> {
-    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
+    await this.editProjectFront(file, (front) => {
       front.folder = folder;
-      front.updated = today();
     });
-    await this.indexed(file);
     this.homesChanged();
     this.projectsChanged();
     new Notice(`“${file.basename}” is now the project of ${folder}.`);
@@ -3735,12 +3781,10 @@ export default class VaultClaudePlugin extends Plugin {
   /** Puts `context` in a project's note, and stamps when. */
   private async saveProjectContext(file: TFile, context: string): Promise<void> {
     await this.app.vault.process(file, (text) => withContext(text, context));
-    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
-      front.context_updated = today();
-      front.updated = today();
-    });
     // Read again by Obsidian before anything shows it: its properties are missing while it is.
-    await this.indexed(file);
+    await this.editProjectFront(file, (front) => {
+      front.context_updated = today();
+    });
     this.projectsChanged();
   }
 
@@ -3872,7 +3916,7 @@ export default class VaultClaudePlugin extends Plugin {
         const at = Date.now();
         const suggested = new Set(made.suggestions.map((suggestion) => suggestion.id));
         this.pickUp.kept = { day: localDay(at), at, suggestions: made.suggestions, note: made.note, candidates: made.candidates.filter((candidate) => suggested.has(candidate.id)) };
-        void this.saveSettings();
+        unawaited(this.saveSettings());
         return { ...made, at };
       },
       details: (id) => this.pickUpDetails(id),
@@ -3885,7 +3929,7 @@ export default class VaultClaudePlugin extends Plugin {
       hide: (id) => {
         this.pickUp.hidden[id] = Date.now();
         delete this.pickUp.later?.[id];
-        void this.saveSettings();
+        unawaited(this.saveSettings());
       },
       ignoredCount: () => this.ignoredChats(),
       leftOut: (id) => leftOut(this.pickUp, id, Date.now()) || !!this.pickUp.later?.[id],
@@ -3893,7 +3937,7 @@ export default class VaultClaudePlugin extends Plugin {
       skip: (id) => {
         (this.pickUp.skipped ??= {})[id] = Date.now() + SKIP_DAYS * DAY_MS;
         delete this.pickUp.later?.[id];
-        void this.saveSettings();
+        unawaited(this.saveSettings());
       },
       openNote: (path) => void this.app.workspace.openLinkText(path, '', false),
       renderMarkdown: (markdown, el, component, leaving, parent) =>
@@ -3911,12 +3955,12 @@ export default class VaultClaudePlugin extends Plugin {
       previewNote: (path, event, target, parent) => this.app.workspace.trigger('hover-link', { event, source: VIEW_TYPE, hoverParent: parent, targetEl: target, linktext: path }),
       remindLater: (suggestion) => {
         (this.pickUp.later ??= {})[suggestion.id] = { why: suggestion.why, next: suggestion.next, at: Date.now(), days: [] };
-        void this.saveSettings();
+        unawaited(this.saveSettings());
       },
       forget: (id) => {
         if (!this.pickUp.later?.[id]) return;
         delete this.pickUp.later[id];
-        void this.saveSettings();
+        unawaited(this.saveSettings());
       },
       reminders: (before) => {
         // Kept as they are while the chats are not listed yet (just after Obsidian starts).
@@ -3925,7 +3969,7 @@ export default class VaultClaudePlugin extends Plugin {
         const before_ = JSON.stringify(this.pickUp.later ?? {});
         const shown = remindersNow(this.pickUp, Date.now(), before, (id) => listing.some((item) => item.id === id));
         // Saved only when a day was counted or a reminder let go of.
-        if (JSON.stringify(this.pickUp.later ?? {}) !== before_) void this.saveSettings();
+        if (JSON.stringify(this.pickUp.later ?? {}) !== before_) unawaited(this.saveSettings());
         return shown.flatMap(({ id, why, next, left }) => {
           const item = listing.find((listed) => listed.id === id);
           return item ? [{ chat: { id, title: item.title, updatedAt: item.updatedAt, older: false, exchanges: [], clues: [] }, suggestion: { id, why, next }, left }] : [];
@@ -4284,7 +4328,7 @@ export default class VaultClaudePlugin extends Plugin {
     if (!chat || chat.title === title) return;
     chat.title = title;
     if (!save) return;
-    void this.saveSettings();
+    unawaited(this.saveSettings());
     // Its name on the maps, and over its links.
     this.connectionsSoon(0);
   }
@@ -4396,13 +4440,13 @@ export default class VaultClaudePlugin extends Plugin {
   setCommands(commands: SlashCommand[]): void {
     this.commands = commands;
     this.commandsFetchedAt = Date.now();
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   setModels(models: ModelInfo[]): void {
     this.models = models;
     this.modelsFetchedAt = Date.now();
-    void this.saveSettings();
+    unawaited(this.saveSettings());
   }
 
   async loadConfigured(): Promise<void> {
@@ -4478,7 +4522,12 @@ export default class VaultClaudePlugin extends Plugin {
     this.settings = { ...DEFAULT_SETTINGS, ...stored };
     // The chats' and notes' data, from chats.json where it is there (see RecordsData), else from data.json as before.
     const recordsFile = this.pluginFile(RECORDS_FILE);
-    const records = ((recordsFile ? await readWhole(recordsFile) : null) ?? {}) as RecordsData;
+    const read = recordsFile ? ((await readWhole(recordsFile, holdsChats)) as RecordsData | null) : null;
+    // chats.json there but neither it nor its backup readable: saving the empty records now would
+    // write over the one copy that might still be mended by hand (see recordsToWrite).
+    this.recordsUnread = recordsFile !== null && read === null && existsSync(recordsFile);
+    if (this.recordsUnread) log('chats.json unreadable: not saved over until a chat is recorded', { file: recordsFile });
+    const records = read ?? {};
     Object.assign(raw, Object.fromEntries(Object.entries(records).filter(([, value]) => value !== undefined && value !== null)));
     // Only the times offered: anything else (a hand-edited data.json) falls back to the default.
     if (!SCRATCH_IDLE_CHOICES.includes(this.settings.scratchIdleHours)) this.settings.scratchIdleHours = DEFAULT_SETTINGS.scratchIdleHours;
@@ -4487,9 +4536,7 @@ export default class VaultClaudePlugin extends Plugin {
     // Up to 0.34.0 two settings: phone access at startup, and every chat on the phone; now one.
     const phoneWas = stored as Partial<Record<'phoneAccessAtStartup' | 'phoneEveryChat', boolean>>;
     if (typeof stored.phoneClaude !== 'boolean') this.settings.phoneClaude = phoneWas.phoneAccessAtStartup === true || phoneWas.phoneEveryChat === true;
-    delete (this.settings as Partial<Record<'phoneAccessAtStartup' | 'phoneEveryChat' | 'codexShared', unknown>>).phoneAccessAtStartup;
-    delete (this.settings as Partial<Record<'phoneAccessAtStartup' | 'phoneEveryChat' | 'codexShared', unknown>>).phoneEveryChat;
-    delete (this.settings as Partial<Record<'phoneAccessAtStartup' | 'phoneEveryChat' | 'codexShared', unknown>>).codexShared;
+    dropLegacy(this.settings, 'phoneAccessAtStartup', 'phoneEveryChat', 'codexShared');
     if (this.settings.smallJobEngine !== 'codex') this.settings.smallJobEngine = 'claude';
     if (!isCodexAccess(this.settings.codexAccess) || (this.settings.codexAccess === 'full' && !this.settings.allowBypass)) this.settings.codexAccess = 'default';
     for (const key of ['codexModel', 'codexEffort', 'smallJobCodexModel'] as const) if (typeof this.settings[key] !== 'string') this.settings[key] = '';
@@ -4499,14 +4546,14 @@ export default class VaultClaudePlugin extends Plugin {
       this.settings.smallJobModel = legacy.scratchModel || legacy.summaryModel || legacy.inlineEditModel || DEFAULT_SETTINGS.smallJobModel;
     }
     // Up to 0.13.0 a panel-wide switch, on by default; notes are now attached per chat, and none to start with.
-    delete (this.settings as Partial<Record<'includeActiveNote', unknown>>).includeActiveNote;
+    dropLegacy(this.settings, 'includeActiveNote');
     // Up to 0.39 "Mail: drafts only": sending is left to Claude Code's and Codex's own permissions. One
     // who had it on is told once, with how to keep the block, as it goes.
     if ((stored as Partial<Record<'mailDraftsOnly', unknown>>).mailDraftsOnly === true) {
       new Notice('Vault Claude no longer blocks sending mail ("Mail: drafts only" is gone): Claude Code\'s and Codex\'s own permissions decide. To keep Claude chats from sending, add these four lines to the deny rules in the settings: mcp__claude_ai_Gmail__send_message, mcp__claude_ai_Gmail__reply, mcp__claude_ai_Gmail__forward, mcp__claude_ai_Gmail__send_draft.', 0);
       this.saveSoon();
     }
-    delete (this.settings as Partial<Record<'mailDraftsOnly', unknown>>).mailDraftsOnly;
+    dropLegacy(this.settings, 'mailDraftsOnly');
     // The chat records, in a file of their own since 0.36.0 (see RECORDS_FILE); before, in data.json.
     const chats = raw.chats;
     this.deletedCodex = Array.isArray(records.deletedCodex) ? records.deletedCodex.filter((id): id is string => typeof id === 'string') : [];
@@ -4525,13 +4572,13 @@ export default class VaultClaudePlugin extends Plugin {
     this.pinned = Array.isArray(raw.pinned) ? raw.pinned : [];
     this.scratch = raw.scratch && typeof raw.scratch.id === 'string' ? { id: raw.scratch.id, usedAt: raw.scratch.usedAt, ...(raw.scratch.engine === 'codex' ? { engine: 'codex' as const, codex: readCodexChoices(raw.scratch.codex) } : { claude: readClaudeChoices(raw.scratch.claude) }) } : null;
     this.sideSessions = Array.isArray(raw.sideSessions) ? raw.sideSessions.filter((id): id is string => typeof id === 'string') : [];
-    this.noteChats = raw.noteChats && typeof raw.noteChats === 'object' ? raw.noteChats : {};
-    this.noteRefs = raw.noteRefs && typeof raw.noteRefs === 'object' ? raw.noteRefs : {};
-    this.noteMentions = raw.noteMentions && typeof raw.noteMentions === 'object' ? raw.noteMentions : {};
-    this.noteRemoved = raw.noteRemoved && typeof raw.noteRemoved === 'object' ? raw.noteRemoved : {};
-    this.drafts = raw.drafts && typeof raw.drafts === 'object' ? raw.drafts : {};
+    this.noteChats = objectOr(raw.noteChats);
+    this.noteRefs = objectOr(raw.noteRefs);
+    this.noteMentions = objectOr(raw.noteMentions);
+    this.noteRemoved = objectOr(raw.noteRemoved);
+    this.drafts = objectOr(raw.drafts);
     this.planNotes = Object.fromEntries(
-      Object.entries(raw.planNotes && typeof raw.planNotes === 'object' ? raw.planNotes : {}).filter(
+      Object.entries(objectOr(raw.planNotes)).filter(
         ([, note]) => typeof note?.path === 'string' && typeof note.plan === 'string',
       ),
     );
@@ -4545,30 +4592,30 @@ export default class VaultClaudePlugin extends Plugin {
       if (draft.at === undefined) draft.at = Date.now();
       else if (draft.at < cutoff) delete this.drafts[id];
     }
-    this.unseen = raw.unseen && typeof raw.unseen === 'object' ? raw.unseen : {};
-    this.ticks = raw.ticks && typeof raw.ticks === 'object' ? raw.ticks : {};
+    this.unseen = objectOr(raw.unseen);
+    this.ticks = objectOr(raw.ticks);
     const pickUp = raw.pickUp && typeof raw.pickUp === 'object' ? raw.pickUp : null;
     this.pickUp = {
-      hidden: pickUp?.hidden && typeof pickUp.hidden === 'object' ? pickUp.hidden : {},
-      later: pickUp?.later && typeof pickUp.later === 'object' ? pickUp.later : {},
-      skipped: pickUp?.skipped && typeof pickUp.skipped === 'object' ? pickUp.skipped : {},
+      hidden: objectOr(pickUp?.hidden),
+      later: objectOr(pickUp?.later),
+      skipped: objectOr(pickUp?.skipped),
       kept: pickUp?.kept && typeof pickUp.kept === 'object' && Array.isArray(pickUp.kept.suggestions) ? pickUp.kept : undefined,
     };
-    this.chatProjects = raw.chatProjects && typeof raw.chatProjects === 'object' ? raw.chatProjects : {};
-    this.chatLinks = raw.chatLinks && typeof raw.chatLinks === 'object' ? raw.chatLinks : {};
-    this.chatSummaries = raw.chatSummaries && typeof raw.chatSummaries === 'object' ? raw.chatSummaries : {};
-    this.chatMail = raw.chatMail && typeof raw.chatMail === 'object' ? raw.chatMail : {};
+    this.chatProjects = objectOr(raw.chatProjects);
+    this.chatLinks = objectOr(raw.chatLinks);
+    this.chatSummaries = objectOr(raw.chatSummaries);
+    this.chatMail = objectOr(raw.chatMail);
     this.promptHistory = this.settings.rememberPrompts && Array.isArray(raw.promptHistory) ? raw.promptHistory.filter((each): each is string => typeof each === 'string' && each.length <= PROMPT_HISTORY_CHARS).slice(0, PROMPT_HISTORY) : [];
-    this.chatContext = raw.chatContext && typeof raw.chatContext === 'object' ? raw.chatContext : {};
-    this.reportTo = raw.reportTo && typeof raw.reportTo === 'object' ? raw.reportTo : {};
-    this.chatReports = raw.chatReports && typeof raw.chatReports === 'object' ? raw.chatReports : {};
-    this.continuedTo = raw.continuedTo && typeof raw.continuedTo === 'object' ? raw.continuedTo : {};
+    this.chatContext = objectOr(raw.chatContext);
+    this.reportTo = objectOr(raw.reportTo);
+    this.chatReports = objectOr(raw.chatReports);
+    this.continuedTo = objectOr(raw.continuedTo);
     this.codexThreadsNamed = raw.codexThreadsNamed === true;
     this.chatListRebuiltFor = typeof raw.chatListRebuiltFor === 'string' ? raw.chatListRebuiltFor : null;
     // An older version kept only whether it had started one: taken as the one running now.
     this.codexDaemonStarted = typeof raw.startedCodexDaemon === 'string' ? raw.startedCodexDaemon : raw.startedCodexDaemon === true ? codexDaemonIdentity(process.env) : null;
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
-    this.frontmatterGuidance = raw.frontmatterGuidance && typeof raw.frontmatterGuidance === 'object' ? raw.frontmatterGuidance : {};
+    this.frontmatterGuidance = objectOr(raw.frontmatterGuidance);
     this.models = Array.isArray(raw.models) ? raw.models : [];
     this.modelsFetchedAt = typeof raw.modelsFetchedAt === 'number' ? raw.modelsFetchedAt : 0;
     this.commands = Array.isArray(raw.commands) ? raw.commands : [];
@@ -4589,10 +4636,13 @@ export default class VaultClaudePlugin extends Plugin {
       // no stack of the plugin's for the log's handler of unhandled errors to know it by.
       const records = this.pluginFile(RECORDS_FILE);
       try {
-        if (records) await writeWhole(records, this.recordsToSave());
-        await this.saveData(this.dataToSave(records === null));
-        // A copy a day of each, the first saved that day (see keepDailyBackup).
+        // A copy a day of each, of the file as it was before the day's first save (see keepDailyBackup).
         for (const file of [records, this.pluginFile('data.json')]) if (file) await keepDailyBackup(file);
+        // After a failed read of chats.json (see loadSettings), it is written again only once a chat is
+        // recorded: before, the records saved would be empty ones, put over what might be mended.
+        if (this.recordsUnread && this.chats.length > 0) this.recordsUnread = false;
+        if (records && !this.recordsUnread) await writeWhole(records, this.recordsToSave());
+        await this.saveData(this.dataToSave(records === null));
       } catch (error) {
         log('saving the plugin data failed', error);
         throw error;

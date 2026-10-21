@@ -177,14 +177,28 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
 };
 
 export class VaultClaudeSettingTab extends PluginSettingTab {
+  /**
+   * The Claude Code and Codex executables found, looked for once while the tab is open: looking
+   * checks the disk and PATH, and display runs again at many changes.
+   */
+  private found: { claude: string | null; codex: string | null } | null = null;
+
   constructor(app: App, private readonly plugin: VaultClaudePlugin) {
     super(app, plugin);
+  }
+
+  /** The tab closed: a save of typing still waiting (see saveSoon) is made now, and the executables are looked for again next time. */
+  hide(): void {
+    this.found = null;
+    // A failure is logged by saveSettings.
+    this.plugin.flushSave().catch(() => undefined);
   }
 
   display(): void {
     const { containerEl } = this;
     const { settings } = this.plugin;
     containerEl.empty();
+    this.found ??= { claude: detectClaudePath(), codex: findCodex('') };
 
     new Setting(containerEl)
       .setName('New chats run on')
@@ -214,7 +228,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName('Claude Code').setHeading();
 
-    const detected = detectClaudePath();
+    const detected = this.found.claude;
     new Setting(containerEl)
       .setName('Claude Code executable')
       .setDesc(
@@ -228,9 +242,9 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         text
           .setPlaceholder(detected ?? (Platform.isWin ? 'C:\\Users\\you\\.local\\bin\\claude.exe' : '/path/to/claude'))
           .setValue(settings.claudePath)
-          .onChange(async (value) => {
+          .onChange((value) => {
             settings.claudePath = value.trim();
-            await this.plugin.saveSettings();
+            this.plugin.saveSoon();
           }),
       );
 
@@ -314,7 +328,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName('Codex').setHeading();
 
-    const codex = findCodex('');
+    const codex = this.found.codex;
     new Setting(containerEl)
       .setName('Codex executable')
       .setDesc(codex ? `Leave empty to use ${codex}. Codex runs with its own settings (~/.codex/config.toml).` : 'No Codex found; enter its full path, or install Codex.')
@@ -322,9 +336,9 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         text
           .setPlaceholder(codex ?? '/path/to/codex')
           .setValue(settings.codexPath)
-          .onChange(async (value) => {
+          .onChange((value) => {
             settings.codexPath = value.trim();
-            await this.plugin.saveSettings();
+            this.plugin.saveSoon();
           }),
       );
 
@@ -421,9 +435,9 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         text
           .setPlaceholder('*attachments/*')
           .setValue(settings.hiddenNotePaths)
-          .onChange(async (value) => {
+          .onChange((value) => {
             settings.hiddenNotePaths = value;
-            await this.plugin.saveSettings();
+            this.plugin.saveSoon();
           }),
       );
 
@@ -570,9 +584,9 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         "One rule per line in Claude Code's permission-rule syntax, e.g. Bash(git reset:*); lines starting with # are ignored. Claude chats: any matching tool call is refused, in every mode, bypass included. Codex chats: only Bash(…) rules count, refusing a matching command Codex asks to run (not in Full access, where it asks nothing). Takes effect in new chats.",
       )
       .addTextArea((area) => {
-        area.setValue(settings.denyRules).onChange(async (value) => {
+        area.setValue(settings.denyRules).onChange((value) => {
           settings.denyRules = value;
-          await this.plugin.saveSettings();
+          this.plugin.saveSoon();
         });
         area.inputEl.rows = 6;
       });
@@ -609,15 +623,15 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         .setName('Todo note')
         .setDesc('Where "Make a todo" on an email card adds its line, at the end of this section of the note (made if missing), in the Tasks plugin\'s format.')
         .addText((text) =>
-          text.setValue(settings.todoNote).onChange(async (value) => {
+          text.setValue(settings.todoNote).onChange((value) => {
             settings.todoNote = value.trim() || 'Todo.md';
-            await this.plugin.saveSettings();
+            this.plugin.saveSoon();
           }),
         )
         .addText((text) =>
-          text.setPlaceholder('Section').setValue(settings.todoSection).onChange(async (value) => {
+          text.setPlaceholder('Section').setValue(settings.todoSection).onChange((value) => {
             settings.todoSection = value.trim() || 'Open';
-            await this.plugin.saveSettings();
+            this.plugin.saveSoon();
           }),
         );
     }
@@ -631,9 +645,9 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         text
           .setPlaceholder('Claude chats')
           .setValue(settings.savedChatsFolder)
-          .onChange(async (value) => {
+          .onChange((value) => {
             settings.savedChatsFolder = value.trim();
-            await this.plugin.saveSettings();
+            this.plugin.saveSoon();
           }),
       );
 
@@ -644,9 +658,9 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         text
           .setPlaceholder('Claude chats/Memos')
           .setValue(settings.memosFolder)
-          .onChange(async (value) => {
+          .onChange((value) => {
             settings.memosFolder = value.trim();
-            await this.plugin.saveSettings();
+            this.plugin.saveSoon();
           }),
       );
 
@@ -716,9 +730,9 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
         text
           .setPlaceholder(`${this.app.vault.getName()} vault`)
           .setValue(settings.phoneAccessName)
-          .onChange(async (value) => {
+          .onChange((value) => {
             settings.phoneAccessName = value;
-            await this.plugin.saveSettings();
+            this.plugin.saveSoon();
           }),
       );
 
@@ -756,9 +770,9 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           (Platform.isWin ? '' : ' Homebrew and ~/.local/bin are always included.'),
       )
       .addText((text) =>
-        text.setValue(settings.extraPath).onChange(async (value) => {
+        text.setValue(settings.extraPath).onChange((value) => {
           settings.extraPath = value.trim();
-          await this.plugin.saveSettings();
+          this.plugin.saveSoon();
         }),
       );
   }
