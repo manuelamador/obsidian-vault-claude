@@ -1600,6 +1600,30 @@ async function main(): Promise<void> {
       if (!planOk) process.exitCode = 1;
     }
 
+    // Continuing a scratch chat's note in a chat of its own starts at the first exchange that changed the note.
+    {
+      const scratchView = view as unknown as { messagesEl: HTMLElement; changeCards: Map<HTMLElement, { changedNotes(): string[] }>; firstPromptAbout(note: string, turn: HTMLElement): string | undefined };
+      const host = scratchView.messagesEl;
+      const prompt = (uuid: string) => host.createDiv({ cls: 'vc-user', attr: { 'data-uuid': uuid } });
+      const reply = (notes: string[]) => {
+        const turn = host.createDiv({ cls: 'vc-turn' });
+        scratchView.changeCards.set(turn, { changedNotes: () => notes });
+        return turn;
+      };
+      prompt('p1');
+      reply(['Other.md']);
+      prompt('p2');
+      reply(['Topic.md']);
+      prompt('p3');
+      const last = reply(['Topic.md']);
+      const from = scratchView.firstPromptAbout('Topic.md', last);
+      const none = scratchView.firstPromptAbout('Never.md', last);
+      host.empty();
+      const continueOk = from === 'p2' && none === undefined;
+      console.log(`continue a scratch note from its first exchange: ${from}; a note never changed: ${none} -> ${continueOk}`);
+      if (!continueOk) process.exitCode = 1;
+    }
+
     // A draft's card is a display: who, subject, text, files, Gmail; no Send or Edit. A later version's
     // card leaves the earlier one marked; sending it, every one.
     {

@@ -3793,7 +3793,8 @@ export class ChatView extends ItemView {
         const button = turn.createDiv({ cls: 'vc-continue-line', attr: { 'data-no-find': '' } }).createEl('button', { cls: 'vc-continue-button' });
         setIcon(button.createSpan({ cls: 'vc-continue-icon' }), 'message-square-plus');
         button.createSpan({ text: `Continue in a chat about “${noteName(note)}”` });
-        button.addEventListener('click', () => void this.branch(uuid, true));
+        // From the prompt of the first exchange that changed the note: the scratch chat's other errands stay behind.
+        button.addEventListener('click', () => void this.branch(uuid, true, this.firstPromptAbout(note, turn)));
       }
     }
   }
@@ -4153,7 +4154,8 @@ export class ChatView extends ItemView {
       effortOverride: this.effortOverride,
       scratch: this.scratch,
     };
-    const title = start ? this.copyTitle(replies, startBubble) : this.scratch ? this.continuedTitle(upTo) : branchTitle(from.title);
+    // The scratch chat's copy is named after what it continues (the note it made), from wherever it starts.
+    const title = this.scratch ? this.continuedTitle(upTo) : start ? this.copyTitle(replies, startBubble) : branchTitle(from.title);
     let id: string;
     try {
       id = start ? await branchChatFrom(source, root, title, start, upTo) : await branchChat(source, root, title, upTo);
@@ -4248,6 +4250,19 @@ export class ChatView extends ItemView {
   }
 
   /** The finished replies from message `start` of yours on, up to and including reply `upTo`: the reply holding it (a message sent while Claude worked), if any, and those after it. */
+  /**
+   * The prompt (its uuid) that began the first exchange, up to `turn`, whose reply changed `note`;
+   * undefined when it cannot be told, which copies the chat whole.
+   */
+  private firstPromptAbout(note: string, turn: HTMLElement): string | undefined {
+    const order = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user, .vc-turn')];
+    const end = order.indexOf(turn);
+    const first = order.findIndex((el, i) => i <= end && el.hasClass('vc-turn') && (this.changeCards.get(el)?.changedNotes().includes(note) ?? false));
+    if (first < 0) return undefined;
+    for (let i = first - 1; i >= 0; i--) if (order[i].hasClass('vc-user') && order[i].dataset.uuid) return order[i].dataset.uuid;
+    return undefined;
+  }
+
   private repliesFrom(start: HTMLElement, upTo: string): HTMLElement[] {
     // In the order they are drawn.
     const order = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user, .vc-turn.has-branch')];
