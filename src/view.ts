@@ -111,7 +111,7 @@ import { summaryNote } from './chatSummary';
 import { CommandSuggest } from './commandSuggest';
 import { MenuButton } from './menuButton';
 import { NotePicker } from './notePicker';
-import { renderUsageCard } from './usageCard';
+import { renderUsageCard, type UsageCardPart } from './usageCard';
 import { readingLines, widgetSelection, type NoteContext } from './readingSelection';
 import {
   contextFigures,
@@ -632,6 +632,8 @@ export class ChatView extends ItemView {
   private compactMark!: HTMLElement;
   /** Details of context and plan usage, shown while the pointer rests on the meter. */
   private usageCard!: HTMLElement;
+  /** Which part of the meter the hover card shows (see renderUsageCard). */
+  private usagePart: UsageCardPart = 'usage';
   private lastContext: SDKControlGetContextUsageResponse | null = null;
 
   /** Where output is drawn (see DrawState): `liveDraw`, except while earlier turns are drawn. */
@@ -942,21 +944,42 @@ export class ChatView extends ItemView {
     this.compactMark = this.contextBar.createDiv({ cls: 'vc-meter-compact' });
     this.usageCard = this.meterEl.createDiv({ cls: 'vc-usage-card' });
     this.usageCard.hide();
+    // Two hover areas: the context (label and bar) shows the context card, with Compact now; the usage
+    // figures at the right show the usage card. The row's empty middle shows neither.
     let hoverTimer: number | null = null;
-    this.register(() => {
-      if (hoverTimer !== null) window.clearTimeout(hoverTimer);
-    });
-    this.registerDomEvent(this.meterEl, 'mouseenter', () => {
-      hoverTimer = window.setTimeout(() => {
-        hoverTimer = null;
-        this.refreshUsageCard();
-        this.usageCard.show();
-      }, 300);
-    });
-    // The card sits inside the meter, so moving onto it does not count as leaving.
-    this.registerDomEvent(this.meterEl, 'mouseleave', () => {
+    const cancel = () => {
       if (hoverTimer !== null) window.clearTimeout(hoverTimer);
       hoverTimer = null;
+    };
+    this.register(cancel);
+    const show = (part: UsageCardPart) => {
+      this.usagePart = part;
+      this.usageCard.toggleClass('is-context', part === 'context');
+      this.refreshUsageCard();
+      this.usageCard.show();
+    };
+    this.registerDomEvent(this.meterEl, 'mouseover', (evt) => {
+      const target = evt.target as HTMLElement;
+      // The card sits inside the meter: moving onto it keeps it.
+      if (target.closest('.vc-usage-card')) return cancel();
+      const part: UsageCardPart | null = target.closest('.vc-meter-context-group') ? 'context' : target.closest('.vc-meter-plan') ? 'usage' : null;
+      cancel();
+      if (!part) {
+        this.usageCard.hide();
+        return;
+      }
+      // Shown already: the other part at once; else after a moment, so that passing over does not open it.
+      if (this.usageCard.isShown()) {
+        if (part !== this.usagePart) show(part);
+        return;
+      }
+      hoverTimer = window.setTimeout(() => {
+        hoverTimer = null;
+        show(part);
+      }, 300);
+    });
+    this.registerDomEvent(this.meterEl, 'mouseleave', () => {
+      cancel();
       this.usageCard.hide();
     });
     this.resetContextMeter();
@@ -6714,7 +6737,7 @@ export class ChatView extends ItemView {
       planFetchedAt: this.plugin.planFetchedAt,
       ...(this.engine === 'codex' ? { codex: { limits: this.plugin.codexLimits, fetchedAt: this.plugin.codexLimitsFetchedAt } } : {}),
       ...(!this.busy && (this.chatId ?? this.resumeId) ? { compact: () => void this.compactNow() } : {}),
-    });
+    }, this.usagePart);
   }
 
   /** Compacts the chat now, as `/compact` typed does; what is in the input stays there. */

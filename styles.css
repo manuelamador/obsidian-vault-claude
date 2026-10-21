@@ -378,7 +378,7 @@
 .vc-usage-card {
   position: absolute;
   top: 100%;
-  /* Under the usage figures, at the right: 360 px wide, or the panel's width when it is narrower. */
+  /* Under the usage figures, at the right (or the context, at the left): 360 px wide, or the panel's width when it is narrower. */
   right: var(--vc-side-margin);
   width: min(360px, calc(100% - 2 * var(--vc-side-margin)));
   z-index: var(--layer-popover);
@@ -3959,4 +3959,10 @@ a.vc-email-attachment:hover {
 .vc-steps-body > .vc-text.is-interim {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
+}
+
+/* The context card, under the context meter at the left. */
+.vc-usage-card.is-context {
+  right: auto;
+  left: var(--vc-side-margin);
 }

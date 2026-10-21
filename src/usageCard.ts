@@ -13,8 +13,14 @@ export interface UsageCardData {
   codex?: { limits: { planType: string | null; windows: { usedPercent: number; windowDurationMins: number | null; resetsAt: number | null }[] } | null; fetchedAt: number };
 }
 
-/** The hover card: context, each plan limit with its bar and reset, this week's split, extra usage. */
-export function renderUsageCard(card: HTMLElement, data: UsageCardData): void {
+/** Which part of the meter the card is for: the chat's context (with Compact now), or plan usage. */
+export type UsageCardPart = 'context' | 'usage';
+
+/**
+ * The hover card for `part` of the meter: the context, with Compact now; or each plan limit with its bar
+ * and reset, this week's split, extra usage (Codex's limits in a Codex chat).
+ */
+export function renderUsageCard(card: HTMLElement, data: UsageCardData, part: UsageCardPart): void {
   card.empty();
   const section = (title: string) => {
     const el = card.createDiv({ cls: 'vc-usage-section' });
@@ -22,6 +28,7 @@ export function renderUsageCard(card: HTMLElement, data: UsageCardData): void {
     return el;
   };
 
+  if (part === 'usage') return renderUsage(section, data);
   const contextSection = section('Context');
   const figures = data.context ? contextFigures(data.context) : null;
   if (figures) {
@@ -44,7 +51,10 @@ export function renderUsageCard(card: HTMLElement, data: UsageCardData): void {
   } else {
     contextSection.createDiv({ cls: 'vc-usage-note', text: 'Shown after the first reply.' });
   }
+}
 
+/** The usage part of the card (see renderUsageCard): Codex's limits in a Codex chat, else the plan's. */
+function renderUsage(section: (title: string) => HTMLElement, data: UsageCardData): void {
   if (data.codex) {
     const { limits, fetchedAt } = data.codex;
     const type = limits?.planType;

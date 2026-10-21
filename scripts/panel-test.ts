@@ -900,22 +900,33 @@ async function main(): Promise<void> {
     } as never;
     plugin.planFetchedAt = Date.now();
     const meter = root.querySelector('.vc-meter') as HTMLElement;
-    meter.dispatchEvent(new dom.window.Event('mouseenter'));
+    // Over the usage figures: the usage card alone.
+    (root.querySelector('.vc-meter-plan') as HTMLElement).dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 400));
     const card = root.querySelector('.vc-usage-card') as HTMLElement;
     const cardText = card.textContent ?? '';
+    const warnings = card.querySelectorAll('.vc-usage-row.is-warning').length;
+    // Over the context: the context card, at once now that a card is open, at the left.
+    (root.querySelector('.vc-meter-context-group') as HTMLElement).dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
+    const contextCard = card.textContent ?? '';
+    const contextOk = card.isShown() && card.hasClass('is-context') && contextCard.startsWith('Context') && !contextCard.includes('Plan usage');
+    // Over the row's empty middle: neither.
+    (root.querySelector('.vc-meter-row') as HTMLElement).dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
+    const hiddenInMiddle = !card.isShown();
     const cardOk =
-      card.isShown() &&
+      contextOk &&
+      hiddenInMiddle &&
+      !cardText.includes('Context') &&
       cardText.includes('Plan usage · Max') &&
       cardText.includes('Session (5 hours)4%') &&
       cardText.includes('All models, this week51%') &&
       cardText.includes('Fable, this week82%') &&
-      card.querySelectorAll('.vc-usage-row.is-warning').length === 1 &&
+      warnings === 1 &&
       cardText.includes('This week by product: Claude Code 99%, Chats 1%') &&
       cardText.includes('Extra usage: $8.61 of $100.00 · off (out of credits)') &&
       cardText.includes('3d left');
     meter.dispatchEvent(new dom.window.Event('mouseleave'));
-    console.log(`usage card: ${cardOk}; hidden after leaving: ${!card.isShown()}`);
+    console.log(`usage card over the figures, context card over the context, neither in between: ${cardOk}; hidden after leaving: ${!card.isShown()}`);
     if (!cardOk || card.isShown()) {
       console.log(cardText);
       process.exitCode = 1;
