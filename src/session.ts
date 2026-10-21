@@ -382,6 +382,17 @@ export class ClaudeSession {
     return stream.enableRemoteControl(enabled, name);
   }
 
+  /**
+   * Tells the running process the chat was renamed here (the SDK's `renameSession`, a `rename_session`
+   * control request from the host), so that its copy on claude.ai, put there by Remote Control, takes
+   * the new name too. Nothing to tell before the process has started: its file has the name.
+   */
+  async renameLive(title: string): Promise<void> {
+    const stream = this.stream as unknown as { renameSession?: (title: string, sessionId?: string) => Promise<void> } | null;
+    if (!stream || !this.sessionId || typeof stream.renameSession !== 'function') return;
+    await stream.renameSession(title, this.sessionId);
+  }
+
   /** Effort for the rest of the session; `null` returns to the model's default. */
   async setEffort(level: EffortLevel | null): Promise<void> {
     if (!this.stream) this.config.effort = level ?? undefined;

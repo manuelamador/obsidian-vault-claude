@@ -3167,12 +3167,19 @@ export class ChatView extends ItemView {
   /** Called for every rename (from this panel, another one, or the history). */
   onChatRenamed(id: string, title: string): void {
     this.doneTabs.rename(id, title);
+    // A running Claude chat is told too, for its copy on claude.ai (see ClaudeSession.renameLive).
+    const tell = (session: unknown) => {
+      if (session instanceof ClaudeSession) session.renameLive(title).catch((error: unknown) => log('renaming the running chat failed', error));
+    };
     if (id === this.chatId && !this.scratch) {
       this.titleFromClaude = true;
       this.setChatTitle(title);
+      tell(this.session);
     }
     for (const entry of this.background) {
-      if (entry.chatId === id) entry.title = title;
+      if (entry.chatId !== id) continue;
+      entry.title = title;
+      tell(entry.session);
     }
     // Its row among the recent chats, when the welcome is shown.
     this.refreshWelcome();
