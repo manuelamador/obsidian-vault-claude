@@ -546,7 +546,7 @@ function spawnClaudeProcess(options: SpawnOptions, stderr = new StderrTail()): S
 }
 
 /** How long a one-off request (see runOneShot) is given in all before it is stopped. */
-export const ONE_SHOT_TIMEOUT_MS = 5 * 60_000;
+export const ONE_SHOT_TIMEOUT_MS = 60 * 60_000;
 
 /**
  * A one-off request (inline edit, chat summary): a single request with no tools and none of the Claude Code settings files

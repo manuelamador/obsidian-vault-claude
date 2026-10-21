@@ -659,7 +659,7 @@ const CODEX_FAST_TIER = 'priority';
 const APP_SERVER_TIMEOUT_MS = 20_000;
 const APP_SERVER_IDLE_MS = 10 * 60_000;
 /** How long a one-off request (see runCodexOneShot) is given in all before its turn is interrupted and it fails. */
-export const CODEX_ONE_SHOT_TIMEOUT_MS = 5 * 60_000;
+export const CODEX_ONE_SHOT_TIMEOUT_MS = 60 * 60_000;
 
 /** A Codex app-server kept for reads (threads, models, limits, small jobs): started once, stopped after APP_SERVER_IDLE_MS unused. */
 class CodexReader {
