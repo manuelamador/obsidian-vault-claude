@@ -81,7 +81,9 @@ type ChatSession = ClaudeSession | CodexSession;
 import { SCRATCH_IDLE_CHOICES, chatModel, idleLabel, denyRuleList, modeShort, permissionModes, type ToolDisplay } from './settings';
 import { summarizeTool, toolLabel, vaultRelative } from './toolSummary';
 import { ChangesCard, agentDiffs, isOwnChange, openFileAtLine, savedChangedFiles, toolDiffs, type EditDiff } from './editDiff';
-import { linkFileNames } from './fileLinks';
+import { diskPath, linkFileNames } from './fileLinks';
+import { homedir } from 'os';
+import { pathToFileURL } from 'url';
 import { lineDiff } from './wordDiff';
 import {
   applyTicks,
@@ -1431,6 +1433,22 @@ export class ChatView extends ItemView {
   private noteLeaf(): WorkspaceLeaf {
     this.towardNotes();
     return this.app.workspace.getLeaf('tab');
+  }
+
+  /**
+   * A link in a reply: a full path on disk outside the vault opens as a file (see openOutsideFile), one
+   * inside it as its note; anything else as Obsidian opens a link. Obsidian would otherwise make an
+   * empty note named after a path outside the vault (Codex writes such links).
+   */
+  private openLink(href: string, pane: PaneType | boolean): void {
+    const disk = diskPath(href, this.plugin.vaultRoot() ?? '', homedir());
+    if (disk && 'file' in disk) return this.openOutsideFile(disk.file, pane);
+    void this.openNoteLink(disk ? disk.vault : href, '', pane);
+  }
+
+  /** Opens file `path`, outside the vault, as a file:// link in a note does: Obsidian asks before handing it to the system. */
+  private openOutsideFile(path: string, pane: PaneType | boolean): void {
+    window.open(pathToFileURL(path).href, typeof pane === 'boolean' ? '' : pane);
   }
 
   /** Opens link `link` as Obsidian does, in the main window (see towardNotes). */
@@ -8744,7 +8762,10 @@ export class ChatView extends ItemView {
     return rendering
       .finally(moveIn)
       .then(() => {
-        linkFileNames(el, (name) => this.vaultFileOf(name));
+        linkFileNames(el, (name) => this.vaultFileOf(name), (name) => {
+          const disk = diskPath(name, this.plugin.vaultRoot() ?? '', homedir());
+          return disk && 'file' in disk ? disk.file : null;
+        });
         if (chat) this.recordMentions(el, chat);
         if (component === this.chatComponent) this.countNotesSoon();
       })
@@ -8864,10 +8885,15 @@ export class ChatView extends ItemView {
     if (link) {
       evt.preventDefault();
       const href = link.dataset.href ?? link.getAttribute('href');
-      if (href) void this.openNoteLink(href, '', Keymap.isModEvent(evt));
+      if (href) this.openLink(href, Keymap.isModEvent(evt));
       return;
     }
     const fileLink = target.closest<HTMLElement>('.vc-file-link');
+    if (fileLink?.dataset.file) {
+      evt.preventDefault();
+      this.openOutsideFile(fileLink.dataset.file, Keymap.isModEvent(evt));
+      return;
+    }
     if (fileLink?.dataset.path) {
       evt.preventDefault();
       void this.openNoteLink(fileLink.dataset.path, '', Keymap.isModEvent(evt));
