@@ -305,6 +305,9 @@ interface Approval {
 /** `/plan`, offered among the slash commands: the panel handles it (see ChatView.send). */
 const PLAN_COMMAND: SlashCommand = { name: 'plan', description: 'Switch this chat to Plan mode, and plan what follows', argumentHint: '<what to plan>' };
 
+/** The prompts offered to continue a scratch chat's note from (see ChatView.continueMenu), newest first. */
+const CONTINUE_PROMPTS = 8;
+
 /** A finished reply's step (see ChatView.foldSteps): a run of tool calls or thinking, or an approval card. */
 function isStep(el: HTMLElement): boolean {
   return el.hasClass('vc-tools') || el.hasClass('vc-permission');
@@ -3793,8 +3796,8 @@ export class ChatView extends ItemView {
         const button = turn.createDiv({ cls: 'vc-continue-line', attr: { 'data-no-find': '' } }).createEl('button', { cls: 'vc-continue-button' });
         setIcon(button.createSpan({ cls: 'vc-continue-icon' }), 'message-square-plus');
         button.createSpan({ text: `Continue in a chat about “${noteName(note)}”` });
-        // From the prompt of the first exchange that changed the note: the scratch chat's other errands stay behind.
-        button.addEventListener('click', () => void this.branch(uuid, true, this.firstPromptAbout(note, turn)));
+        // From where you choose: the scratch chat's other errands stay behind (see continueMenu).
+        button.addEventListener('click', (evt) => this.continueMenu(evt, note, turn, uuid));
       }
     }
   }
@@ -4250,6 +4253,36 @@ export class ChatView extends ItemView {
   }
 
   /** The finished replies from message `start` of yours on, up to and including reply `upTo`: the reply holding it (a message sent while Claude worked), if any, and those after it. */
+  /**
+   * Where a scratch chat's note is continued from, chosen in a menu: one of the last prompts up to
+   * `turn` (newest first, the one that began the first exchange changing `note` marked suggested), or
+   * the whole scratch chat. The copy goes up to `upTo`, the reply under `turn`.
+   */
+  private continueMenu(evt: MouseEvent, note: string, turn: HTMLElement, upTo: string): void {
+    const order = [...this.messagesEl.querySelectorAll<HTMLElement>('.vc-user, .vc-turn')];
+    const prompts = order
+      .slice(0, order.indexOf(turn))
+      .filter((el) => el.hasClass('vc-user') && el.dataset.uuid)
+      .reverse()
+      .slice(0, CONTINUE_PROMPTS);
+    const suggested = this.firstPromptAbout(note, turn);
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle('Continue from…').setIsLabel(true));
+    for (const prompt of prompts) {
+      const uuid = prompt.dataset.uuid as string;
+      const words = chatTitle(prompt.querySelector('.vc-user-text')?.textContent ?? '');
+      menu.addItem((item) =>
+        item
+          .setTitle(`“${words.length > 60 ? `${words.slice(0, 59)}…` : words}”${uuid === suggested ? ' · suggested' : ''}`)
+          .setIcon(uuid === suggested ? 'star' : 'message-square')
+          .onClick(() => void this.branch(upTo, true, uuid)),
+      );
+    }
+    menu.addSeparator();
+    menu.addItem((item) => item.setTitle('Whole scratch chat').setIcon('messages-square').onClick(() => void this.branch(upTo, true)));
+    menu.showAtMouseEvent(evt);
+  }
+
   /**
    * The prompt (its uuid) that began the first exchange, up to `turn`, whose reply changed `note`;
    * undefined when it cannot be told, which copies the chat whole.
