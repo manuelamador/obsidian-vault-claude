@@ -309,6 +309,8 @@ const PLAN_COMMAND: SlashCommand = { name: 'plan', description: 'Switch this cha
 
 /** How long the meter's hover card waits, the pointer gone from its area, before it hides (see the meter's hover). */
 const USAGE_CARD_GRACE_MS = 350;
+/** How long the pointer rests on the meter's empty middle before the bar of your messages comes out. */
+const PROMPT_BAR_PEEK_MS = 500;
 
 /** The prompts offered to continue a scratch chat's note from (see ChatView.continueMenu), newest first. */
 const CONTINUE_PROMPTS = 8;
@@ -951,12 +953,24 @@ export class ChatView extends ItemView {
     // figures at the right show the usage card. The row's empty middle shows neither.
     let hoverTimer: number | null = null;
     let hideTimer: number | null = null;
+    // The row's empty middle, rested on with no card open, brings out the bar of your messages (see PromptNav.peek).
+    let peekTimer: number | null = null;
+    const unpeekSoon = () => {
+      if (peekTimer !== null) window.clearTimeout(peekTimer);
+      peekTimer = window.setTimeout(() => {
+        peekTimer = null;
+        this.promptNav.peek(false);
+      }, USAGE_CARD_GRACE_MS);
+    };
     const cancel = () => {
       if (hoverTimer !== null) window.clearTimeout(hoverTimer);
       if (hideTimer !== null) window.clearTimeout(hideTimer);
       hoverTimer = hideTimer = null;
     };
-    this.register(cancel);
+    this.register(() => {
+      cancel();
+      if (peekTimer !== null) window.clearTimeout(peekTimer);
+    });
     const show = (part: UsageCardPart) => {
       this.usagePart = part;
       this.usageCard.toggleClass('is-context', part === 'context');
@@ -979,9 +993,17 @@ export class ChatView extends ItemView {
       if (!part) {
         if (hoverTimer !== null) window.clearTimeout(hoverTimer);
         hoverTimer = null;
+        // On the way to an open card: it waits; else, rested on a moment, the bar of your messages comes out.
         if (this.usageCard.isShown()) hideSoon();
+        else if (peekTimer === null) {
+          peekTimer = window.setTimeout(() => {
+            peekTimer = null;
+            this.promptNav.peek(true);
+          }, PROMPT_BAR_PEEK_MS);
+        }
         return;
       }
+      unpeekSoon();
       cancel();
       // Shown already: the other part at once; else after a moment, so that passing over does not open it.
       if (this.usageCard.isShown()) {
@@ -997,6 +1019,8 @@ export class ChatView extends ItemView {
       if (hoverTimer !== null) window.clearTimeout(hoverTimer);
       hoverTimer = null;
       if (this.usageCard.isShown()) hideSoon();
+      // Gone after a moment, unless the pointer has reached the bar, which keeps it.
+      unpeekSoon();
     });
     this.resetContextMeter();
     if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);

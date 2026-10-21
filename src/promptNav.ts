@@ -26,6 +26,8 @@ export class PromptNav {
   private selected = -1;
   private shown: HTMLElement | null = null;
   private hovering = false;
+  /** Shown on request while the message is in view (see peek). */
+  private peeking = false;
   private target: { index: number; at: number } | null = null;
   private frame = 0;
 
@@ -68,6 +70,16 @@ export class PromptNav {
     this.list.addEventListener('keydown', (evt) => this.onListKey(evt));
   }
 
+  /**
+   * Shows the bar while `on`, even with the message in view (the pointer resting on the meter's middle,
+   * see ChatView), so that its arrows and list are at hand; once the pointer is on the bar, it stays.
+   */
+  peek(on: boolean): void {
+    if (this.peeking === on) return;
+    this.peeking = on;
+    this.update();
+  }
+
   /** Updates on the next frame, so a burst of scroll events costs one pass. */
   schedule(): void {
     if (this.frame) return;
@@ -89,7 +101,7 @@ export class PromptNav {
     const current = bubbles[this.currentIndex(bubbles, top)];
     // Hidden while any of the message itself is still in view, unless the pointer is on the bar or
     // its list is open.
-    if (current && (this.hovering || this.list.isShown() || current.getBoundingClientRect().bottom <= top)) {
+    if (current && (this.hovering || this.peeking || this.list.isShown() || current.getBoundingClientRect().bottom <= top)) {
       if (current !== this.shown) {
         this.shown = current;
         this.textEl.setText(bubbleSummary(current, 300));
