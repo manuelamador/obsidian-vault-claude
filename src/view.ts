@@ -311,6 +311,8 @@ const PLAN_COMMAND: SlashCommand = { name: 'plan', description: 'Switch this cha
 const USAGE_CARD_GRACE_MS = 350;
 /** How long the pointer rests on the meter's empty middle before the bar of your messages comes out. */
 const PROMPT_BAR_PEEK_MS = 500;
+/** How long the bar stays out once the pointer has gone down into the messages. */
+const PROMPT_BAR_LINGER_MS = 1500;
 
 /** The prompts offered to continue a scratch chat's note from (see ChatView.continueMenu), newest first. */
 const CONTINUE_PROMPTS = 8;
@@ -961,12 +963,12 @@ export class ChatView extends ItemView {
       if (unpeekTimer !== null) window.clearTimeout(unpeekTimer);
       peekTimer = unpeekTimer = null;
     };
-    const unpeekSoon = () => {
+    const unpeekSoon = (delay = USAGE_CARD_GRACE_MS) => {
       stopPeekTimers();
       unpeekTimer = window.setTimeout(() => {
         unpeekTimer = null;
         this.promptNav.peek(false);
-      }, USAGE_CARD_GRACE_MS);
+      }, delay);
     };
     const cancel = () => {
       if (hoverTimer !== null) window.clearTimeout(hoverTimer);
@@ -1028,15 +1030,16 @@ export class ChatView extends ItemView {
       hoverTimer = null;
       if (this.usageCard.isShown()) hideSoon();
       // Once out, the bar stays while the pointer is above the meter (the panel's header) or on the bar,
-      // which keeps it itself; it goes once the pointer is in the messages or out of the panel.
+      // which keeps it itself; it goes a while after the pointer is in the messages, sooner out of the panel.
       if (peekTimer !== null) window.clearTimeout(peekTimer);
       peekTimer = null;
       const to = evt.relatedTarget as Node | null;
-      if (!to || !root.contains(to) || this.messagesEl.contains(to)) unpeekSoon();
+      if (!to || !root.contains(to)) unpeekSoon();
+      else if (this.messagesEl.contains(to)) unpeekSoon(PROMPT_BAR_LINGER_MS);
     });
     this.registerDomEvent(root, 'mouseleave', () => unpeekSoon());
     this.registerDomEvent(root, 'mouseover', (evt) => {
-      if (this.promptNav.isPeeking() && unpeekTimer === null && this.messagesEl.contains(evt.target as Node)) unpeekSoon();
+      if (this.promptNav.isPeeking() && unpeekTimer === null && this.messagesEl.contains(evt.target as Node)) unpeekSoon(PROMPT_BAR_LINGER_MS);
     });
     this.resetContextMeter();
     if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);
