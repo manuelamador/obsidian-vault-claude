@@ -910,9 +910,16 @@ async function main(): Promise<void> {
     (root.querySelector('.vc-meter-context-group') as HTMLElement).dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
     const contextCard = card.textContent ?? '';
     const contextOk = card.isShown() && card.hasClass('is-context') && contextCard.startsWith('Context') && !contextCard.includes('Plan usage');
-    // Over the row's empty middle: neither.
+    // Over the row's empty middle: kept a moment (the way to the card crosses it), and still there on reaching the card.
     (root.querySelector('.vc-meter-row') as HTMLElement).dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
-    const hiddenInMiddle = !card.isShown();
+    const keptCrossing = card.isShown();
+    card.dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    const keptOnCard = card.isShown();
+    // Left in the middle: gone after the moment.
+    (root.querySelector('.vc-meter-row') as HTMLElement).dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    const hiddenInMiddle = keptCrossing && keptOnCard && !card.isShown();
     const cardOk =
       contextOk &&
       hiddenInMiddle &&
@@ -926,7 +933,8 @@ async function main(): Promise<void> {
       cardText.includes('Extra usage: $8.61 of $100.00 · off (out of credits)') &&
       cardText.includes('3d left');
     meter.dispatchEvent(new dom.window.Event('mouseleave'));
-    console.log(`usage card over the figures, context card over the context, neither in between: ${cardOk}; hidden after leaving: ${!card.isShown()}`);
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    console.log(`usage card over the figures, context card over the context, kept on the way to it, gone from the middle: ${cardOk}; hidden after leaving: ${!card.isShown()}`);
     if (!cardOk || card.isShown()) {
       console.log(cardText);
       process.exitCode = 1;

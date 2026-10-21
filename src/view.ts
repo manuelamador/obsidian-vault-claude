@@ -307,6 +307,9 @@ interface Approval {
 /** `/plan`, offered among the slash commands: the panel handles it (see ChatView.send). */
 const PLAN_COMMAND: SlashCommand = { name: 'plan', description: 'Switch this chat to Plan mode, and plan what follows', argumentHint: '<what to plan>' };
 
+/** How long the meter's hover card waits, the pointer gone from its area, before it hides (see the meter's hover). */
+const USAGE_CARD_GRACE_MS = 350;
+
 /** The prompts offered to continue a scratch chat's note from (see ChatView.continueMenu), newest first. */
 const CONTINUE_PROMPTS = 8;
 
@@ -947,9 +950,11 @@ export class ChatView extends ItemView {
     // Two hover areas: the context (label and bar) shows the context card, with Compact now; the usage
     // figures at the right show the usage card. The row's empty middle shows neither.
     let hoverTimer: number | null = null;
+    let hideTimer: number | null = null;
     const cancel = () => {
       if (hoverTimer !== null) window.clearTimeout(hoverTimer);
-      hoverTimer = null;
+      if (hideTimer !== null) window.clearTimeout(hideTimer);
+      hoverTimer = hideTimer = null;
     };
     this.register(cancel);
     const show = (part: UsageCardPart) => {
@@ -958,16 +963,26 @@ export class ChatView extends ItemView {
       this.refreshUsageCard();
       this.usageCard.show();
     };
+    // Hidden after a moment, not at once: the way from an area to its card crosses the row's empty space.
+    const hideSoon = () => {
+      if (hideTimer !== null) return;
+      hideTimer = window.setTimeout(() => {
+        hideTimer = null;
+        this.usageCard.hide();
+      }, USAGE_CARD_GRACE_MS);
+    };
     this.registerDomEvent(this.meterEl, 'mouseover', (evt) => {
       const target = evt.target as HTMLElement;
       // The card sits inside the meter: moving onto it keeps it.
       if (target.closest('.vc-usage-card')) return cancel();
       const part: UsageCardPart | null = target.closest('.vc-meter-context-group') ? 'context' : target.closest('.vc-meter-plan') ? 'usage' : null;
-      cancel();
       if (!part) {
-        this.usageCard.hide();
+        if (hoverTimer !== null) window.clearTimeout(hoverTimer);
+        hoverTimer = null;
+        if (this.usageCard.isShown()) hideSoon();
         return;
       }
+      cancel();
       // Shown already: the other part at once; else after a moment, so that passing over does not open it.
       if (this.usageCard.isShown()) {
         if (part !== this.usagePart) show(part);
@@ -979,8 +994,9 @@ export class ChatView extends ItemView {
       }, 300);
     });
     this.registerDomEvent(this.meterEl, 'mouseleave', () => {
-      cancel();
-      this.usageCard.hide();
+      if (hoverTimer !== null) window.clearTimeout(hoverTimer);
+      hoverTimer = null;
+      if (this.usageCard.isShown()) hideSoon();
     });
     this.resetContextMeter();
     if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);
