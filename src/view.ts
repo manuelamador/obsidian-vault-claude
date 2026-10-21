@@ -319,7 +319,12 @@ const CONTINUE_PROMPTS = 8;
 
 /** A finished reply's step (see ChatView.foldSteps): a run of tool calls or thinking, or an approval card. */
 function isStep(el: HTMLElement): boolean {
-  return el.hasClass('vc-tools') || el.hasClass('vc-permission');
+  return el.hasClass('vc-tools') || el.hasClass('vc-permission') || isMailRead(el);
+}
+
+/** Cards of mail a tool read on the way (a search, a thread), which fold with the steps; a draft's stay in the reply. */
+function isMailRead(el: HTMLElement): boolean {
+  return el.hasClass('vc-email-cards') && !el.querySelector('.vc-email-draft');
 }
 
 /** The answer to a plan, questions or an approval still waiting when the panel closes (see ChatView.onClose). */
@@ -3823,7 +3828,8 @@ export class ChatView extends ItemView {
    * opens them. Only a run of two or more: a lone group is already one line. The answer is the last
    * text written after a step began (or the only text of a reply without steps): it stays open, even
    * with a step after it (a todo list updated). Other text before the last step (a note of what it is
-   * about to do) folds with the steps, shown muted there. Cards (mail, changed files) stay in place.
+   * about to do) folds with the steps, shown muted there, as do the cards of mail read on the way.
+   * Other cards (drafts, changed files) stay in place.
    */
   private foldSteps(turn: HTMLElement): void {
     if (turn.hasClass('has-folded-steps')) return;
@@ -3906,7 +3912,8 @@ export class ChatView extends ItemView {
     const tools = body.querySelectorAll('.vc-tools:not(.vc-thinking) .vc-tool').length;
     const thoughts = body.querySelectorAll(':scope > .vc-thinking').length;
     const notes = body.querySelectorAll(':scope > .vc-text.is-interim').length;
-    const parts = [tools && plural(tools, 'tool call'), thoughts && plural(thoughts, 'thought'), notes && plural(notes, 'note')].filter(Boolean);
+    const emails = body.querySelectorAll(':scope > .vc-email-cards .vc-email-card').length;
+    const parts = [tools && plural(tools, 'tool call'), thoughts && plural(thoughts, 'thought'), emails && plural(emails, 'email'), notes && plural(notes, 'note')].filter(Boolean);
     setIcon(header.createSpan({ cls: 'vc-tools-chevron' }), 'chevron-right');
     header.createSpan({ cls: 'vc-tools-text', text: `Steps: ${parts.join(', ') || plural(steps.length, 'step')}` });
     const failed = body.querySelectorAll('.vc-tool.is-error').length;

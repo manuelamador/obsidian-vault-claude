@@ -2471,6 +2471,23 @@ async function main(): Promise<void> {
       console.log(`answer followed by a step: open ${open}; folded ${folded}; preamble with no answer folded ${preFolded} -> ${tailOk}`);
       if (!tailOk) process.exitCode = 1;
     }
+    // Mail read on the way folds with the steps; a draft's card stays in the reply.
+    {
+      const mailTurn = document.createElement('div');
+      mailTurn.createDiv({ cls: 'vc-tools' }).createDiv({ cls: 'vc-tool', text: 'search_threads' });
+      const read = mailTurn.createDiv({ cls: 'vc-email-cards' });
+      read.createDiv({ cls: 'vc-email-card' });
+      read.createDiv({ cls: 'vc-email-card' });
+      mailTurn.createDiv({ cls: 'vc-tools' }).createDiv({ cls: 'vc-tool', text: 'create_draft' });
+      mailTurn.createDiv({ cls: 'vc-email-cards' }).createDiv({ cls: 'vc-email-card vc-email-draft' });
+      mailTurn.createDiv({ cls: 'vc-text', text: 'Drafted.' });
+      (view as unknown as { foldSteps(turn: HTMLElement): void }).foldSteps(mailTurn);
+      const mailOrder = [...mailTurn.children].map((el) => (el.classList.contains('vc-steps') ? 'fold' : el.classList.contains('vc-email-cards') ? 'mail' : el.classList.contains('vc-text') ? 'text' : 'other')).join(',');
+      const mailHeader = mailTurn.querySelector('.vc-steps-header')?.textContent;
+      const mailOk = mailOrder === 'fold,mail,text' && mailHeader === 'Steps: 2 tool calls, 2 emails' && Boolean(mailTurn.querySelector(':scope > .vc-email-cards .vc-email-draft'));
+      console.log(`mail read folds with the steps, the draft stays: ${mailOrder}; ${mailHeader} -> ${mailOk}`);
+      if (!mailOk) process.exitCode = 1;
+    }
     // Text with nothing to show between steps (white space streamed between tool calls) leaves one fold.
     {
       const blankTurn = document.createElement('div');
