@@ -22,6 +22,8 @@ export class CodexSocket {
   private upgraded = false;
   private closed = false;
   private stoppedOnPurpose = false;
+  /** The socket destroyed if the other side has not closed it soon after close: cleared once closed. */
+  private destroyTimer: ReturnType<typeof setTimeout> | null = null;
   private buffer = Buffer.alloc(0);
   /** Chunks arrived since `buffer` was last joined, their bytes, and how many the frame under way needs in all (0: unknown). */
   private chunks: Buffer[] = [];
@@ -58,12 +60,14 @@ export class CodexSocket {
     if (this.upgraded) this.socket.write(frame(0x8, Buffer.alloc(0)));
     this.socket.end();
     // Not waiting on the other side for long.
-    setTimeout(() => this.socket.destroy(), 1000);
+    this.destroyTimer = setTimeout(() => this.socket.destroy(), 1000);
   }
 
   private finish(error?: Error): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.destroyTimer) clearTimeout(this.destroyTimer);
+    this.destroyTimer = null;
     this.socket.destroy();
     this.handlers.onClose(error);
   }

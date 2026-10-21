@@ -6,6 +6,8 @@
 import { spawn } from 'child_process';
 import { CodexSocket } from './codexSocket';
 import { log } from './log';
+import { StderrTail } from './stderrTail';
+import { withTimeout } from './timeout';
 
 /** How to run Codex: the executable, the vault folder, and the environment (PATH fixed as for Claude Code; see claudeEnv). */
 export interface CodexLaunch {
@@ -38,8 +40,6 @@ export interface CodexConnectionOptions {
 
 /** How long a Codex asked to stop is given before it is killed outright. */
 const KILL_AFTER_MS = 3_000;
-/** How many of its last stderr lines are kept, for the error shown when it ends. */
-const STDERR_LINES = 40;
 
 export class CodexConnection {
   /** The handshake done: requests may be made. Rejected when it ends first. */
@@ -48,8 +48,10 @@ export class CodexConnection {
   private pipe: { send(text: string): void; stop(): void };
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private next = 0;
-  private buffer = '';
-  private stderrLines: string[] = [];
+  /** The unfinished line arrived so far, in the chunks it came in: joined once its end comes. */
+  private partial: string[] = [];
+  /** Its last stderr lines, for the error shown when it ends. */
+  private readonly stderrTail = new StderrTail();
   /** Stopped (see stop), with the reason when there is one. */
   private stopping: { reason?: Error } | null = null;
   private done = false;
@@ -79,7 +81,7 @@ export class CodexConnection {
         opened = true;
         for (const text of waiting.splice(0)) socket.send(text);
       },
-      onMessage: (text) => this.onData(`${text}\n`),
+      onMessage: (text) => this.onLine(text.trim()),
       onClose: (error) => {
         log('codex shared app-server connection closed', error?.message ?? 'on purpose');
         if (!opened && error && !this.stopping && !this.done) {
@@ -106,10 +108,7 @@ export class CodexConnection {
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => this.onData(chunk));
-    child.stderr.on('data', (chunk: string) => {
-      for (const line of chunk.split('\n')) if (line) this.stderrLines.push(line);
-      if (this.stderrLines.length > STDERR_LINES) this.stderrLines = this.stderrLines.slice(-STDERR_LINES);
-    });
+    child.stderr.on('data', (chunk: string) => void this.stderrTail.push(chunk));
     child.on('error', (error) => {
       // Not started at all (not found, not executable): no exit follows.
       if (child.pid === undefined) this.end(error);
@@ -148,33 +147,22 @@ export class CodexConnection {
 
   /** What Codex last wrote to stderr. */
   stderr(): string {
-    return this.stderrLines.join('\n');
+    return this.stderrTail.text();
   }
 
   /** A request to Codex, given up after the connection's timeout. */
   request(method: string, params: unknown): Promise<unknown> {
     if (!this.open) return Promise.reject(this.stopping?.reason ?? new Error('Codex is not running'));
     const id = ++this.next;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const error = new Error(`Codex did not answer ${method} in time`);
-        if (this.options.stopOnTimeout) this.stop(error);
-        else {
-          this.pending.delete(id);
-          reject(error);
-        }
-      }, this.options.timeoutMs);
-      this.pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
+    const answer = new Promise<unknown>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
       this.write({ id, method, params });
+    });
+    return withTimeout(answer, this.options.timeoutMs, () => {
+      const error = new Error(`Codex did not answer ${method} in time`);
+      if (this.options.stopOnTimeout) this.stop(error);
+      else this.pending.delete(id);
+      return error;
     });
   }
 
@@ -221,43 +209,52 @@ export class CodexConnection {
     this.pipe.send(JSON.stringify({ jsonrpc: '2.0', ...message }));
   }
 
+  /** Output from its stdout: one JSON object a line. Only the new chunk is searched for a line's end. */
   private onData(chunk: string): void {
-    this.buffer += chunk;
+    let start = 0;
     let at: number;
-    while ((at = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, at).trim();
-      this.buffer = this.buffer.slice(at + 1);
-      if (!line) continue;
-      let message: { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: string } };
-      try {
-        message = JSON.parse(line) as typeof message;
-      } catch {
-        log('codex sent a line that is not JSON', line.slice(0, 200));
-        continue;
+    while ((at = chunk.indexOf('\n', start)) >= 0) {
+      this.partial.push(chunk.slice(start, at));
+      const line = this.partial.join('').trim();
+      this.partial = [];
+      start = at + 1;
+      this.onLine(line);
+    }
+    if (start < chunk.length) this.partial.push(chunk.slice(start));
+  }
+
+  /** One message from Codex: an answer, a notification, or a request of the panel. */
+  private onLine(line: string): void {
+    if (!line) return;
+    let message: { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: string } };
+    try {
+      message = JSON.parse(line) as typeof message;
+    } catch {
+      log('codex sent a line that is not JSON', line.slice(0, 200));
+      return;
+    }
+    // A handler that throws (a message of a shape not expected, a drawing error) does not stop the
+    // lines after it from being read: a turn's end in the same chunk is still taken.
+    try {
+      if (message.method && message.id !== undefined) {
+        // A request with nothing to answer it is declined at once, never left waiting (Codex would wait on it).
+        if (this.handlers.onRequest) this.handlers.onRequest(message.id, message.method, message.params ?? {});
+        else this.refuse(message.id, `${message.method} is not supported by this client`);
+        return;
       }
-      // A handler that throws (a message of a shape not expected, a drawing error) does not stop the
-      // lines after it from being read: a turn's end in the same chunk is still taken.
-      try {
-        if (message.method && message.id !== undefined) {
-          // A request with nothing to answer it is declined at once, never left waiting (Codex would wait on it).
-          if (this.handlers.onRequest) this.handlers.onRequest(message.id, message.method, message.params ?? {});
-          else this.refuse(message.id, `${message.method} is not supported by this client`);
-          continue;
-        }
-        if (message.method) {
-          this.handlers.onNotification?.(message.method, message.params ?? {});
-          continue;
-        }
-      } catch (error) {
-        log('handling a codex message failed', message.method, error);
-        continue;
+      if (message.method) {
+        this.handlers.onNotification?.(message.method, message.params ?? {});
+        return;
       }
-      if (typeof message.id === 'number') {
-        const waiting = this.pending.get(message.id);
-        this.pending.delete(message.id);
-        if (message.error) waiting?.reject(new Error(message.error.message ?? 'Codex refused the request'));
-        else waiting?.resolve(message.result);
-      }
+    } catch (error) {
+      log('handling a codex message failed', message.method, error);
+      return;
+    }
+    if (typeof message.id === 'number') {
+      const waiting = this.pending.get(message.id);
+      this.pending.delete(message.id);
+      if (message.error) waiting?.reject(new Error(message.error.message ?? 'Codex refused the request'));
+      else waiting?.resolve(message.result);
     }
   }
 }

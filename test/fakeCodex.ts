@@ -10,9 +10,9 @@ import { chmodSync, writeFileSync } from 'node:fs';
  * answered, keeping the answer in `answer.json`; `elicitResolved`, asks it and then says it was resolved
  * elsewhere, exiting soon after; `elicitOther`, asks it for another thread; `threads`, lists two
  * threads the panel started, one page each; `turns`, finishes each turn at once and stays up
- * (the second only for the first page's `nextCursor`), and none archived.
+ * (the second only for the first page's `nextCursor`), and none archived; `stall`, starts a turn and never finishes it.
  */
-export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'elicitResolved' | 'elicitOther' | 'threads' | 'turns' = 'exit'): string {
+export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'elicitResolved' | 'elicitOther' | 'threads' | 'turns' | 'stall' = 'exit'): string {
   const file = `${dir}/codex`;
   writeFileSync(
     file,
@@ -64,7 +64,7 @@ process.stdin.on('data', (chunk) => {
       } else if (mode === 'turns') {
         setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 't1', turn: { id: 'turn1', status: 'completed' } } }) + '\\n'), 10);
       } else if (mode === 'ask') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'q1', method: 'item/tool/requestUserInput', params: { threadId: 't1' } }) + '\\n');
-      else setTimeout(() => process.exit(0), 20);
+      else if (mode !== 'stall') setTimeout(() => process.exit(0), 20);
     } else reply({});
   }
 });
@@ -75,6 +75,6 @@ process.stdin.on('data', (chunk) => {
 }
 
 /** How to run the stand-in: node found on PATH by its first line, this one's folder first. */
-export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'elicitResolved' | 'elicitOther' | 'threads' | 'turns') {
+export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'elicitResolved' | 'elicitOther' | 'threads' | 'turns' | 'stall') {
   return { codexPath: fakeCodex(dir, mode), cwd: dir, env: { ...process.env, PATH: `${process.execPath.replace(/\/node$/, '')}:${process.env.PATH ?? ''}` } };
 }
