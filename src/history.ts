@@ -449,6 +449,12 @@ export async function sessionTitle(id: string, dir: string): Promise<string | nu
   return title ? chatTitle(title) : null;
 }
 
+/** The title the session was given by a rename (/rename or the panel's), if it has one. */
+export async function renamedTitle(id: string, dir: string): Promise<string | null> {
+  const info = await getSessionInfo(id, { dir });
+  return info?.customTitle ? chatTitle(info.customTitle) : null;
+}
+
 /** The longest folder name Claude Code uses whole; a longer one is cut here and followed by a hash. */
 const MAX_FOLDER_NAME = 200;
 

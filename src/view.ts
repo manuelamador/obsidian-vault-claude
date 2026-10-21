@@ -29,7 +29,7 @@ import type {
   SessionMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
-import { agentTranscript, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, sessionStamp, deleteSessionIfAny, entryBefore, formatDate, lastMessages, messageDates, openChatFile, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
+import { agentTranscript, renamedTitle, branchChat, branchChatFrom, chatTitle, cutChat, uncutChat, deleteCutLeftovers, sentUuidOf, sessionStamp, deleteSessionIfAny, entryBefore, formatDate, lastMessages, messageDates, openChatFile, queuedTaken, isPlanFile, readPlanFile, sessionTitle, subagentFile, type HistoryItem, type LoadedChat } from './history';
 import { EarlierDrawing, historyParts, turnStarts, turnsOf } from './earlierTurns';
 import {
   filePathOf,
@@ -2007,6 +2007,7 @@ export class ChatView extends ItemView {
       try {
         const response = (await entry.session.enableRemoteControl(true, entry.title ?? 'Obsidian chat')) as { session_url?: string } | null;
         if (response?.session_url) entry.remoteUrl = response.session_url;
+        if (response?.session_url && entry.chatId) this.sendRenamedTitle(entry.session, entry.chatId);
       } catch (error) {
         log('enabling remote control failed', error);
       }
@@ -2048,6 +2049,8 @@ export class ChatView extends ItemView {
       session.ensureStarted();
       const response = (await session.enableRemoteControl(true, this.chatName ?? 'Obsidian chat')) as { session_url?: string } | null;
       if (!response?.session_url) throw new Error('Claude Code returned no link');
+      const chatId = session.sessionId ?? this.chatId;
+      if (chatId && session instanceof ClaudeSession) this.sendRenamedTitle(session, chatId);
       if (session !== this.session) {
         // The chat went to the background meanwhile; its entry keeps the link (and the process).
         const entry = [...this.background].find((candidate) => candidate.session === session);
@@ -3165,6 +3168,18 @@ export class ChatView extends ItemView {
   }
 
   /** Called for every rename (from this panel, another one, or the history). */
+  /**
+   * A chat renamed before it went on the phone: its name sent again once it is there, since its copy
+   * on claude.ai may be an older one that kept the first prompt as its name (see ClaudeSession.renameLive).
+   */
+  private sendRenamedTitle(session: ClaudeSession, id: string): void {
+    const root = this.plugin.vaultRoot();
+    if (!root) return;
+    void renamedTitle(id, root)
+      .then((title) => (title ? session.renameLive(title, id) : undefined))
+      .catch((error: unknown) => log('sending the renamed title failed', error));
+  }
+
   onChatRenamed(id: string, title: string): void {
     this.doneTabs.rename(id, title);
     // A running Claude chat is told too, for its copy on claude.ai (see ClaudeSession.renameLive).

@@ -387,10 +387,10 @@ export class ClaudeSession {
    * control request from the host), so that its copy on claude.ai, put there by Remote Control, takes
    * the new name too. Nothing to tell before the process has started: its file has the name.
    */
-  async renameLive(title: string): Promise<void> {
+  async renameLive(title: string, sessionId = this.sessionId): Promise<void> {
     const stream = this.stream as unknown as { renameSession?: (title: string, sessionId?: string) => Promise<void> } | null;
-    if (!stream || !this.sessionId || typeof stream.renameSession !== 'function') return;
-    await stream.renameSession(title, this.sessionId);
+    if (!stream || !sessionId || typeof stream.renameSession !== 'function') return;
+    await stream.renameSession(title, sessionId);
   }
 
   /** Effort for the rest of the session; `null` returns to the model's default. */
