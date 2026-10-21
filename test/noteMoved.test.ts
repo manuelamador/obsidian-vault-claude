@@ -96,7 +96,7 @@ test('renames and deletions reach noteMoved, and quitting starts the waiting sav
   const calls: string[] = [];
   p.noteMoved = (from, to) => void calls.push(`${from}->${to}`);
   p.flushSave = async () => void calls.push('flush');
-  p.registerNoteEvents();
+  p.registerAppEvents();
   handlers.get('rename')?.({ path: 'New.md' }, 'Old.md');
   handlers.get('delete')?.({ path: 'Gone.md' });
   handlers.get('quit')?.({});

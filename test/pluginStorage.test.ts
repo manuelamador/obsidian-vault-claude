@@ -77,3 +77,48 @@ test('data.json from before chats.json (0.35 and earlier) keeps its chats, pins 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('an unreadable chats.json with no backup is not saved over with empty records, and a backup is not replaced by an empty file', async () => {
+  const root = mkdtempSync(`${tmpdir()}/vc-storage-lost-`);
+  const dir = `${root}/plugin`;
+  mkdirSync(dir);
+  try {
+    writeFileSync(`${dir}/chats.json`, '{"chats": [{"id": "a", "ti');
+    writeFileSync(`${dir}/data.json`, JSON.stringify({ settings: { panelMargin: 33 } }));
+    const p = pluginIn(root);
+    await p.loadSettings();
+    assert.deepEqual(p.chats, []);
+    await p.saveSettings();
+    assert.equal(readFileSync(`${dir}/chats.json`, 'utf8'), '{"chats": [{"id": "a", "ti');
+    // Once a chat is recorded, the records are written again.
+    p.chats = [{ id: 'b', title: 'B' }];
+    await p.saveSettings();
+    assert.deepEqual(JSON.parse(readFileSync(`${dir}/chats.json`, 'utf8')).chats.map((chat: { id: string }) => chat.id), ['b']);
+    // A file read whole with no chat is not copied over a backup with some.
+    writeFileSync(`${dir}/chats.json.bak`, JSON.stringify({ chats: [{ id: 'a', title: 'A' }] }));
+    writeFileSync(`${dir}/chats.json`, JSON.stringify({ chats: [] }));
+    await pluginIn(root).loadSettings();
+    assert.deepEqual(JSON.parse(readFileSync(`${dir}/chats.json.bak`, 'utf8')).chats, [{ id: 'a', title: 'A' }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the day's copy is of the file before the day's first save", async () => {
+  const root = mkdtempSync(`${tmpdir()}/vc-storage-day-`);
+  const dir = `${root}/plugin`;
+  mkdirSync(dir);
+  try {
+    writeFileSync(`${dir}/chats.json`, JSON.stringify({ chats: [{ id: 'a', title: 'A' }] }));
+    const p = pluginIn(root);
+    await p.loadSettings();
+    p.chats = [];
+    await p.saveSettings();
+    const copy = readdirSync(`${dir}/backups`).find((name) => name.startsWith('chats-'));
+    assert.ok(copy);
+    assert.deepEqual(JSON.parse(readFileSync(`${dir}/backups/${copy}`, 'utf8')).chats, [{ id: 'a', title: 'A' }]);
+    assert.equal(existsSync(`${dir}/chats.json.tmp`), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
