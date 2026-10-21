@@ -791,7 +791,7 @@ const KEEP_READ_BYTES = 4 * 1024 * 1024;
  * length in memory, so the cap bounds the worst case; most sessions are far smaller.
  */
 const READ_KEPT = 5;
-const READ_KEPT_BYTES = 192 * 1024 * 1024;
+const READ_KEPT_BYTES = 64 * 1024 * 1024;
 /** How many bytes at each end of what was read must be unchanged for it to be reused. */
 const CHECK_BYTES = 1024;
 const readSoFar = new Map<string, ReadSoFar>();
