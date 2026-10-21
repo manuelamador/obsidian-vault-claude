@@ -3,6 +3,7 @@ import { deleteSession, forkSession, getSessionInfo, getSessionMessages, listSes
 import { promises as fs, realpathSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { shortLabel } from './connections';
 import { log } from './log';
 import { isChatId } from './memos';
 import type { CodexChoices } from './codexAccess';
@@ -71,7 +72,7 @@ export function chatTitle(text: string, mentions = true): string {
   const stripped = stripContext(text);
   const flat = (mentions ? stripped.replace(MENTION, '@$1') : stripped).replace(/\s+/g, ' ').trim();
   if (!flat) return 'Untitled chat';
-  return flat.length > 80 ? `${flat.slice(0, 79)}…` : flat;
+  return shortLabel(flat, 80);
 }
 
 /**
@@ -109,6 +110,14 @@ export async function eachInParallel<T>(items: T[], work: (item: T) => Promise<v
  * took to list.
  */
 const unrecorded = new Map<string, string | false>();
+
+/**
+ * Sessions read and found to hold no prompt (see firstUserText), by id, with the time and size of the
+ * file then: one just starting, or a file of only what Claude Code notes about a session, as a process
+ * exiting after its file was deleted writes. Nothing to open, so left out of the history; read again
+ * only once the file has changed.
+ */
+const emptySessions = new Map<string, string>();
 
 /** Below this size a session file may hold no prompt: what Claude Code notes about a session alone is a few kilobytes. */
 const SMALL_SESSION_BYTES = 16 * 1024;
@@ -184,22 +193,29 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
   const byId = new Map(records.map((record) => [record.id, record]));
   const existing = new Set(sessions.map((session) => session.sessionId));
   for (const id of unrecorded.keys()) if (!existing.has(id)) unrecorded.delete(id);
-  // The unrecorded sessions not read before, a few at a time: the SDK's, to find the panel chats
-  // among them, and the command line's small ones, which may hold no prompt at all.
+  for (const id of emptySessions.keys()) if (!existing.has(id)) emptySessions.delete(id);
+  // The unrecorded sessions not read before (or found empty, and changed since), a few at a time: the
+  // SDK's, to find the panel chats among them, and the command line's small ones, which may hold no prompt at all.
+  const stampOf = (session: { lastModified: number; fileSize?: number }) => `${session.lastModified}:${session.fileSize ?? ''}`;
   const unread = sessions.filter(
-    ({ sessionId, fileSize }) => !byId.has(sessionId) && !unrecorded.has(sessionId) && (!interactiveIds.has(sessionId) || (fileSize ?? 0) < SMALL_SESSION_BYTES),
+    (session) =>
+      !byId.has(session.sessionId) &&
+      !unrecorded.has(session.sessionId) &&
+      emptySessions.get(session.sessionId) !== stampOf(session) &&
+      (!interactiveIds.has(session.sessionId) || (session.fileSize ?? 0) < SMALL_SESSION_BYTES),
   );
-  // Those with no prompt: one just starting, or a file of only what Claude Code notes about a
-  // session, as a process exiting after its file was deleted writes. Nothing to open; read again next time.
-  const empty = new Set<string>();
-  await eachInParallel(unread, async ({ sessionId }) => {
+  await eachInParallel(unread, async (session) => {
+    const { sessionId } = session;
     const first = await firstUserText(sessionId, dir);
-    if (first === null) empty.add(sessionId);
-    else unrecorded.set(sessionId, !interactiveIds.has(sessionId) && (CONTEXT_START.test(first) || (await sessionEntrypoint(sessionId, dir)) === 'sdk-ts') ? chatTitle(first) : false);
+    if (first === null) emptySessions.set(sessionId, stampOf(session));
+    else {
+      emptySessions.delete(sessionId);
+      unrecorded.set(sessionId, !interactiveIds.has(sessionId) && (CONTEXT_START.test(first) || (await sessionEntrypoint(sessionId, dir)) === 'sdk-ts') ? chatTitle(first) : false);
+    }
   });
   const listed: { item: HistoryItem; stamp: string }[] = [];
   for (const session of sessions) {
-    if (empty.has(session.sessionId)) continue;
+    if (!byId.has(session.sessionId) && emptySessions.get(session.sessionId) === stampOf(session)) continue;
     const record = byId.get(session.sessionId);
     let title = record?.title;
     let fromPanel = record !== undefined;
@@ -212,7 +228,7 @@ export async function listHistory(dir: string, records: ChatRecord[], includeAll
     if (!fromPanel && !includeAll) continue;
     listed.push({
       item: { id: session.sessionId, title: title ?? chatTitle(session.customTitle ?? session.summary), updatedAt: session.lastModified, fromPanel },
-      stamp: `${session.lastModified}:${session.fileSize ?? ''}`,
+      stamp: stampOf(session),
     });
   }
   // Each listed chat's time, read again only for the files that changed; the file's own time stands
@@ -287,28 +303,60 @@ async function markCopies(
 /** The uuid of session `id`'s first prompt (see firstPrompts); null when there is none to read. */
 async function firstPromptId(id: string, dir: string): Promise<string | null> {
   if (!isChatId(id)) return null;
-  const file = await fs.open(sessionFile(id, dir), 'r').catch(() => null);
-  if (!file) return null;
+  let uuid: string | null = null;
+  await eachRowFromStart(
+    id,
+    dir,
+    (row) => {
+      if (row.type === 'user' && row.uuid) uuid = row.uuid;
+      return uuid !== null;
+    },
+    FIRST_PROMPT_BYTES,
+  ).catch((error: unknown) => log(`reading the start of session ${id} failed`, error));
+  return uuid;
+}
+
+/**
+ * Visits a session file's rows from the first on, until `visit` returns true or about `maxBytes`
+ * have been read (to the end of the read that passes them); false when the file cannot be opened.
+ * A last row with no newline after it is visited at the file's end, unless it does not parse (still
+ * being written). `wanted`: the lines worth parsing (see drawnRow).
+ */
+async function eachRowFromStart(id: string, dir: string, visit: (row: SessionRow) => boolean, maxBytes = Infinity, wanted: (line: string) => boolean = () => true): Promise<boolean> {
+  let file: fs.FileHandle;
   try {
+    file = await fs.open(sessionFile(id, dir), 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const take = (line: Buffer): boolean => {
+      const text = line.toString('utf8');
+      const row = text && wanted(text) ? parseRow(text) : null;
+      return row !== null && visit(row);
+    };
     // Lines are split on the newline byte, which never occurs inside a multi-byte character.
-    let rest = Buffer.alloc(0);
-    for (let position = 0; position < FIRST_PROMPT_BYTES; ) {
-      const chunk = Buffer.alloc(64 * 1024);
+    const chunk = Buffer.alloc(64 * 1024);
+    // The start of a line longer than what has been read of it (an image, say), joined once it ends;
+    // copies, as `chunk` is read into again.
+    let pieces: Buffer[] = [];
+    for (let position = 0; position < maxBytes; ) {
       const { bytesRead } = await file.read(chunk, 0, chunk.length, position);
-      if (bytesRead === 0) break;
-      position += bytesRead;
-      let block = Buffer.concat([rest, chunk.subarray(0, bytesRead)]);
-      for (let end = block.indexOf(0x0a); end !== -1; end = block.indexOf(0x0a)) {
-        const row = parseRow(block.subarray(0, end).toString('utf8'));
-        if (row?.type === 'user' && row.uuid) return row.uuid;
-        block = block.subarray(end + 1);
+      if (bytesRead === 0) {
+        take(Buffer.concat(pieces));
+        break;
       }
-      rest = block;
+      position += bytesRead;
+      let from = 0;
+      for (let end = chunk.indexOf(0x0a, from); end !== -1 && end < bytesRead; end = chunk.indexOf(0x0a, from)) {
+        const line = pieces.length > 0 ? Buffer.concat([...pieces, chunk.subarray(from, end)]) : chunk.subarray(from, end);
+        pieces = [];
+        if (take(line)) return true;
+        from = end + 1;
+      }
+      if (from < bytesRead) pieces.push(Buffer.from(chunk.subarray(from, bytesRead)));
     }
-    return null;
-  } catch (error) {
-    log(`reading the start of session ${id} failed`, error);
-    return null;
+    return true;
   } finally {
     await file.close();
   }
@@ -343,17 +391,50 @@ async function lastActive(id: string, dir: string): Promise<number | null | unde
   return read ? at : undefined;
 }
 
-/** The text of a session's first prompt: empty for one with none (an image alone), null when it has no prompt. */
-async function firstUserText(id: string, dir: string): Promise<string | null> {
-  const messages = await getSessionMessages(id, { dir, limit: 3 });
-  for (const message of messages) {
+/** How many of a session's first messages firstUserText looks in for a prompt, as it once asked the SDK for. */
+const FIRST_MESSAGES = 3;
+
+/** The origins of meta rows the SDK's reader keeps as messages (its own list, which it does not export). */
+const KEPT_META_ORIGINS = new Set(['channel', 'observer', 'observer-activity', 'slack-ping', 'peer']);
+
+/** A prompt's text (see firstUserText): its first text block's, empty for none; undefined for a message with no content to read. */
+function firstText(message: { content?: unknown } | null | undefined): string | undefined {
+  const content = message?.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return (content as { type?: string; text?: string }[]).find((item) => item.type === 'text')?.text ?? '';
+  return undefined;
+}
+
+/**
+ * The text of a session's first prompt: empty for one with none (an image alone), null when it has no
+ * prompt among its first FIRST_MESSAGES messages. Read from the start of its file, a row at a time,
+ * and only until those messages are found: the SDK's reader (`getSessionMessages` with a limit),
+ * which it once came from, reads and parses the whole file first. Its messages are the rows it takes
+ * as such: prompts and replies with a uuid, not a side chain's or a team's, and not meta unless from
+ * one of KEPT_META_ORIGINS. The SDK's reader stands in where the file is not in the vault's folder.
+ */
+export async function firstUserText(id: string, dir: string): Promise<string | null> {
+  if (!isChatId(id)) return null;
+  let seen = 0;
+  let text: string | null = null;
+  const read = await eachRowFromStart(
+    id,
+    dir,
+    (row) => {
+      if ((row.type !== 'user' && row.type !== 'assistant') || typeof row.uuid !== 'string' || row.isSidechain || row.teamName) return false;
+      if (row.isMeta && !KEPT_META_ORIGINS.has(row.origin?.kind ?? '')) return false;
+      seen += 1;
+      if (row.type === 'user') text = firstText(row.message) ?? null;
+      return text !== null || seen >= FIRST_MESSAGES;
+    },
+    Infinity,
+    drawnRow,
+  );
+  if (read) return text;
+  for (const message of await getSessionMessages(id, { dir, limit: FIRST_MESSAGES })) {
     if (message.type !== 'user') continue;
-    const content = (message.message as { content?: unknown } | null)?.content;
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-      const block = (content as { type?: string; text?: string }[]).find((item) => item.type === 'text');
-      return block?.text ?? '';
-    }
+    const found = firstText(message.message as { content?: unknown } | null);
+    if (found !== undefined) return found;
   }
   return null;
 }
@@ -599,7 +680,11 @@ interface SessionRow {
   /** In a copy of a chat (see branchChat), the message the row copies. */
   forkedFrom?: unknown;
   isSidechain?: boolean;
+  /** Set on an agent team member's rows, which are not the chat's own. */
+  teamName?: string;
   isMeta?: boolean;
+  /** Where a message came from, for one not typed by you (see KEPT_META_ORIGINS). */
+  origin?: { kind?: string } | null;
   isCompactSummary?: boolean;
   /** An error Claude Code wrote as a reply (see accountErrorText): its kind. */
   error?: string;
@@ -700,9 +785,13 @@ interface ReadSoFar {
 
 /** Session files this big are remembered as read (see READ_KEPT), so that opening one again reads only what was added. */
 const KEEP_READ_BYTES = 4 * 1024 * 1024;
-/** How many such files are remembered, the most recently read kept, and how many bytes of the messages they keep in all (the latest is kept whatever its size). */
-const READ_KEPT = 5;
-const READ_KEPT_BYTES = 192 * 1024 * 1024;
+/**
+ * How many such files are remembered, the most recently read kept, and how many bytes of the messages
+ * they keep in all (the latest is kept whatever its size). Parsed, a row takes several times its
+ * length in memory, so this is kept to a few tens of megabytes of rows.
+ */
+const READ_KEPT = 3;
+const READ_KEPT_BYTES = 48 * 1024 * 1024;
 /** How many bytes at each end of what was read must be unchanged for it to be reused. */
 const CHECK_BYTES = 1024;
 const readSoFar = new Map<string, ReadSoFar>();
@@ -819,6 +908,9 @@ export async function openChatFile(id: string, dir: string, enough: (messages: S
   if (!stat) return null;
   if (stat.size < KEEP_READ_BYTES || readSoFar.has(`${file}\n${true}`)) return { chat: await loadChat(id, dir, true), rest: null };
   const rows: SessionMessage[] = [];
+  // What `enough` is handed: `rows` oldest first, kept up to date rather than copied each time it is asked.
+  let oldestFirst: SessionMessage[] = [];
+  let asked = 0;
   const edits = new Map<string, unknown>();
   const queued = new Map<SessionMessage, string | undefined>();
   const own = new Set<string>();
@@ -833,7 +925,12 @@ export async function openChatFile(id: string, dir: string, enough: (messages: S
     else if (message.uuid) own.add(message.uuid);
     // Asked only at a message of yours, where a turn may start.
     if (message.type !== 'user') return false;
-    stopped = enough([...rows].reverse());
+    // Oldest first: the rows found since last asked, put before those asked about then.
+    const fresh = rows.slice(asked).reverse();
+    if (fresh.length > 64) oldestFirst = fresh.concat(oldestFirst);
+    else oldestFirst.unshift(...fresh);
+    asked = rows.length;
+    stopped = enough(oldestFirst);
     return stopped;
   }, Infinity, TAIL_BYTES, drawnRow);
   // The whole file read on the way: no need to read it again.

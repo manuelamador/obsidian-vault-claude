@@ -4,6 +4,7 @@
 // with no title, before the suggestion or without one, the memo is a bookmark (see quickMemoTitle).
 import { Modal, SuggestModal, setIcon, type App, type TFile } from 'obsidian';
 import { MEMO_KINDS, cleanTags, type LinkedMemo, type MemoPassage, type SavedPassage } from './memos';
+import { shortLabel } from './connections';
 import { errorText, log } from './log';
 
 /**
@@ -124,7 +125,7 @@ export class MemoModal extends Modal {
       const item = list.createDiv({ cls: 'vc-memo-passage' });
       item.createDiv({ cls: 'vc-memo-role', text: [passage.role === 'you' ? 'You' : 'Claude', passage.written].filter(Boolean).join(' · ') });
       const text = passage.text.trim();
-      item.createDiv({ cls: 'vc-memo-excerpt', text: text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS - 1)}…` : text });
+      item.createDiv({ cls: 'vc-memo-excerpt', text: shortLabel(text, PREVIEW_CHARS) });
     }
 
     const problem = contentEl.createDiv({ cls: 'vc-memo-problem' });
@@ -275,7 +276,7 @@ export class ContinueMemoModal extends Modal {
       input.checked = ticked;
       const text = row.createDiv();
       text.createDiv({ cls: 'vc-memo-role', text: label });
-      if (detail) text.createDiv({ cls: 'vc-memo-excerpt', text: detail.length > PREVIEW_CHARS ? `${detail.slice(0, PREVIEW_CHARS - 1)}…` : detail });
+      if (detail) text.createDiv({ cls: 'vc-memo-excerpt', text: shortLabel(detail, PREVIEW_CHARS) });
       return input;
     };
     const why = this.parts.why ? box(contentEl, 'Why', this.parts.why) : null;
