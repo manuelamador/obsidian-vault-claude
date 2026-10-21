@@ -790,8 +790,8 @@ const KEEP_READ_BYTES = 4 * 1024 * 1024;
  * they keep in all (the latest is kept whatever its size). Parsed, a row takes several times its
  * length in memory, so this is kept to a few tens of megabytes of rows.
  */
-const READ_KEPT = 3;
-const READ_KEPT_BYTES = 48 * 1024 * 1024;
+const READ_KEPT = 5;
+const READ_KEPT_BYTES = 192 * 1024 * 1024;
 /** How many bytes at each end of what was read must be unchanged for it to be reused. */
 const CHECK_BYTES = 1024;
 const readSoFar = new Map<string, ReadSoFar>();
