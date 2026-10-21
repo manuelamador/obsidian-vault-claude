@@ -299,6 +299,19 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           }),
       );
 
+    new Setting(containerEl)
+      .setName('Default permissions')
+      .setDesc('Permission mode for new Claude chats; each chat can change it from the menu under the input. Codex chats have their own, under Codex.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(permissionModes(settings.allowBypass))
+          .setValue(settings.permissionMode)
+          .onChange(async (value) => {
+            settings.permissionMode = value as PermissionMode;
+            await this.plugin.saveSettings();
+          }),
+      );
+
     new Setting(containerEl).setName('Codex').setHeading();
 
     const codex = findCodex('');
@@ -533,25 +546,12 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(containerEl).setName('Permissions').setHeading();
-
-    new Setting(containerEl)
-      .setName('Default permission mode')
-      .setDesc('Mode for new chats. It can be changed per chat from the panel header.')
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions(permissionModes(settings.allowBypass))
-          .setValue(settings.permissionMode)
-          .onChange(async (value) => {
-            settings.permissionMode = value as PermissionMode;
-            await this.plugin.saveSettings();
-          }),
-      );
+    new Setting(containerEl).setName('Permissions for both engines').setHeading();
 
     new Setting(containerEl)
       .setName('Offer bypass permissions')
       .setDesc(
-        'Adds "Bypass permissions" to the mode menus: Claude runs every tool without asking. The deny rules below still apply. Takes effect in new chats. It also adds "Full access" for Codex chats, where they do not.',
+        'Adds the most permissive choice to the mode menus. Claude chats: "Bypass permissions", every tool without asking; the deny rules below still apply. Codex chats: "Full access", anything anywhere without asking; the deny rules do not apply there. Takes effect in new chats.',
       )
       .addToggle((toggle) =>
         toggle.setValue(settings.allowBypass).onChange(async (value) => {
@@ -567,7 +567,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Deny rules')
       .setDesc(
-        "One rule per line in Claude Code's permission-rule syntax, e.g. Bash(git reset:*). Matching actions are refused in every mode, bypass included. Lines starting with # are ignored. Takes effect in new chats.",
+        "One rule per line in Claude Code's permission-rule syntax, e.g. Bash(git reset:*); lines starting with # are ignored. Claude chats: any matching tool call is refused, in every mode, bypass included. Codex chats: only Bash(…) rules count, refusing a matching command Codex asks to run (not in Full access, where it asks nothing). Takes effect in new chats.",
       )
       .addTextArea((area) => {
         area.setValue(settings.denyRules).onChange(async (value) => {

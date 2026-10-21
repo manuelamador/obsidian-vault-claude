@@ -446,7 +446,7 @@ Messages and context are sent through Claude Code or Codex. If Zotero integratio
 | Scratch chat starts over after | Idle timeout from one hour to one week; default 24 hours |
 | Scratch chat model | Engine and model; defaults to the small-job choice |
 | **Permissions** | |
-| Default permission mode | Starting mode for Claude chats |
+| Default permissions | Starting permission mode for Claude chats (Claude Code section) |
 | Offer bypass permissions | Show Claude Bypass and Codex Full access options |
 | Deny rules | Claude tool restrictions; in Codex, restrictions on commands sent to the panel for approval |
 | **Zotero** | |
