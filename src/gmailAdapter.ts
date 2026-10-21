@@ -1,8 +1,9 @@
 // Codex's Gmail connector uses Gmail API fields and MCP result envelopes. Convert them to the
 // existing card parser's input; Claude's connector keeps its original format. No Gmail requests here.
+import { dropScripts, mimeFiles, stringValue as string, stripTags } from './emailText';
+
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
-const string = (value: unknown): string => typeof value === 'string' ? value : '';
 
 /**
  * Only explicit Gmail connector names, never a suffix on an unrelated tool. The app-server names the
@@ -50,9 +51,8 @@ export function gmailBody(payload: unknown, depth = 0): string {
   const text = string(object(part.body).content);
   if (type === 'text/plain') return text;
   if (type !== 'text/html') return '';
-  return text.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
-    .replace(/<\s*br\s*\/?\s*>|<\/(?:p|div|li|h[1-6])\s*>/gi, '\n')
-    .replace(/<[^>]*>/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  return stripTags(dropScripts(text).replace(/<\s*br\s*\/?\s*>|<\/(?:p|div|li|h[1-6])\s*>/gi, '\n'))
+    .replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /** One Gmail API message, with absent metadata left absent rather than an ID-only empty card. */
@@ -67,14 +67,7 @@ function message(value: unknown): ObjectValue | null {
   const sender = header('from');
   const body = gmailBody(payload);
   if (subject === undefined && sender === undefined && !raw.snippet && !body) return null;
-  const attachments: ObjectValue[] = [];
-  const collect = (value: unknown, depth = 0): void => {
-    if (depth > 20) return;
-    const part = object(value);
-    if (part.filename) attachments.push({ filename: part.filename, mimeType: part.mime_type });
-    if (Array.isArray(part.parts)) part.parts.forEach(child => collect(child, depth + 1));
-  };
-  collect(payload);
+  const attachments = mimeFiles(payload).map(file => ({ filename: file.name, mimeType: file.type }));
   const time = Number(raw.internal_date);
   return {
     id: raw.id, threadId: raw.thread_id, subject, sender,

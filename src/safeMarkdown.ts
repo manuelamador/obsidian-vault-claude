@@ -123,10 +123,27 @@ function escapeHtml(text: string): string {
     targets.push(target);
     return `\u0002${targets.length - 1}\u0002`;
   });
-  return masked
-    .replace(/<!--[\s\S]*?-->/g, '')
+  return dropComments(masked)
     .replace(/<(?=[a-z/!?])[^<>]*>?/gi, (tag) => (PLAIN_TAG.test(tag) || AUTOLINK.test(tag) ? tag : `&lt;${tag.slice(1)}`))
     .replace(/\u0002(\d+)\u0002/g, (_match, index: string) => targets[Number(index)]);
+}
+
+/**
+ * `text` without its HTML comments, each `<!--` to the first `-->` after it. One never closed stays
+ * as text (escapeHtml escapes its `<`). A scan, not `/<!--[\s\S]*?-->/g`, which searches to the end
+ * again from every unclosed `<!--`.
+ */
+function dropComments(text: string): string {
+  let out = '';
+  let from = 0;
+  for (let open = text.indexOf('<!--'); open !== -1; open = text.indexOf('<!--', from)) {
+    const close = text.indexOf('-->', open + 4);
+    // No `-->` after this one, so none after any later one either.
+    if (close === -1) break;
+    out += text.slice(from, open);
+    from = close + 3;
+  }
+  return out + text.slice(from);
 }
 
 /**

@@ -1,5 +1,6 @@
 // The boundary between what the Gmail connectors return, which the sender of a message wrote or
 // chose, and what the panel opens or writes into notes. No network access.
+import { stripTags } from './emailText';
 
 /** `value` if it is a Gmail address (https, mail.google.com, no user or port), else undefined: a link from a tool result opens only there. */
 export function safeGmailUrl(value: unknown): string | undefined {
@@ -33,9 +34,7 @@ const TASK_MARKERS = /[📅⏳🛫🔁⏫🔼🔽✅➕❌⛔🆔]\uFE0F?|\^[\w-
  * and sets no date, recurrence or priority of its own.
  */
 export function plainEmailText(text: string): string {
-  return text
-    .replace(/!(?=\[)/g, '')
-    .replace(/<\/?[A-Za-z][^>]*>/g, '')
+  return stripTags(text.replace(/!(?=\[)/g, ''), true)
     .replace(TASK_MARKERS, '')
     .replace(/\s+/g, ' ')
     .trim();

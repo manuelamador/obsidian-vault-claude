@@ -1,4 +1,5 @@
 import { safeGmailUrl } from './emailSafety';
+import { mimeFiles, oneLine, stringValue as str } from './emailText';
 import { codexGmailMessages, codexGmailTool, gmailBody, gmailResult } from './gmailAdapter';
 
 // The messages in what Claude Code's Gmail tools return (a search, a thread, a message), for the
@@ -32,11 +33,16 @@ export interface EmailMessage {
   attachments?: { name: string; type: string; url?: string }[];
 }
 
-/** Where Gmail downloads all of message `id`'s attachments as one zip (its Download all), for the account `viewUrl` names. */
-export function attachmentsZipUrl(viewUrl: string, id: string): string | undefined {
+/** Gmail's `view=att` address for attachment `attid` of message `id`, for the account `viewUrl` names (its `authuser`); undefined when either is missing. */
+function attUrl(viewUrl: string, id: string, attid: string, disp: string): string | undefined {
   const account = /[?&]authuser=([^&#]+)/.exec(viewUrl)?.[1];
   if (!account || !/^[0-9a-f]+$/i.test(id)) return undefined;
-  return `https://mail.google.com/mail/?authuser=${account}&ui=2&view=att&th=${id}&attid=0&disp=zip&zw`;
+  return `https://mail.google.com/mail/?authuser=${account}&ui=2&view=att&th=${id}&attid=${attid}&disp=${disp}`;
+}
+
+/** Where Gmail downloads all of message `id`'s attachments as one zip (its Download all), for the account `viewUrl` names. */
+export function attachmentsZipUrl(viewUrl: string, id: string): string | undefined {
+  return attUrl(viewUrl, id, '0', 'zip&zw');
 }
 
 /**
@@ -44,9 +50,7 @@ export function attachmentsZipUrl(viewUrl: string, id: string): string | undefin
  * message link `viewUrl` names (its `authuser`); undefined when any of them is missing.
  */
 export function attachmentUrl(viewUrl: string, id: string, part: string): string | undefined {
-  const account = /[?&]authuser=([^&#]+)/.exec(viewUrl)?.[1];
-  if (!account || !/^[0-9a-f]+$/i.test(id) || !/^[0-9.]+$/.test(part)) return undefined;
-  return `https://mail.google.com/mail/?authuser=${account}&ui=2&view=att&th=${id}&attid=0.${part}&disp=safe`;
+  return /^[0-9.]+$/.test(part) ? attUrl(viewUrl, id, `0.${part}`, 'safe') : undefined;
 }
 
 /** A file type as a card names it: `PDF`, `Word`, `image`, or the type's last part. */
@@ -73,10 +77,10 @@ export function readsThread(name: string): boolean {
   return (readsMail(name) && /__get_thread$/i.test(name)) || codexGmailTool(name) === 'read_email_thread';
 }
 
-/** A recipients field as the tool gave it: a list of addresses, or one string of them. */
+/** A recipients field as the tool gave it: a list of addresses, or one string of them; each on one line (see message). */
 function addresses(value: unknown): string[] {
-  if (typeof value === 'string') return value ? [value] : [];
-  return Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string' && each !== '') : [];
+  const list = typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : [];
+  return list.map(oneLine).filter(Boolean);
 }
 
 interface RawMessage {
@@ -94,8 +98,6 @@ interface RawMessage {
   threadId?: unknown;
   attachments?: unknown;
 }
-
-const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' };
 
@@ -121,16 +123,18 @@ function message(raw: RawMessage, count?: number): EmailMessage {
   const attachments = (Array.isArray(raw.attachments) ? raw.attachments : []).flatMap((each: { filename?: unknown; mimeType?: unknown; partId?: unknown }) => {
     if (!each || typeof each.filename !== 'string' || !each.filename) return [];
     const link = attachmentUrl(url, str(raw.id), str(each.partId));
-    return [{ name: decodeEntities(each.filename), type: str(each.mimeType), ...(link ? { url: link } : {}) }];
+    return [{ name: oneLine(decodeEntities(each.filename)), type: str(each.mimeType), ...(link ? { url: link } : {}) }];
   });
+  // Its one-line fields stay on one line, whatever their escapes spell (`&#10;`): a saved note quotes
+  // each on a line of its own, and a line break in one would end the quote, leaving a live line such as a task.
   return {
-    sender: decodeEntities(str(raw.sender)) || 'Unknown sender',
+    sender: oneLine(decodeEntities(str(raw.sender))) || 'Unknown sender',
     to: addresses(raw.toRecipients),
     ...(addresses(raw.ccRecipients).length > 0 ? { cc: addresses(raw.ccRecipients) } : {}),
     ...(addresses(raw.bccRecipients).length > 0 ? { bcc: addresses(raw.bccRecipients) } : {}),
     // A search asked for metadata only carries no subject at all: left empty rather than shown as
     // "(no subject)", which would say the message has none.
-    subject: raw.subject === undefined ? '' : decodeEntities(str(raw.subject)) || '(no subject)',
+    subject: raw.subject === undefined ? '' : oneLine(decodeEntities(str(raw.subject))) || '(no subject)',
     time: Date.parse(str(raw.date)),
     text: decodeEntities(str(raw.snippet)) || body.replace(/\s+/g, ' '),
     unread: labels.includes('UNREAD'),
@@ -205,14 +209,7 @@ function draftAttachments(input: Record<string, unknown>): { name: string; type:
     }
   }
   // Codex's: MIME parts of its payload that have a filename, however deep.
-  const walk = (part: unknown, depth: number): void => {
-    if (depth > 20 || !part || typeof part !== 'object') return;
-    const { filename, mime_type: type, parts } = part as { filename?: unknown; mime_type?: unknown; parts?: unknown };
-    if (typeof filename === 'string' && filename) found.push({ name: filename, type: typeof type === 'string' ? type : '' });
-    if (Array.isArray(parts)) for (const child of parts) walk(child, depth + 1);
-  };
-  walk(input.payload, 0);
-  return found;
+  return [...found, ...mimeFiles(input.payload)];
 }
 
 /** The Gmail tools that end a draft: sending it by its id, or deleting it. */

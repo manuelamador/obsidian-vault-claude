@@ -4,6 +4,7 @@
 // away; an opened thread shows its messages framed together, in place of its card in the search.
 import { setIcon } from 'obsidian';
 import { inertEmailText, safeGmailUrl } from './emailSafety';
+import { cut, oneLine } from './emailText';
 import { formatDate } from './history';
 import { attachmentKind, type EmailDraft, type EmailMessage } from './emailMessages';
 
@@ -51,13 +52,14 @@ export function emailMarkdown(message: EmailMessage): string {
   if (message.attachments) head.push(`Attachments: ${message.attachments.map((each) => { const link = safeGmailUrl(each.url); const name = inertEmailText(each.name); return `${link ? `[${name}](${link})` : name} (${attachmentKind(each.type)})`; }).join(', ')}`);
   if (url) head.push(`[Open in Gmail](${url})`);
   // Its text with images and HTML made inert: the note renders nothing from the sender's server.
-  return [...head, '', ...inertEmailText(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
+  // Each head entry a single quoted line, so no line break in a field can end the quote early.
+  return [...head.map(oneLine), '', ...inertEmailText(message.body ?? message.text).split('\n')].map((line) => (line ? `> ${line}` : '>')).join('\n');
 }
 
 /** A thread's messages as one note: its subject, then each message quoted (see emailMarkdown), oldest first. */
 export function threadMarkdown(messages: EmailMessage[]): string {
   const subject = messages[0]?.subject || '(no subject)';
-  return [`# ${inertEmailText(subject)}`, ...messages.map((message) => emailMarkdown(message))].join('\n\n');
+  return [`# ${inertEmailText(oneLine(subject))}`, ...messages.map((message) => emailMarkdown(message))].join('\n\n');
 }
 
 /** The card for `message` at the end of `list`; `subject`: whether it shows the subject (a thread's header shows it once). */
@@ -73,7 +75,7 @@ function drawCard(list: HTMLElement, message: EmailMessage, actions: EmailCardAc
   const recipients = recipientsLine(message.to, message.cc ?? [], message.bcc ?? []);
   if (recipients) card.createDiv({ cls: 'vc-email-recipients', text: recipients });
   if (subject && message.subject) card.createDiv({ cls: 'vc-email-subject', text: message.subject });
-  const text = message.text.length > CARD_TEXT_CHARS ? `${message.text.slice(0, CARD_TEXT_CHARS)}…` : message.text;
+  const text = cut(message.text, CARD_TEXT_CHARS);
   const textEl = text ? card.createDiv({ cls: 'vc-email-text', text }) : null;
   // Its attachments by name and type, images (often a signature's) folded into a count; opened in Gmail.
   if (message.attachments) {
@@ -222,7 +224,7 @@ function drawDraft(card: HTMLElement, draft: EmailDraft): void {
   if (draft.subject) card.createDiv({ cls: 'vc-email-subject', text: draft.subject });
   if (draft.body) {
     const body = draft.body;
-    const short = body.length > CARD_TEXT_CHARS ? `${body.slice(0, CARD_TEXT_CHARS)}…` : body;
+    const short = cut(body, CARD_TEXT_CHARS);
     const textEl = card.createDiv({ cls: 'vc-email-text', text: short });
     if (short !== body || body.includes('\n')) {
       card.addClass('is-expandable');
