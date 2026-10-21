@@ -955,10 +955,16 @@ export class ChatView extends ItemView {
     let hideTimer: number | null = null;
     // The row's empty middle, rested on with no card open, brings out the bar of your messages (see PromptNav.peek).
     let peekTimer: number | null = null;
-    const unpeekSoon = () => {
+    let unpeekTimer: number | null = null;
+    const stopPeekTimers = () => {
       if (peekTimer !== null) window.clearTimeout(peekTimer);
-      peekTimer = window.setTimeout(() => {
-        peekTimer = null;
+      if (unpeekTimer !== null) window.clearTimeout(unpeekTimer);
+      peekTimer = unpeekTimer = null;
+    };
+    const unpeekSoon = () => {
+      stopPeekTimers();
+      unpeekTimer = window.setTimeout(() => {
+        unpeekTimer = null;
         this.promptNav.peek(false);
       }, USAGE_CARD_GRACE_MS);
     };
@@ -969,7 +975,7 @@ export class ChatView extends ItemView {
     };
     this.register(() => {
       cancel();
-      if (peekTimer !== null) window.clearTimeout(peekTimer);
+      stopPeekTimers();
     });
     const show = (part: UsageCardPart) => {
       this.usagePart = part;
@@ -994,6 +1000,8 @@ export class ChatView extends ItemView {
         if (hoverTimer !== null) window.clearTimeout(hoverTimer);
         hoverTimer = null;
         // On the way to an open card: it waits; else, rested on a moment, the bar of your messages comes out.
+        if (unpeekTimer !== null) window.clearTimeout(unpeekTimer);
+        unpeekTimer = null;
         if (this.usageCard.isShown()) hideSoon();
         else if (peekTimer === null) {
           peekTimer = window.setTimeout(() => {
@@ -1015,12 +1023,20 @@ export class ChatView extends ItemView {
         show(part);
       }, 300);
     });
-    this.registerDomEvent(this.meterEl, 'mouseleave', () => {
+    this.registerDomEvent(this.meterEl, 'mouseleave', (evt) => {
       if (hoverTimer !== null) window.clearTimeout(hoverTimer);
       hoverTimer = null;
       if (this.usageCard.isShown()) hideSoon();
-      // Gone after a moment, unless the pointer has reached the bar, which keeps it.
-      unpeekSoon();
+      // Once out, the bar stays while the pointer is above the meter (the panel's header) or on the bar,
+      // which keeps it itself; it goes once the pointer is in the messages or out of the panel.
+      if (peekTimer !== null) window.clearTimeout(peekTimer);
+      peekTimer = null;
+      const to = evt.relatedTarget as Node | null;
+      if (!to || !root.contains(to) || this.messagesEl.contains(to)) unpeekSoon();
+    });
+    this.registerDomEvent(root, 'mouseleave', () => unpeekSoon());
+    this.registerDomEvent(root, 'mouseover', (evt) => {
+      if (this.promptNav.isPeeking() && unpeekTimer === null && this.messagesEl.contains(evt.target as Node)) unpeekSoon();
     });
     this.resetContextMeter();
     if (this.plugin.planUsage) this.renderPlanUsage(this.plugin.planUsage);

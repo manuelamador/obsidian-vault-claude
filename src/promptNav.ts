@@ -80,6 +80,10 @@ export class PromptNav {
     this.update();
   }
 
+  isPeeking(): boolean {
+    return this.peeking;
+  }
+
   /** Updates on the next frame, so a burst of scroll events costs one pass. */
   schedule(): void {
     if (this.frame) return;
