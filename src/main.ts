@@ -15,7 +15,7 @@ import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
 import { findCodex, listCodexModels, readCodexLimits, readCodexThread, readCodexThreadStamp, readCodexThreads, archiveCodexThread, nameCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel, type CodexThreadSummary } from './codexSession';
 import type { DoneTab } from './doneTabs';
-import { ConfirmModal, RenameModal } from './historyModal';
+import { ConfirmModal, PROJECTS_PREFIX, RenameModal } from './historyModal';
 import { transcriptNotes } from './rebuildLinks';
 import { vaultRelative } from './toolSummary';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
@@ -26,7 +26,7 @@ import { DAY_MS, OLDER_LOOKED_AT, PICK_UP_SYSTEM, SKIP_DAYS, candidateOf, leftOu
 import { PickUpModal, type ChatDetails } from './pickUpModal';
 import { renderSafely } from './safeRender';
 import { inFolder, notesByChat, suggestFolder, weightedNotes, type FolderSuggestion } from './chatFolders';
-import { CONTEXT_SYSTEM, PROJECT_TYPE, contextHash, contextPrompt, homeOf, chatDigest, noteOpening, projectNoteMarkdown, projectParts, readContext, withContext, withGenerated, type HomeReason } from './projects';
+import { CONTEXT_SYSTEM, PROJECT_NAME_PREFIX, PROJECT_TYPE, contextHash, contextPrompt, homeOf, chatDigest, noteOpening, projectNoteMarkdown, projectParts, readContext, withContext, withGenerated, type HomeReason } from './projects';
 import { ChooseFolderModal, ContextModal, CreateProjectModal, type FolderSource } from './projectModals';
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
@@ -725,6 +725,11 @@ export default class VaultClaudePlugin extends Plugin {
       },
     });
     this.addCommand({ id: 'write-project-contexts', name: 'Write every project’s context anew', callback: () => this.writeAllContexts() });
+    this.addCommand({
+      id: 'open-project',
+      name: 'Open project…',
+      callback: async () => (await this.activateView())?.openHistory(false, PROJECTS_PREFIX),
+    });
     this.addCommand({ id: 'create-project', name: 'Create project…', callback: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId() }) });
     this.addCommand({ id: 'rebuild-connections', name: 'Rebuild connections from chat files', callback: () => this.confirmRebuildConnections() });
     this.addCommand({
@@ -3391,12 +3396,14 @@ export default class VaultClaudePlugin extends Plugin {
 
   /**
    * Makes `file` chat `id`'s project, added by hand; null takes it out of its project, by hand, after
-   * which its notes do not give it one. A chat has at most one project.
+   * which its notes do not give it one. A chat has at most one project. `keepSent`: what went with the
+   * chat stays marked as gone, for a new chat joining the project it was started in, whose first
+   * message took its context already.
    */
-  async setHomeProject(id: string, file: TFile | null): Promise<void> {
+  async setHomeProject(id: string, file: TFile | null, keepSent = false): Promise<void> {
     // One at a time for a chat: two at once would each read the other's project as not yet listing it, and leave it in both.
     const before = this.homeChanges.get(id) ?? Promise.resolve();
-    const change = before.catch(() => undefined).then(() => this.setHomeProjectNow(id, file));
+    const change = before.catch(() => undefined).then(() => this.setHomeProjectNow(id, file, keepSent));
     this.homeChanges.set(id, change);
     try {
       await change;
@@ -3408,7 +3415,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** Changes of chats' projects under way, by chat (see setHomeProject). */
   private readonly homeChanges = new Map<string, Promise<void>>();
 
-  private async setHomeProjectNow(id: string, file: TFile | null): Promise<void> {
+  private async setHomeProjectNow(id: string, file: TFile | null, keepSent: boolean): Promise<void> {
     for (const project of this.projectNotes()) {
       const isHome = project === file;
       const listed = this.projectAdded(project).includes(id);
@@ -3421,7 +3428,7 @@ export default class VaultClaudePlugin extends Plugin {
     }
     // A new home's context (with its enclosing projects' Instructions) goes with the chat's next message, however it was chosen.
     const state = this.projectState(id);
-    this.setProjectState(id, { ...state, declined: file === null, sent: file ? state.sent?.filter((key) => key !== file.path && !key.startsWith('parent:')) : state.sent });
+    this.setProjectState(id, { ...state, declined: file === null, sent: file && !keepSent ? state.sent?.filter((key) => key !== file.path && !key.startsWith('parent:')) : state.sent });
     this.homesChanged();
     this.projectsChanged();
   }
@@ -3542,7 +3549,7 @@ export default class VaultClaudePlugin extends Plugin {
       },
       nameProblem: (name) => this.projectNameProblem(name),
       defaultName: (folder) => {
-        const base = `Claude Project — ${folder.slice(folder.lastIndexOf('/') + 1)}`;
+        const base = `${PROJECT_NAME_PREFIX}${folder.slice(folder.lastIndexOf('/') + 1)}`;
         let name = base;
         for (let n = 2; this.projectNameProblem(name) !== null; n++) name = `${base} ${n}`;
         return name;

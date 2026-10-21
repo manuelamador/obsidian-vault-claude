@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { bubbleOf } from '../src/chatText';
 import { stripContext } from '../src/history';
-import { CONTEXT_MAX_CHARS, contextBlock, contextHash, contextPrompt, homeOf, linkedChatsBlock, type ContextPart, noteOpening, projectContextBlock, projectNoteMarkdown, projectParts, readContext, withContext, withGenerated } from '../src/projects';
+import { CONTEXT_MAX_CHARS, contextBlock, contextHash, contextPrompt, homeOf, linkedChatsBlock, type ContextPart, noteOpening, projectContextBlock, projectNoteMarkdown, projectParts, projectView, readContext, readProjectQuery, withContext, withGenerated } from '../src/projects';
 import { prompt } from './transcript';
 
 const note = projectNoteMarkdown({ name: 'Tariffs', folder: 'Research/Tariffs', added: ['a', 'b'], date: '2026-10-06' });
@@ -139,4 +139,34 @@ test('what goes with a message stays under the hook limit, the digests cut to sh
   // Too many to share the room: the digests wait, and are not counted as gone.
   const many: ContextPart[] = [parts[0], ...Array.from({ length: 40 }, (_, i) => ({ key: `chat:${i}`, chat: { id: `${i}`, title: `C${i}`, digest: 'z'.repeat(1000) } }))];
   assert.deepEqual(contextBlock(many).keys, ['P.md']);
+});
+
+test('a projects query: the project gone into up to the first slash, then words; before a slash, words only', () => {
+  assert.deepEqual(readProjectQuery(''), { project: null, words: [] });
+  assert.deepEqual(readProjectQuery('Tar  Wars'), { project: null, words: ['tar', 'wars'] });
+  assert.deepEqual(readProjectQuery('Tariff Wars/'), { project: 'Tariff Wars', words: [] });
+  assert.deepEqual(readProjectQuery('Tariff Wars/ Draft  ONE'), { project: 'Tariff Wars', words: ['draft', 'one'] });
+});
+
+test('the projects view: each with its chats newest first; the most recently used project first, then by name', () => {
+  const projects = [
+    { path: 'P/Swaps.md', name: 'Swaps', folder: 'Research/Swaps' },
+    { path: 'P/Banks.md', name: 'Banks', folder: 'Research/Banks' },
+    { path: 'P/Tariffs.md', name: 'Tariffs', folder: 'Research/Tariffs' },
+    { path: 'P/Aid.md', name: 'Aid', folder: 'Research/Aid' },
+  ];
+  const chats = [
+    { id: 'a', updatedAt: 1 },
+    { id: 'b', updatedAt: 5 },
+    { id: 'c', updatedAt: 3 },
+    { id: 'd', updatedAt: 9 },
+  ];
+  const homes: Record<string, string> = { a: 'P/Tariffs.md', b: 'P/Tariffs.md', c: 'P/Swaps.md', d: 'P/Gone.md' };
+  const rows = projectView(projects, chats, (id) => homes[id] ?? null, []);
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.chats.join(), row.latest]),
+    [['Tariffs', 'b,a', 5], ['Swaps', 'c', 3], ['Aid', '', 0], ['Banks', '', 0]],
+  );
+  assert.deepEqual(projectView(projects, chats, (id) => homes[id] ?? null, ['wa']).map((row) => row.name), ['Swaps']);
+  assert.deepEqual(projectView(projects, chats, (id) => homes[id] ?? null, ['ta', 'ff']).map((row) => row.name), ['Tariffs']);
 });

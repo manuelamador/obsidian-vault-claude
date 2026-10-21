@@ -293,6 +293,7 @@ The plugin reads chats and memos locally. It sends short excerpts to the selecte
   <img src="docs/history-button.png" width="265" alt="The clock button for opening chat history.">
 
 - Press **Tab** in history to browse by note. Search by note name or folder, then add words to filter chat titles, for example `with:solow diagram`. ⌘↵ opens the note.
+- Press **Tab** again to browse by folder (`in:`), then by project (`project:`). Choosing a project opens its note and lists its chats, newest first, under **New chat in this project** and **New note in** its folder; ⌫ goes back to the projects. **Open project…** opens history on the projects.
 - A grey ○ means open or idle in the background. An accent ● marks activity, pending input, background tasks or an unseen reply. No mark means the chat is closed.
 - History is reconstructed from Claude session files and recorded Codex threads. **Rebuild chat list from sessions** restores missing records and refreshes titles that still match an initial prompt. It also runs automatically after an update. Chat records, settings and their backups are described under **Your data**.
 - **History includes all vault sessions** also lists Claude sessions started in a terminal or desktop app. They appear in italics. Continuing one creates a copy so two programs do not write the same session. History groups the copies and offers the most recent one. Codex history lists chats started by the panel.
@@ -476,7 +477,7 @@ Use Obsidian's command palette and search for **Vault Claude**. Commands include
 - **Chats:** Open chat; New chat; New chat in a new tab; New Codex chat; Chat history; Rename chat; Branch this chat into a new tab; Save chat as note; Save chat summary as note; Run this message in a new chat, report back.
 - **Navigation:** Find in chat; Go to previous / next message you sent; List messages you sent; Focus chat input; Move chat to the main area, or back to the sidebar; Open chat in a new window.
 - **Notes and messages:** Ask Claude about selection; Edit selection with Claude; Send this note to Claude as a prompt; Suggest frontmatter updates for this note; Draft an email from this note…; Quote the selected chat text in your next message; Write this message in a note; Send the draft note.
-- **Memos and projects:** Continue from this memo; Open connections; Create project…; Write every project's context anew; Rebuild connections from chat files.
+- **Memos and projects:** Continue from this memo; Open connections; Open project…; Create project…; Write every project's context anew; Rebuild connections from chat files.
 - **Scratch and suggestions:** Open scratch chat; Clear scratch chat; Pick up where you left off; Pick up where you left off: show ignored chats again.
 - **Runtime and recovery:** Open side chat; Stop Claude; Show background tasks; Toggle fast mode; Toggle Claude Code on the phone; Toggle Codex on the phone; Rebuild chat list from sessions.
 

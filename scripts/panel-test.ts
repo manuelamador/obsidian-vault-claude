@@ -959,9 +959,12 @@ async function main(): Promise<void> {
       projectOf: () => null,
       createProject: () => undefined,
     };
-    /** Rows as ids: a chat's id (with how it is linked to the note above it), else the note's path. */
+    /** Rows as ids: a chat's id (with how it is linked to the note above it), else the note's, folder's or project's path. */
     type Row = Awaited<ReturnType<InstanceType<typeof HistoryModal>['getSuggestions']>>[number];
-    const rowIds = (rows: Row[]) => rows.map((row) => (row.kind === 'chat' ? `${row.item.id}${row.why ? ` ${row.why}` : ''}` : `${row.kind} ${row.kind === 'folder' ? row.folder.path : row.note.path}`));
+    const rowIds = (rows: Row[]) =>
+      rows.map((row) =>
+        row.kind === 'chat' ? `${row.item.id}${row.why ? ` ${row.why}` : ''}` : `${row.kind} ${row.kind === 'folder' ? row.folder.path : 'project' in row ? row.project.path : row.note.path}`,
+      );
     const modal = new HistoryModal({} as never, null, Promise.resolve(items), historyActions);
     const order = rowIds(await modal.getSuggestions('')).join(',');
     // The texts are read from the moment the history opens.
@@ -1126,9 +1129,97 @@ async function main(): Promise<void> {
         rowIds(projects).join() === 'folder Projects,folder Projects/Orchard,c5,c4,c3,c2,c1' &&
         into === 'in:Projects/Orchard/' &&
         narrowed.join() === 'folder Projects/Orchard,c5' &&
-        back === 'chat';
+        back === 'project:chat';
       console.log(`chats by folder: tab ${tabbed}; top ${top.join(' | ')}; in Projects ${rowIds(projects).join(' | ')}; into ${into}; narrowed ${narrowed.join(' | ')}; tab back ${back} -> ${foldersOk}`);
       if (!foldersOk) process.exitCode = 1;
+    }
+    // Chats by project: Tab after "in:" types "project:"; the projects, the most recently used first;
+    // Enter on one opens its note, the history staying open, and shows New chat, New note, then its
+    // chats; words after its "/" keep chats by title; ⌫ just after the "/" goes back to the projects.
+    {
+      const chats = [1, 2, 3, 4, 5].map((n) => ({ id: `c${n}`, title: `Chat ${n}`, updatedAt: n, fromPanel: true }));
+      const homes: Record<string, string> = { c1: 'P/Orchard.md', c2: 'P/Orchard.md', c4: 'P/Orchard.md', c3: 'P/Bees.md' };
+      const opened: string[] = [];
+      const started: string[] = [];
+      let focused = 0;
+      const byProject = new HistoryModal({} as never, chats, Promise.resolve(null), {
+        ...historyActions,
+        openNote: async (path: string) => void opened.push(path),
+        projects: () => [
+          { path: 'P/Bees.md', name: 'Bees', folder: 'Garden/Bees' },
+          { path: 'P/Empty.md', name: 'Empty', folder: 'Garden/Empty' },
+          { path: 'P/Orchard.md', name: 'Orchard', folder: 'Garden/Orchard' },
+        ],
+        projectPath: (item: { id: string }) => homes[item.id] ?? null,
+        newChatIn: (path: string) => void started.push(`chat ${path}`),
+        newNoteIn: (folder: string) => void started.push(`note ${folder}`),
+      });
+      const keys = byProject as unknown as {
+        scope: { keys: { key: string; run(evt: unknown): unknown }[] };
+        inputEl: { value: string; selectionStart: number; focus(): void };
+        instructions: { command: string }[];
+        closed: boolean;
+      };
+      keys.inputEl.focus = () => void (focused += 1);
+      keys.inputEl.value = 'in:Projects/ orch';
+      keys.scope.keys.find((key) => key.key === 'Tab')?.run({});
+      const tabbed = keys.inputEl.value;
+      const top = await byProject.getSuggestions('project:');
+      const projectKeys = keys.instructions.map((key) => key.command).join(' ');
+      const named = rowIds(await byProject.getSuggestions('Project:orch'));
+      const meta = (row: Row) => {
+        const el = document.createElement('div');
+        byProject.renderSuggestion(row, el);
+        return `${el.querySelector('.vc-history-title')?.textContent}: ${el.querySelector('.vc-muted')?.textContent ?? ''}`;
+      };
+      const orchardMeta = meta(top[0]);
+      byProject.selectSuggestion(top[0], {} as never);
+      const into = keys.inputEl.value;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const inside = await byProject.getSuggestions(into);
+      const insideMeta = inside.slice(0, 2).map(meta);
+      const narrowed = rowIds(await byProject.getSuggestions('project:Orchard/ 2'));
+      const empty = rowIds(await byProject.getSuggestions('project:Empty/'));
+      keys.inputEl.value = 'project:Orchard/';
+      keys.inputEl.selectionStart = keys.inputEl.value.length;
+      keys.scope.keys.find((key) => key.key === 'Backspace')?.run({});
+      const up = keys.inputEl.value;
+      const stayedOpen = !keys.closed;
+      byProject.selectSuggestion(inside[0], {} as never);
+      const newChat = new HistoryModal({} as never, chats, Promise.resolve(null), {
+        ...historyActions,
+        projects: () => [{ path: 'P/Orchard.md', name: 'Orchard', folder: 'Garden/Orchard' }],
+        projectPath: (item: { id: string }) => homes[item.id] ?? null,
+        newNoteIn: (folder: string) => void started.push(`note ${folder}`),
+      });
+      newChat.selectSuggestion((await newChat.getSuggestions('project:orchard/'))[1], {} as never);
+      // Chats in a project open as anywhere else: here, or with ⌘ in a new tab.
+      picked.length = 0;
+      stub.Keymap.isModEvent = () => true;
+      byProject.selectSuggestion(inside[2], {} as never);
+      stub.Keymap.isModEvent = () => false;
+      const projectsOk =
+        tabbed === 'project:orch' &&
+        rowIds(top).join() === 'project P/Orchard.md,project P/Bees.md,project P/Empty.md' &&
+        projectKeys === '↵ ⌫ tab' &&
+        named.join() === 'project P/Orchard.md' &&
+        orchardMeta.startsWith('Orchard: 3 chats · ') &&
+        into === 'project:Orchard/' &&
+        stayedOpen &&
+        JSON.stringify(opened) === JSON.stringify(['P/Orchard.md']) &&
+        focused >= 1 &&
+        rowIds(inside).join() === 'new-chat P/Orchard.md,new-note P/Orchard.md,c4,c2,c1' &&
+        JSON.stringify(insideMeta) === JSON.stringify(['New chat in this project: ', 'New note in Garden/Orchard: ']) &&
+        narrowed.join() === 'new-chat P/Orchard.md,new-note P/Orchard.md,c2' &&
+        empty.join() === 'new-chat P/Empty.md,new-note P/Empty.md' &&
+        up === 'project:' &&
+        keys.closed &&
+        JSON.stringify(started) === JSON.stringify(['chat P/Orchard.md', 'note Garden/Orchard']) &&
+        picked.join() === 'c4 new tab';
+      console.log(
+        `chats by project: tab ${tabbed}; top ${rowIds(top).join(' | ')} (${orchardMeta}); into ${into}, note opened ${opened}, input focused ${focused}; rows ${rowIds(inside).join(' | ')}; narrowed ${narrowed.join(' | ')}; empty ${empty.join(' | ')}; ⌫ ${up}; started ${started.join(' | ')}; picked ${picked.join()} -> ${projectsOk}`,
+      );
+      if (!projectsOk) process.exitCode = 1;
     }
     // The chats as last listed show at once; a new listing replaces them only if something changed.
     let listNow: (value: typeof items) => void = () => undefined;
@@ -4560,6 +4651,31 @@ async function main(): Promise<void> {
         copyLine.endsWith(' · a copy of a chat from outside the panel');
       console.log(`opening a copied chat: recorded ${JSON.stringify(recordedCopies)}; offered "${offerText}"; opened the latest ${openedCopy}, "${copyLine}" -> ${offerOk}`);
       if (!offerOk) process.exitCode = 1;
+    }
+
+    // A new chat started in a project (the history's projects view): its chip names the project before
+    // the chat has an id, and once it has one the chat is added to it, its context kept as gone.
+    {
+      notesOnDisk.set('Projects/Orchard.md', '');
+      const joined: string[] = [];
+      const initPlugin = plugin as unknown as Record<string, unknown>;
+      const pluginBefore = { recordChat: initPlugin.recordChat, checkClaudeVersion: initPlugin.checkClaudeVersion, setHomeProject: initPlugin.setHomeProject };
+      initPlugin.recordChat = () => undefined;
+      initPlugin.checkClaudeVersion = () => undefined;
+      initPlugin.setHomeProject = async (id: string, file: { path: string }, keepSent?: boolean) => void joined.push(`${id} ${file.path} ${keepSent}`);
+      const inProject = view as unknown as { startNewChatIn(path: string): void; onMessage(message: unknown): void; contextRow: HTMLElement; chatId: string | null; startProject: string | null };
+      inProject.startNewChatIn('Projects/Orchard.md');
+      const chip = inProject.contextRow.querySelector('.vc-project-chip');
+      const chipText = chip?.textContent ?? '';
+      const chipLabel = chip?.getAttribute('aria-label') ?? '';
+      inProject.onMessage({ type: 'system', subtype: 'init', session_id: 'in-orchard', model: 'claude-opus-5-5', tools: [], mcp_servers: [], slash_commands: [], permissionMode: 'default' });
+      const cleared = inProject.startProject === null;
+      Object.assign(initPlugin, pluginBefore);
+      view.newChat();
+      notesOnDisk.delete('Projects/Orchard.md');
+      const inProjectOk = chipText === 'Orchard' && chipLabel.startsWith('Project “Orchard”, chosen by you.') && JSON.stringify(joined) === JSON.stringify(['in-orchard Projects/Orchard.md true']) && cleared;
+      console.log(`new chat in a project: chip "${chipText}" (${chipLabel.slice(0, 40)}…); joined ${joined.join()}; cleared ${cleared} -> ${inProjectOk}`);
+      if (!inProjectOk) process.exitCode = 1;
     }
 
     // Plan mode shows: Claude Code's report of it (Claude entering it itself) switches the menu, a line

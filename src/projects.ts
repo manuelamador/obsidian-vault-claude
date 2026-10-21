@@ -106,6 +106,60 @@ export function homeOf(id: string, chat: { notes?: ReadonlyMap<string, number>; 
   return best && { key: best.project.key, why: 'notes', count: best.count };
 }
 
+/** The prefix new project notes are named with (see VaultClaudePlugin.openCreateProject). */
+export const PROJECT_NAME_PREFIX = 'Claude Project — ';
+
+/** A project's name as the history shows and searches it: its note's, without PROJECT_NAME_PREFIX, which every project would match. */
+export function projectShownName(note: { basename: string }): string {
+  return note.basename.startsWith(PROJECT_NAME_PREFIX) ? note.basename.slice(PROJECT_NAME_PREFIX.length) : note.basename;
+}
+
+/** A project as the history's projects view lists it: its note's path, its name as shown, its folder, and its chats (ids), newest first, with when the latest was used (0 for none). */
+export interface ProjectRow {
+  path: string;
+  name: string;
+  folder: string;
+  chats: string[];
+  latest: number;
+}
+
+/**
+ * The history's projects query (see PROJECTS_PREFIX), read: the project gone into, by name, up to the
+ * first `/` (a project name has none), and the words typed after it; or, before any `/`, no project and
+ * the words.
+ */
+export function readProjectQuery(rest: string): { project: string | null; words: string[] } {
+  const slash = rest.indexOf('/');
+  const project = slash === -1 ? null : rest.slice(0, slash).trim();
+  const words = rest.slice(slash + 1).toLowerCase().split(/\s+/).filter(Boolean);
+  return { project, words };
+}
+
+/**
+ * What the projects view lists: every project in `projects`, with the chats of `chats` whose home it is
+ * (`homeOf`: a chat's project note path, or null), newest first. `words` (lower case) keep the
+ * projects whose name holds them all. The project with the most recent chat first, then by name.
+ */
+export function projectView(
+  projects: { path: string; name: string; folder: string }[],
+  chats: { id: string; updatedAt: number }[],
+  homeOf: (id: string) => string | null,
+  words: string[],
+): ProjectRow[] {
+  const byProject = new Map<string, { id: string; updatedAt: number }[]>();
+  for (const chat of chats) {
+    const home = homeOf(chat.id);
+    if (home !== null) byProject.set(home, [...(byProject.get(home) ?? []), chat]);
+  }
+  return projects
+    .filter((project) => words.every((word) => project.name.toLowerCase().includes(word)))
+    .map((project) => {
+      const own = [...(byProject.get(project.path) ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
+      return { ...project, chats: own.map((chat) => chat.id), latest: own[0]?.updatedAt ?? 0 };
+    })
+    .sort((a, b) => b.latest - a.latest || a.name.localeCompare(b.name));
+}
+
 /**
  * Where section `heading`'s generated part lies: from its BEGIN marker, inside the section, to the END
  * after it, past any headings of the text between them (a Context may have some). Null when it has

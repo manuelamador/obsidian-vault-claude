@@ -68,7 +68,7 @@ import { LOG_PATH, errorText, log } from './log';
 import { join as joinPath } from 'path';
 import type VaultClaudePlugin from './main';
 import type { ChatDraft, ChatProjectState, MailThread } from './main';
-import { contextHash, type ContextPart } from './projects';
+import { contextHash, projectShownName, type ContextPart } from './projects';
 import { ChatPicker, LinksList } from './linksList';
 import { ProjectPicker } from './projectModals';
 import { openableHref } from './safeMarkdown';
@@ -406,11 +406,16 @@ interface BackgroundChat {
   start: ChatStart | null;
 }
 
-/** What a new chat chose before it has an id: its project state, with the note it starts from, and the chats and notes its first message linked. */
+/**
+ * What a new chat chose before it has an id: its project state, with the note it starts from, the
+ * chats and notes its first message linked, and the project it was started in (its note's path; see
+ * ChatView.startProject).
+ */
 interface ChatStart {
   state: ChatProjectState;
   chats: string[];
   notes: string[];
+  project: string | null;
 }
 
 /**
@@ -625,6 +630,8 @@ export class ChatView extends ItemView {
   private contextKey = '';
   /** A chat not started yet: what it chose to send (see ChatProjectState), which goes to the plugin's record once it has an id. */
   private projectLocal: ChatProjectState = {};
+  /** A chat not started yet, started in a project (from the history's projects view): its note's path, the chat added to it once it has an id. */
+  private startProject: string | null = null;
   private noteChatsEl!: HTMLElement;
   /** The line above the input naming the email threads the note's chats read (see updateNoteChats). */
   private noteMailEl!: HTMLElement;
@@ -1758,6 +1765,7 @@ export class ChatView extends ItemView {
     this.draftPath = composing && this.app.vault.getAbstractFileByPath(composing) instanceof TFile ? composing : null;
     this.updateDraftLine();
     this.projectLocal = {};
+    this.startProject = null;
     this.updateContextChip();
   }
 
@@ -2135,10 +2143,12 @@ export class ChatView extends ItemView {
     return this.resumeId ? { id: this.resumeId, lookOnly: true } : null;
   }
 
-  /** The chat's home project: its own once started, else its attached note's; none for the scratch chat. */
+  /** The chat's home project: its own once started, else the one it was started in, else its attached note's; none for the scratch chat. */
   private homeProjectFile(): TFile | null {
     if (this.scratch) return null;
     if (this.chatId) return this.plugin.homeProject(this.chatId);
+    const chosen = this.startProject ? this.app.vault.getAbstractFileByPath(this.startProject) : null;
+    if (chosen instanceof TFile) return chosen;
     return this.attachedNote ? this.plugin.projectForPath(this.attachedNote) : null;
   }
 
@@ -2146,14 +2156,35 @@ export class ChatView extends ItemView {
   private startOf(): ChatStart {
     const state: ChatProjectState = { ...this.projectLocal };
     if (this.attachedNote) state.start = this.attachedNote;
-    return { state, chats: [...this.chatsToLink], notes: [...this.notesToLink] };
+    return { state, chats: [...this.chatsToLink], notes: [...this.notesToLink], project: this.startProject };
   }
 
   /** Keeps what a chat sent to the background chose before its id came, now that it has id `id`. */
   private adoptStart(id: string, start: ChatStart): void {
     this.plugin.adoptProjectState(id, start.state);
+    this.joinStartProject(id, start.project);
     for (const path of start.notes) this.plugin.linkNoteRef(path, id);
     if (start.chats.length > 0) this.plugin.linkChats(id, start.chats);
+  }
+
+  /**
+   * Adds new chat `id` to project `path`, the one it was started in (see startProject), by hand, as
+   * the project chip's choice does; what its first message took of the project's context stays marked
+   * as gone.
+   */
+  private joinStartProject(id: string, path: string | null): void {
+    const file = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    if (file instanceof TFile) void this.plugin.setHomeProject(id, file, true);
+  }
+
+  /** New chat, as startNewChat starts one, in project `path` (its note's path): its Context goes with the first message, and the chat joins the project once it has an id. */
+  startNewChatIn(path: string): void {
+    this.startNewChat();
+    if (this.scratch) return;
+    this.startProject = path;
+    this.contextKey = '';
+    this.updateContextChip();
+    this.focusInput();
   }
 
   private projectStateNow(): ChatProjectState {
@@ -2362,7 +2393,7 @@ export class ChatView extends ItemView {
     const home = this.homeProjectFile();
     if (!home) return '';
     const reason = this.chatId ? this.plugin.homeReason(this.chatId)?.reason : null;
-    if (!this.chatId) return `Project “${home.basename}”: the attached note is in its folder.`;
+    if (!this.chatId) return this.startProject === home.path ? `Project “${home.basename}”, chosen by you.` : `Project “${home.basename}”: the attached note is in its folder.`;
     if (!reason || reason.why === 'added') return `Project “${home.basename}”, chosen by you.`;
     if (reason.why === 'start') return `Project “${home.basename}”: it started with ${reason.note}, in its folder.`;
     return `Project “${home.basename}”: ${reason.count} of the notes it worked on are in its folder.`;
@@ -3280,8 +3311,11 @@ export class ChatView extends ItemView {
 
   // ---- History -----------------------------------------------------------
 
-  /** The history window; with `linking`, choosing a chat links this one to it rather than opening it (the links' Link a chat…). */
-  async openHistory(linking = false): Promise<void> {
+  /**
+   * The history window; with `linking`, choosing a chat links this one to it rather than opening it
+   * (the links' Link a chat…); `query`, typed in it to begin with (`project:` for Open project…).
+   */
+  async openHistory(linking = false, query = ''): Promise<void> {
     const root = this.plugin.vaultRoot();
     if (!root) return;
     // The chats as last listed show at once, and those listed now replace them if anything changed;
@@ -3321,11 +3355,17 @@ export class ChatView extends ItemView {
         stopTasks: (item) => void this.plugin.stopChatTasks(item.id),
         close: (item) => this.plugin.closeRunningChat(item.id),
         noteLinks: () => ({ changed: this.plugin.noteChats, sent: this.plugin.noteRefs, mentioned: this.plugin.noteMentions }),
-        openNote: (path) => void this.openNoteLink(path, '', 'tab'),
+        openNote: (path) => this.openNoteLink(path, '', 'tab'),
         projectOf: (folder) => this.plugin.projectOfFolder(folder)?.path ?? null,
-        // Without the prefix new projects are named with, which every one would match.
-        projectName: (item) => this.plugin.homeProject(item.id)?.basename.replace(/^Claude Project — /, '') ?? null,
+        projectName: (item) => {
+          const file = this.plugin.homeProject(item.id);
+          return file ? projectShownName(file) : null;
+        },
         createProject: (folder) => void this.plugin.openCreateProject({ folder }),
+        projects: () => this.plugin.projectNotes().map((file) => ({ path: file.path, name: projectShownName(file), folder: this.plugin.projectFolder(file) })),
+        projectPath: (item) => this.plugin.homeProject(item.id)?.path ?? null,
+        newChatIn: (path) => this.startNewChatIn(path),
+        newNoteIn: (folder) => void this.newNoteIn(folder),
         // Choosing a row links it already, when linking: no Link button on the rows too.
         link: this.scratch || linking ? undefined : (item) => this.linkChatHere(item.id),
         isLinked: (item) => item.id === this.chatId || this.linksTo().some((link) => link.id === item.id),
@@ -3333,6 +3373,25 @@ export class ChatView extends ItemView {
     );
     if (linking) modal.setPlaceholder(`Link “${this.chatName ?? 'this chat'}” to… (search titles, projects, prompts and replies)`);
     modal.open();
+    if (query) {
+      modal.inputEl.value = query;
+      modal.inputEl.dispatchEvent(new Event('input'));
+    }
+  }
+
+  /** Makes a note named Untitled (Untitled 1, 2… when taken) in folder `folder`, empty, as Obsidian's New note does, and opens it. */
+  private async newNoteIn(folder: string): Promise<void> {
+    try {
+      const pathFor = (n: number) => normalizePath(`${folder ? `${folder}/` : ''}Untitled${n === 0 ? '' : ` ${n}`}.md`);
+      let n = 0;
+      while (this.app.vault.getAbstractFileByPath(pathFor(n))) n += 1;
+      if (folder && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+      const file = await this.app.vault.create(pathFor(n), '');
+      await this.noteLeaf().openFile(file);
+    } catch (error) {
+      log('making a note in a project folder failed', error);
+      new Notice(`Could not make the note: ${errorText(error)}`);
+    }
   }
 
   /** Opens a chat picked in the history, here or in a new Claude tab beside this one. */
@@ -6949,7 +7008,7 @@ export class ChatView extends ItemView {
             // What its projects sent and its choices, kept under its id (a fork keeps its original's); a
             // new chat's project follows from its attached note.
             const started = this.chatId === null;
-            const start: ChatStart = started ? this.startOf() : { state: { ...this.projectStateNow() }, chats: [], notes: [] };
+            const start: ChatStart = started ? this.startOf() : { state: { ...this.projectStateNow() }, chats: [], notes: [], project: null };
             this.chatId = message.session_id;
             if (this.scratch) {
               this.plugin.setScratch(message.session_id, this.engine === 'codex' ? 'codex' : undefined);
@@ -6961,8 +7020,10 @@ export class ChatView extends ItemView {
               if (this.reportTo) this.plugin.expectReport(message.session_id, this.reportTo);
               this.reportTo = null;
               this.plugin.adoptProjectState(message.session_id, start.state);
+              this.joinStartProject(message.session_id, start.project);
             }
             this.projectLocal = {};
+            this.startProject = null;
             // A new chat has connections now: the Connections pane shows it.
             if (started) this.plugin.chatShown(this);
           }

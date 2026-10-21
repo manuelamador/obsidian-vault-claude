@@ -3,6 +3,7 @@ import { eachInParallel, formatDate, type HistoryItem } from './history';
 import { folderUp, folderView, notesByChat, readFolderQuery, type FolderRow } from './chatFolders';
 import { NOTE_CHAT_ICONS, chatsByNote, type NoteChats, type NoteGroup } from './noteChats';
 import { escapeRegExp } from './pathFilter';
+import { projectView, readProjectQuery, type ProjectRow } from './projects';
 
 export interface HistoryActions {
   /** Opens a chat: here, or, with `newTab`, in a new Claude tab. */
@@ -20,14 +21,22 @@ export interface HistoryActions {
   close?(item: HistoryItem): Promise<boolean>;
   /** The notes chats are linked to: those that changed each note, those it was sent to, and those that mentioned it. */
   noteLinks(): { changed: NoteChats; sent: NoteChats; mentioned: NoteChats };
-  /** Opens a note. */
-  openNote(path: string): void;
+  /** Opens a note; resolves, where it can tell, once it is open. */
+  openNote(path: string): void | Promise<void>;
   /** The project folder `folder` is (its note's path), if it is one. */
   projectOf(folder: string): string | null;
   /** The name of chat `item`'s project, as shown on its row and searched, if it has one. */
   projectName?(item: HistoryItem): string | null;
   /** Create project, with folder `folder` chosen. */
   createProject(folder: string): void;
+  /** Every project, for the projects view (see PROJECTS_PREFIX): its note's path, its name as projectName shows it, and its folder. */
+  projects?(): { path: string; name: string; folder: string }[];
+  /** The path of chat `item`'s project note, if it has one. */
+  projectPath?(item: HistoryItem): string | null;
+  /** Starts a new chat in the panel, in project `path` (its note's path) from the start. */
+  newChatIn?(path: string): void;
+  /** Makes a new untitled note in folder `folder` and opens it. */
+  newNoteIn?(folder: string): void;
   /** Links the chat on screen to `item`; absent where it cannot be (the scratch chat). */
   link?(item: HistoryItem): void;
   /** Whether `item` is the chat on screen, or one it links to already: not offered to link. */
@@ -46,15 +55,21 @@ type Match =
     }
   | { kind: 'note' | 'more'; note: NoteGroup }
   /** `here`: the folder gone into, first under it. */
-  | { kind: 'folder'; folder: FolderRow; here?: boolean };
+  | { kind: 'folder'; folder: FolderRow; here?: boolean }
+  /** In the projects view: a project; or, first under a project gone into, a new chat or a new note in it. */
+  | { kind: 'project'; project: ProjectRow }
+  | { kind: 'new-chat'; project: ProjectRow }
+  | { kind: 'new-note'; project: ProjectRow };
 
-/** The history's views: all chats, chats by note, chats by folder. */
-type HistoryView = 'chats' | 'notes' | 'folders';
+/** The history's views: all chats, chats by note, chats by folder, chats by project. */
+type HistoryView = 'chats' | 'notes' | 'folders' | 'projects';
 
 /** A query that starts with this lists notes with their chats beneath them, not chats; Tab types it or takes it away. */
 const NOTES_PREFIX = 'with:';
 /** A query that starts with this lists folders, and the chats in the folder gone into (see readFolderQuery). */
 const FOLDERS_PREFIX = 'in:';
+/** A query that starts with this lists projects, and the chats of the project gone into (see readProjectQuery). */
+export const PROJECTS_PREFIX = 'project:';
 /** The chats shown under a note before "+N more". */
 const NOTE_CHATS_SHOWN = 3;
 /** The most rows the history draws (Obsidian's own limit is 100). */
@@ -135,11 +150,13 @@ export class HistoryModal extends SuggestModal<Match> {
       (this as unknown as { chooser?: { useSelectedItem?(evt: KeyboardEvent): void } }).chooser?.useSelectedItem?.(evt);
       return false;
     });
-    // In the folders view, ⌫ just after a folder's `/` goes up a folder.
+    // In the folders view, ⌫ just after a folder's `/` goes up a folder; in the projects view, just
+    // after a project's, back to the projects.
     this.scope.register([], 'Backspace', () => {
       const query = this.inputEl.value;
-      if (viewOf(query) !== 'folders' || !query.endsWith('/') || this.inputEl.selectionStart !== query.length) return true;
-      this.inputEl.value = `${FOLDERS_PREFIX}${folderUp(query.slice(FOLDERS_PREFIX.length))}`;
+      const view = viewOf(query);
+      if ((view !== 'folders' && view !== 'projects') || !query.endsWith('/') || this.inputEl.selectionStart !== query.length) return true;
+      this.inputEl.value = view === 'folders' ? `${FOLDERS_PREFIX}${folderUp(query.slice(FOLDERS_PREFIX.length))}` : PROJECTS_PREFIX;
       this.refresh();
       return false;
     });
@@ -180,6 +197,7 @@ export class HistoryModal extends SuggestModal<Match> {
     this.showKeys(view);
     if (view === 'notes') return this.noteRows(query.slice(NOTES_PREFIX.length));
     if (view === 'folders') return this.folderRows(query.slice(FOLDERS_PREFIX.length));
+    if (view === 'projects') return this.projectRows(query.slice(PROJECTS_PREFIX.length));
     const needle = query.trim().toLowerCase();
     const ordered = [...this.items].sort(
       (a, b) =>
@@ -218,20 +236,25 @@ export class HistoryModal extends SuggestModal<Match> {
     return [...byTitle, ...byContent];
   }
 
-  /** Goes to the next view, chats → by note → by folder: types its prefix before the query in place of the last's (a folder gone into is left). */
+  /**
+   * Goes to the next view, chats → by note → by folder → by project: types its prefix before the query
+   * in place of the last's (a folder or project gone into is left).
+   */
   private switchView(): void {
     const query = this.inputEl.value;
     const view = viewOf(query);
     if (view === 'chats') this.inputEl.value = `${NOTES_PREFIX}${query}`;
     else if (view === 'notes') this.inputEl.value = `${FOLDERS_PREFIX}${query.slice(NOTES_PREFIX.length).trimStart()}`;
-    else this.inputEl.value = readFolderQuery(query.slice(FOLDERS_PREFIX.length)).words.join(' ');
+    else if (view === 'folders') this.inputEl.value = `${PROJECTS_PREFIX}${readFolderQuery(query.slice(FOLDERS_PREFIX.length)).words.join(' ')}`;
+    else this.inputEl.value = readProjectQuery(query.slice(PROJECTS_PREFIX.length)).words.join(' ');
     this.refresh();
   }
 
   /**
    * The hint line under the list: its keys for the view shown, the list of chats, chats by note
-   * (`notes`, where ⌘↵ opens a note) or chats by folder (`folders`, where ⌫ goes up a folder). The
-   * Tab hint is a button as well, which switches to the next view as Tab does.
+   * (`notes`, where ⌘↵ opens a note), chats by folder (`folders`, where ⌫ goes up a folder) or chats
+   * by project (`projects`, where ⌫ goes back to the projects). The Tab hint is a button as well,
+   * which switches to the next view as Tab does.
    */
   private showKeys(view: HistoryView): void {
     if (this.keysFor === view) return;
@@ -248,9 +271,15 @@ export class HistoryModal extends SuggestModal<Match> {
           ? [
               { command: '↵', purpose: 'open a chat, or go into a folder' },
               { command: '⌫', purpose: 'up a folder' },
-              { command: 'tab', purpose: 'all chats' },
+              { command: 'tab', purpose: 'chats by project' },
             ]
-          : [
+          : view === 'projects'
+            ? [
+                { command: '↵', purpose: "open a chat, or a project's note and chats" },
+                { command: '⌫', purpose: 'back to the projects' },
+                { command: 'tab', purpose: 'all chats' },
+              ]
+            : [
               { command: '↵', purpose: 'open' },
               { command: `${mod} ↵`, purpose: 'in a new tab' },
               { command: 'tab', purpose: 'chats by note' },
@@ -301,6 +330,29 @@ export class HistoryModal extends SuggestModal<Match> {
     return rows;
   }
 
+  /**
+   * The projects view: every project whose name holds the words, the one used most recently first (see
+   * projectView); or, in a project gone into, a new chat and a new note in it, then its chats whose
+   * titles hold the words, newest first.
+   */
+  private projectRows(rest: string): Match[] {
+    const { project, words } = readProjectQuery(rest);
+    const byId = new Map(this.items.filter((item) => !item.scratch).map((item) => [item.id, item]));
+    const projectOf = (id: string) => {
+      const item = byId.get(id);
+      return item ? (this.actions.projectPath?.(item) ?? null) : null;
+    };
+    const projects = projectView(this.actions.projects?.() ?? [], [...byId.values()], projectOf, project === null ? words : []);
+    if (project === null) return projects.map((row) => ({ kind: 'project', project: row }));
+    const here = projects.find((row) => row.name.toLowerCase() === project.toLowerCase());
+    if (!here) return [];
+    const chats = here.chats.flatMap((id) => {
+      const item = byId.get(id);
+      return item && words.every((word) => item.title.toLowerCase().includes(word)) ? [{ kind: 'chat' as const, item }] : [];
+    });
+    return [{ kind: 'new-chat', project: here }, { kind: 'new-note', project: here }, ...chats];
+  }
+
   /** Reads the texts of the listed chats not read yet, a few at a time; one reading at a time, which a second request shares. */
   private readTexts(): Promise<void> {
     this.reading ??= eachInParallel(
@@ -320,6 +372,10 @@ export class HistoryModal extends SuggestModal<Match> {
   renderSuggestion(match: Match, el: HTMLElement): void {
     if (match.kind === 'folder') {
       this.renderFolder(match, el);
+      return;
+    }
+    if (match.kind === 'project' || match.kind === 'new-chat' || match.kind === 'new-note') {
+      this.renderProject(match, el);
       return;
     }
     if (match.kind !== 'chat') {
@@ -486,6 +542,31 @@ export class HistoryModal extends SuggestModal<Match> {
     }
   }
 
+  /**
+   * A project in the projects view, with how many chats it has and when the latest was used; or, first
+   * under a project gone into, a new chat or a new note in it.
+   */
+  private renderProject(match: Extract<Match, { kind: 'project' | 'new-chat' | 'new-note' }>, el: HTMLElement): void {
+    const { project } = match;
+    el.addClass('vc-history-item', 'vc-history-note');
+    const body = el.createDiv({ cls: 'vc-history-body' });
+    const title = body.createDiv({ cls: 'vc-history-title' });
+    if (match.kind === 'new-chat') {
+      setIcon(title.createSpan({ cls: 'vc-history-pin' }), 'square-pen');
+      title.appendText('New chat in this project');
+      return;
+    }
+    if (match.kind === 'new-note') {
+      setIcon(title.createSpan({ cls: 'vc-history-pin' }), 'file-plus');
+      title.appendText(`New note in ${project.folder || 'the vault'}`);
+      return;
+    }
+    setIcon(title.createSpan({ cls: 'vc-history-pin' }), 'folder-kanban');
+    title.appendText(project.name);
+    const count = `${project.chats.length} ${project.chats.length === 1 ? 'chat' : 'chats'}`;
+    body.createDiv({ cls: 'vc-muted', text: project.latest > 0 ? `${count} · ${formatDate(project.latest)}` : count });
+  }
+
   /** A note in the notes view, with its folder and how many chats it has; or the rest of its chats, folded. */
   private renderNote(match: Extract<Match, { kind: 'note' | 'more' }>, el: HTMLElement): void {
     const { note } = match;
@@ -506,7 +587,8 @@ export class HistoryModal extends SuggestModal<Match> {
   /**
    * A chat opens (see onChooseSuggestion); a note, or its "+N more", shows all its chats and the
    * history stays open, with the selection on the note's first chat, or the first of those just shown;
-   * except that ⌘↵ or ⌘-click on a note opens the note.
+   * except that ⌘↵ or ⌘-click on a note opens the note. A project opens its note and shows its chats,
+   * the history staying open; its New chat and New note close it.
    */
   selectSuggestion(match: Match, evt: MouseEvent | KeyboardEvent): void {
     if (match.kind === 'chat') {
@@ -516,6 +598,16 @@ export class HistoryModal extends SuggestModal<Match> {
       if (match.here) return;
       this.inputEl.value = `${FOLDERS_PREFIX}${match.folder.path}/`;
       this.refresh();
+    } else if (match.kind === 'project') {
+      this.inputEl.value = `${PROJECTS_PREFIX}${match.project.name}/`;
+      this.refresh();
+      this.showNote(match.project.path);
+    } else if (match.kind === 'new-chat') {
+      this.close();
+      this.actions.newChatIn?.(match.project.path);
+    } else if (match.kind === 'new-note') {
+      this.close();
+      this.actions.newNoteIn?.(match.project.folder);
     } else if (match.kind === 'note' && Keymap.isModEvent(evt)) {
       this.close();
       this.actions.openNote(match.note.path);
@@ -527,6 +619,24 @@ export class HistoryModal extends SuggestModal<Match> {
         this.showRows(rows, note + (match.kind === 'note' ? 1 : 1 + NOTE_CHATS_SHOWN));
       });
     }
+  }
+
+  /**
+   * Opens note `path` with the history left open: opening a note puts the keys in its editor, so they
+   * are taken back for the history's input once it is open, and once more after Obsidian's own focus
+   * changes that follow it.
+   */
+  private showNote(path: string): void {
+    const refocus = () => {
+      if (!this.dismissed) this.inputEl.focus();
+    };
+    void Promise.resolve(this.actions.openNote(path)).then(
+      () => {
+        refocus();
+        window.setTimeout(refocus, 50);
+      },
+      () => refocus(),
+    );
   }
 
   /**
@@ -571,10 +681,10 @@ export class HistoryModal extends SuggestModal<Match> {
   }
 }
 
-/** The view a query asks for, by its prefix (NOTES_PREFIX, FOLDERS_PREFIX), in any case. */
+/** The view a query asks for, by its prefix (NOTES_PREFIX, FOLDERS_PREFIX, PROJECTS_PREFIX), in any case. */
 function viewOf(query: string): HistoryView {
   const lower = query.toLowerCase();
-  return lower.startsWith(NOTES_PREFIX) ? 'notes' : lower.startsWith(FOLDERS_PREFIX) ? 'folders' : 'chats';
+  return lower.startsWith(NOTES_PREFIX) ? 'notes' : lower.startsWith(FOLDERS_PREFIX) ? 'folders' : lower.startsWith(PROJECTS_PREFIX) ? 'projects' : 'chats';
 }
 
 /** Where a chat comes from, after its date: started outside the panel (and how often copied), or a copy of one. */
