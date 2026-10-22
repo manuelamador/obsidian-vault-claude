@@ -3048,6 +3048,23 @@ body:has(.vc-pick-up) .popover.hover-popover {
   fill: var(--text-on-accent);
 }
 
+/* The folder in the middle of its map: outlined in the accent colour, where a note's is filled. */
+.vc-map-node.is-folder-centre rect {
+  fill: var(--background-primary);
+  stroke: var(--interactive-accent);
+  stroke-width: 2;
+}
+
+.vc-map-node.is-folder-centre .vc-map-bubble {
+  fill: var(--interactive-accent);
+}
+
+.vc-map-node.is-folder-centre text {
+  fill: var(--text-normal);
+  font-weight: var(--font-semibold);
+  font-size: 12px;
+}
+
 /* The folded corner of the note's page, cut out in the accent colour. */
 .vc-map-centre-fold {
   fill: none;

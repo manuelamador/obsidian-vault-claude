@@ -305,6 +305,58 @@ export function noteMap(
   return { chats, notes, links, moreChats: linked.length - chats.length, moreNotes: ranked.length - notes.length };
 }
 
+/** Whether note `path` is in `folder` or a folder inside it; every note is in the top of the vault (''). */
+export function inFolderTree(path: string, folder: string): boolean {
+  return folder === '' || path.startsWith(`${folder}/`);
+}
+
+/**
+ * What a folder's map shows: the chats linked to notes in `folder` or the folders inside it, each by
+ * its strongest link to one of them (see LINK_WEIGHTS), the strongest first, then those linked to the
+ * most of them (`recent` orders a tie, the most recent first), at most MAP_CHATS; and those notes, the
+ * ones the most of the chats shown are linked to first (then the strongest link, then by path), at
+ * most MAP_NOTES; with which chat worked on which. Hubs (see hubNotes) and Claude Code's instruction
+ * files (see onMap) are left out, as on a note's map, and so is a chat linked to no other note here.
+ * With `all`, every chat and note, uncapped.
+ */
+export function folderMap(
+  folder: string,
+  weighted: Map<string, Map<string, number>>,
+  recent: (id: string) => number,
+  all = false,
+  hubs: ReadonlySet<string> = new Set(),
+): { chats: { id: string; weight: number }[]; notes: string[]; links: [string, string, number][]; moreChats: number; moreNotes: number } {
+  const here = (path: string) => inFolderTree(path, folder) && onMap(path) && !hubs.has(path);
+  const linked: { id: string; weight: number; count: number }[] = [];
+  for (const [id, paths] of weighted) {
+    let weight = 0;
+    let count = 0;
+    for (const [path, each] of paths) {
+      if (!here(path)) continue;
+      weight = Math.max(weight, each);
+      count++;
+    }
+    if (count > 0) linked.push({ id, weight, count });
+  }
+  linked.sort((a, b) => b.weight - a.weight || b.count - a.count || recent(b.id) - recent(a.id) || a.id.localeCompare(b.id));
+  const chats = (all ? linked : linked.slice(0, MAP_CHATS)).map(({ id, weight }) => ({ id, weight }));
+  const counts = new Map<string, number>();
+  const strongest = new Map<string, number>();
+  for (const { id } of chats) {
+    for (const [path, weight] of weighted.get(id) ?? []) {
+      if (!here(path)) continue;
+      counts.set(path, (counts.get(path) ?? 0) + 1);
+      strongest.set(path, Math.max(strongest.get(path) ?? 0, weight));
+    }
+  }
+  const ranked = [...counts].sort((a, b) => b[1] - a[1] || (strongest.get(b[0]) ?? 0) - (strongest.get(a[0]) ?? 0) || a[0].localeCompare(b[0])).map(([path]) => path);
+  const notes = all ? ranked : ranked.slice(0, MAP_NOTES);
+  const kept = new Set(notes);
+  const links: [string, string, number][] = [];
+  for (const { id } of chats) for (const [path, weight] of weighted.get(id) ?? []) if (kept.has(path)) links.push([id, path, weight]);
+  return { chats, notes, links, moreChats: linked.length - chats.length, moreNotes: ranked.length - notes.length };
+}
+
 /**
  * The radius of the notes' ring for `count` notes: 150 for up to 16, wider beyond so that their
  * labels, in columns either side, stay about 14 units apart.

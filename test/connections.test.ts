@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { HUB_CHATS, HUB_WEIGHT, MAP_CHATS, MAP_NOTES, chatAngles, chatMap, groupDirection, hubNotes, withoutHubs, noteMap, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
+import { HUB_CHATS, HUB_WEIGHT, MAP_CHATS, MAP_NOTES, chatAngles, chatMap, folderMap, groupDirection, hubNotes, withoutHubs, noteMap, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
 import { chatLink, isChatId, linkedChatIds, memoDescription, removeChatLinks } from '../src/memos';
 
 const weighted = new Map([
@@ -69,6 +69,33 @@ test("a note's map: its chats by their strongest link, then the other notes they
   assert.equal(capped.notes.length, MAP_CHATS);
   assert.equal(noteMap('N.md', many, () => 0, true).chats.length, MAP_CHATS + 2);
   assert.deepEqual(noteMap('Z/none.md', weighted, recent).chats, []);
+});
+
+test("a folder's map: the chats linked to notes in it or its subfolders, by their strongest link, and those notes", () => {
+  const map = folderMap('A', weighted, () => 0);
+  assert.deepEqual(map.chats, [{ id: 'me', weight: 3 }, { id: 'x', weight: 2 }, { id: 'y', weight: 1 }]);
+  assert.deepEqual(map.notes, ['A/one.md', 'A/two.md']);
+  assert.deepEqual(map.links, [['me', 'A/one.md', 3], ['me', 'A/two.md', 1], ['x', 'A/one.md', 2], ['y', 'A/two.md', 1]]);
+  assert.equal(map.moreChats, 0);
+  // A hub is left out, and with it a chat linked to nothing else here; a tie goes to the most recent chat.
+  const hubless = folderMap('A', weighted, (id) => ({ y: 1 })[id] ?? 0, false, new Set(['A/one.md']));
+  assert.deepEqual(hubless.chats, [{ id: 'y', weight: 1 }, { id: 'me', weight: 1 }]);
+  assert.deepEqual(hubless.notes, ['A/two.md']);
+  // Subfolders count; a folder whose name only starts the same does not, nor does CLAUDE.md.
+  const nested = new Map([
+    ['a', new Map([['A/sub/deep.md', 2]])],
+    ['b', new Map([['AB/near.md', 3]])],
+    ['c', new Map([['A/CLAUDE.md', 3]])],
+  ]);
+  assert.deepEqual(folderMap('A', nested, () => 0).notes, ['A/sub/deep.md']);
+  assert.deepEqual(folderMap('A', nested, () => 0).chats.map((chat) => chat.id), ['a']);
+  // The top of the vault holds every note.
+  assert.deepEqual(folderMap('', weighted, () => 0).chats.map((chat) => chat.id), ['me', 'x', 'z', 'y']);
+  // Past MAP_CHATS, the rest are counted; with all, every one is shown.
+  const many = new Map(Array.from({ length: MAP_CHATS + 2 }, (_, i) => [`c${i}`, new Map([[`F/${i}.md`, 1]])] as [string, Map<string, number>]));
+  assert.equal(folderMap('F', many, () => 0).moreChats, 2);
+  assert.equal(folderMap('F', many, () => 0, true).chats.length, MAP_CHATS + 2);
+  assert.deepEqual(folderMap('Z', weighted, () => 0).chats, []);
 });
 
 test('chats linked in a message are found by their links, each once', () => {

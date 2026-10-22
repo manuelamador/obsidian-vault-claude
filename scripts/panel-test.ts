@@ -5370,10 +5370,12 @@ async function main(): Promise<void> {
 
     // The Connections map: a click on a note centres the map on it, its chats round it and their
     // other notes outside; the bar's Chat goes back, and the tab's ← does too; the panel changing chat
-    // draws its chat's map again, as for a project.
+    // draws its chat's map again, as for a project. A click on a folder's arc centres it on the folder
+    // in the same way: the chats linked to its notes round it, those notes outside.
     {
       const { ConnectionsView } = await import('../src/connectionsView');
-      const { chatMap, noteMap } = await import('../src/connections');
+      const { chatMap, folderMap, noteMap } = await import('../src/connections');
+      const { folderChatsQuery } = await import('../src/historyModal');
       // Obsidian's element helpers on SVG elements too, as the map draws with them.
       const html = dom.window.HTMLElement.prototype as unknown as Record<string, unknown>;
       const svgProto = dom.window.SVGElement.prototype as unknown as Record<string, unknown>;
@@ -5383,6 +5385,7 @@ async function main(): Promise<void> {
         ['c2', new Map([['Garden/Pruning.md', 2], ['Reading/Novels.md', 3]])],
         ['c3', new Map([['Garden/Pruning.md', 1], ['Garden/Roses.md', 2]])],
         ['c4', new Map([['Lonely.md', 3]])],
+        ['c5', new Map([['Garden/Beds/Raised.md', 2]])],
       ]);
       const listed: string[] = [];
       const actions = {
@@ -5398,6 +5401,9 @@ async function main(): Promise<void> {
         showChats: (query: string) => void listed.push(query),
       };
       const notes = (path: string, all = false) => ({ ...actions, path, ...noteMap(path, weighted, () => 0, all), all, reload: async (more: boolean) => notes(path, more) });
+      const folders = (folder: string, all = false) => ({ ...actions, folder, ...folderMap(folder, weighted, () => 0, all), all, reload: async (more: boolean) => folders(folder, more) });
+      // The garden is a project's folder: its arcs, and the folders in it, offer that project.
+      const garden = { path: 'Garden/Garden.md', name: 'Garden', folder: 'Garden' };
       const host = (id: string) => ({
         ...actions,
         ...chatMap(id, weighted, [], () => 0),
@@ -5407,7 +5413,7 @@ async function main(): Promise<void> {
         project: null,
         ownProject: null,
         projects: () => [],
-        projectHolding: () => null,
+        projectHolding: (folder: string) => (folder === 'Garden' || folder.startsWith('Garden/') ? garden : null),
         lookOnly: true,
         baseline: { id, title: `Chat ${id}` },
         all: false,
@@ -5415,6 +5421,7 @@ async function main(): Promise<void> {
         folderSuggestion: null,
         reload: async () => host(id),
         noteMap: async (path: string) => notes(path),
+        folderMap: async (folder: string) => folders(folder),
         projectMap: async () => {
           throw new Error('no projects here');
         },
@@ -5481,9 +5488,54 @@ async function main(): Promise<void> {
         steppedBack === 'Pruning' &&
         backToChat === 'Chat c1' &&
         lonely === '0 No chats are linked to this note.' &&
-        followed === 'Chat c2 {"centre":"c2","project":null,"note":null}';
+        followed === 'Chat c2 {"centre":"c2","project":null,"note":null,"folder":null}';
       console.log(`connections note map: ${onChatMap} -> ${centred} (${centredTitle}) chats ${centredChats}, notes ${outer}, tip "${tip}", bar ${barButtons}, menu ${menu}, did ${listed.join('|')}; on to ${movedOn}, ← ${steppedBack}, Chat ${backToChat}; lonely ${lonely}; followed ${followed} -> ${connectionsOk}`);
       if (!connectionsOk) process.exitCode = 1;
+
+      // A click on a folder's arc: the folder in the middle, the chats linked to its notes round it
+      // (its subfolders' too), those notes outside; a subfolder's arc centres the map on it in turn,
+      // and ← comes back; a right-click on an arc lists its chats in the history too.
+      listed.length = 0;
+      const arcNamed = (folder: string) => [...root.querySelectorAll<SVGGElement>('.vc-map-arc')].find((arc) => arc.getAttribute('aria-label')?.split(' · ')[0] === folder);
+      const arcTip = arcNamed('Garden')?.getAttribute('aria-label')?.split(' · ').pop();
+      arcNamed('Garden')?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      await settle();
+      const atFolder = `${barText()} (${root.querySelector('.vc-map-bar-name')?.getAttribute('title')})`;
+      const folderChats = chatIds();
+      const folderNotes = noteNodes().map((node) => node.getAttribute('aria-label')?.split('\n')[0]).join(',');
+      const folderBar = [...root.querySelectorAll('.vc-map-bar button')].map((button) => button.textContent).join(',');
+      const hasCentre = root.querySelector('.vc-map-node.is-folder-centre') !== null;
+      stub.Menu.last = null;
+      arcNamed('Garden/Beds')?.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true }));
+      const arcMenu = stub.Menu.last as unknown as { items: { title: string; click: (() => unknown) | null }[] } | null;
+      const arcItems = arcMenu?.items.map((item) => item.title).join(',');
+      arcMenu?.items.at(-1)?.click?.();
+      arcNamed('Garden/Beds')?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      await settle();
+      const sub = `${barText()} ${chatIds()} ${noteNodes().map((node) => node.getAttribute('aria-label')?.split('\n')[0]).join(',')}`;
+      await pane.setState(back.pop(), { history: false });
+      const folderBack = barText();
+      // A folder whose notes no chat is linked to: the folder alone, and a line saying so.
+      await pane.setState({ centre: 'c2', project: null, note: null, folder: 'Nowhere' }, { history: false });
+      const emptyFolder = `${root.querySelectorAll('.vc-map-node.is-chat').length} ${root.querySelector('.vc-map-foot')?.textContent}`;
+      // The panel changing chat: its map, not the folder's.
+      await pane.follow(host('c1') as never);
+      const folderFollowed = `${barText()} ${JSON.stringify(pane.getState())}`;
+      const folderOk =
+        arcTip === 'click to centre the map on it, right-click for more' &&
+        atFolder === 'Garden (Garden)' &&
+        folderChats === 'Chat c1,Chat c3,Chat c2,Chat c5' &&
+        folderNotes === 'Garden/Pruning.md,Garden/Roses.md,Garden/Beds/Raised.md' &&
+        folderBar === 'Chat,Project' &&
+        hasCentre &&
+        arcItems === 'Show the project,Chats in this folder' &&
+        listed.join('|') === folderChatsQuery('Garden/Beds') &&
+        sub === 'Beds Chat c5 Garden/Beds/Raised.md' &&
+        folderBack === 'Garden' &&
+        emptyFolder === '0 No chats are linked to notes in this folder.' &&
+        folderFollowed === 'Chat c1 {"centre":"c1","project":null,"note":null,"folder":null}';
+      console.log(`connections folder map: arc tip "${arcTip}" -> ${atFolder} chats ${folderChats}, notes ${folderNotes}, bar ${folderBar}, centre ${hasCentre}, arc menu ${arcItems}, did ${listed.join('|')}; subfolder ${sub}, ← ${folderBack}; empty ${emptyFolder}; followed ${folderFollowed} -> ${folderOk}`);
+      if (!folderOk) process.exitCode = 1;
       await pane.onClose();
     }
 

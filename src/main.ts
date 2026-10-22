@@ -30,8 +30,8 @@ import { CONTEXT_SYSTEM, PROJECT_NAME_PREFIX, PROJECT_TYPE, contextHash, context
 import { ChooseFolderModal, ContextModal, CreateProjectModal, type FolderSource } from './projectModals';
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
-import { chatMap, hubNotes, noteMap, projectMap, withoutHubs } from './connections';
-import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type NoteMapHost, type ProjectMapHost } from './connectionsView';
+import { chatMap, folderMap, hubNotes, noteMap, projectMap, withoutHubs } from './connections';
+import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type FolderMapHost, type NoteMapHost, type ProjectMapHost } from './connectionsView';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { claudeEnv, configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -3207,6 +3207,11 @@ export default class VaultClaudePlugin extends Plugin {
         if (!(file instanceof TFile)) throw new Error('the note is gone');
         return this.noteMapHost(file.path, view);
       },
+      folderMap: async (folder) => {
+        // The top of the vault ('') is always there.
+        if (folder !== '' && !(this.app.vault.getAbstractFileByPath(folder) instanceof TFolder)) throw new Error('the folder is gone');
+        return this.folderMapHost(folder, view);
+      },
       sendAgain: (path) => {
         if (this.staleMap(stale)) return;
         const state = this.projectState(id);
@@ -3302,6 +3307,25 @@ export default class VaultClaudePlugin extends Plugin {
       ...noteMap(path, weighted, recent, all, this.hubNotes()),
       all,
       reload: (more) => this.noteMapHost(path, view, more),
+    };
+  }
+
+  /**
+   * What folder `folder`'s map shows, read now: the chats linked to notes in it or its subfolders
+   * (chats listed in the history, not scratch ones) and those notes; with `all`, every chat and note
+   * (see folderMap).
+   */
+  private async folderMapHost(folder: string, view: ChatView | null, all = false): Promise<FolderMapHost> {
+    await this.recentListing();
+    const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
+    const listed = new Set((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)).map((item) => item.id));
+    const weighted = new Map([...this.weightedNotes()].filter(([other]) => listed.has(other)));
+    return {
+      ...this.mapActions(view?.currentChatId() ?? null, view),
+      folder,
+      ...folderMap(folder, weighted, recent, all, this.hubNotes()),
+      all,
+      reload: (more) => this.folderMapHost(folder, view, more),
     };
   }
 
