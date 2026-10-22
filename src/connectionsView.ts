@@ -1021,11 +1021,19 @@ export class ConnectionsView extends ItemView {
       button.addEventListener('click', run);
     };
     const changed = () => void this.refresh();
+    // A new chat in the chat's project, from the start (as on the project's map).
+    const newChat = (project: { name: string; path: string }) => {
+      const button = bar.createEl('button', { cls: 'vc-map-action', attr: { 'aria-label': `Starts a new chat in the panel, in “${project.name}”: its context goes with your first message.` } });
+      setIcon(button.createSpan({ cls: 'vc-project-group-icon' }), 'square-pen');
+      button.appendText('New chat');
+      button.addEventListener('click', () => host.newChatIn(project.path));
+    };
     if (host.lookOnly) {
       if (host.project) {
         const { project } = host;
         const name = bar.createEl('a', { cls: 'vc-map-bar-name', text: project.name, attr: { 'aria-label': 'Show the project’s map' } });
         name.addEventListener('click', () => void this.moveToProject(project.path));
+        newChat(project);
       } else bar.createSpan({ cls: 'vc-map-bar-name is-quiet', text: 'No project' });
       bar.createSpan({ cls: 'vc-project-size', text: 'Look only: send this chat a message to put it in a project or link it.' });
       return;
@@ -1038,6 +1046,7 @@ export class ConnectionsView extends ItemView {
       menuButton.appendText('Project');
       setIcon(menuButton.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
       menuButton.addEventListener('click', (evt) => this.projectMenu(project.path, evt));
+      newChat(project);
       act('Move…', () => this.pickProject(host, 'Move this chat to…', project.path, changed));
       act('Take out', () => void host.setHome(null).then(changed));
       return;
