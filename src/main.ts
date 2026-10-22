@@ -3210,7 +3210,8 @@ export default class VaultClaudePlugin extends Plugin {
   private async followPanel(pane: ConnectionsView, view: ChatView | null, atProject: boolean | string = false): Promise<void> {
     this.connectionsPanel = view;
     const shown = view?.connectionsChat() ?? null;
-    if (!view || !shown) return pane.follow(null);
+    // No chat in the panel: projects, notes and folders browsed without one.
+    if (!shown) return pane.follow(this.chatMapHost(view, '', false, true), typeof atProject === 'string' ? atProject : null);
     const home = typeof atProject === 'string' ? atProject : atProject ? (this.homeProject(shown.id)?.path ?? null) : null;
     // The map's read handed over unawaited: the pane claims its turn first, so that a later chat's map is not replaced by this one's.
     await pane.follow(this.chatMapHost(view, shown.id, false, shown.lookOnly), home);
@@ -3253,9 +3254,11 @@ export default class VaultClaudePlugin extends Plugin {
   /**
    * What the map of chat `id`, panel `view`'s, shows, read now, and what it does. `lookOnly`: the chat
    * has no session of its own yet (see ChatView.connectionsChat): its map is looked at, and nothing is
-   * changed for it.
+   * changed for it. With no chat (`id` ''): the maps of projects, notes and folders browsed without one.
    */
-  private async chatMapHost(view: ChatView, id: string, all = false, lookOnly = false): Promise<ChatMapHost> {
+  private async chatMapHost(view: ChatView | null, id: string, all = false, lookOnly = false): Promise<ChatMapHost> {
+    const none = id === '';
+    if (none) lookOnly = true;
     await this.recentListing();
     const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
     const listed = new Set((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)).map((item) => item.id));
@@ -3264,13 +3267,14 @@ export default class VaultClaudePlugin extends Plugin {
     const from = this.linkedChats(id).filter((other) => listed.has(other) && !to.includes(other));
     const map = chatMap(id, weighted, to, recent, all, this.hubNotes(), from);
     const home = this.homeProject(id);
-    const stale = () => view.connectionsChat()?.id !== id;
+    const stale = () => (view?.connectionsChat()?.id ?? '') !== id;
     return {
       // Look-only: no chat for links to be made from.
       ...this.mapActions(lookOnly ? null : id, view, stale),
       lookOnly,
-      baseline: { id, title: this.chatTitleOf(id) },
-      title: this.chatTitleOf(id),
+      none,
+      baseline: { id, title: none ? 'No chat' : this.chatTitleOf(id) },
+      title: none ? 'No chat' : this.chatTitleOf(id),
       ...map,
       hubs: this.hubNotes(),
       mail: this.settings.gmailFeatures ? (this.chatMail[id] ?? []) : [],
@@ -3293,7 +3297,7 @@ export default class VaultClaudePlugin extends Plugin {
         return this.folderMapHost(folder, view);
       },
       sendAgain: (path) => {
-        if (this.staleMap(stale)) return;
+        if (none || this.staleMap(stale)) return;
         const state = this.projectState(id);
         this.setProjectState(id, { ...state, sent: state.sent?.filter((key) => key !== path && !key.startsWith('parent:')) });
         this.projectsChanged();
@@ -3302,6 +3306,7 @@ export default class VaultClaudePlugin extends Plugin {
       renameProject: (path, done) => this.renameProject(path, done),
       deleteProject: (path, done) => this.deleteProject(path, done),
       drawLinks: (el) => {
+        if (!view) return { stop: () => undefined, redraw: () => undefined };
         const links = view.linksPane();
         links.mount(el);
         return { stop: () => links.onClose(), redraw: () => links.redraw() };
@@ -3346,7 +3351,7 @@ export default class VaultClaudePlugin extends Plugin {
       })(),
       folderSuggestion: home ? null : this.folderSuggestionFor(id),
       makeProject: (folder, created) => {
-        if (!this.staleMap(stale)) void this.openCreateProject({ folder, chatId: id, created });
+        if (!this.staleMap(stale)) void this.openCreateProject({ folder, chatId: none ? undefined : id, created });
       },
     };
   }

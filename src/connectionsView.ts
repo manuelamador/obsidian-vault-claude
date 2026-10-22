@@ -102,6 +102,8 @@ export interface ChatMapHost extends MapActions {
   reload(all: boolean): Promise<ChatMapHost>;
   /** The chat on screen has no session of its own yet (opened from outside the panel): its map is looked at, and the controls that change it are left out. */
   lookOnly: boolean;
+  /** No chat in the panel (none started, or the scratch chat): projects, notes and folders are browsed without one. */
+  none?: boolean;
   /** The chat on screen, which links, mentions and its project bar act for. */
   baseline: { id: string; title: string };
   /** Whether it shows every note and chat. */
@@ -868,7 +870,7 @@ export class ConnectionsView extends ItemView {
     }
     if (host.lookOnly) {
       this.linksEl.empty();
-      this.linksEl.createDiv({ cls: 'vc-project-empty', text: 'Links between chats can be made once you send this chat a message.' });
+      if (!host.none) this.linksEl.createDiv({ cls: 'vc-project-empty', text: 'Links between chats can be made once you send this chat a message.' });
       return;
     }
     const links = this.linksEl.createEl('details');
@@ -911,9 +913,9 @@ export class ConnectionsView extends ItemView {
   private backButton(): void {
     const { host } = this;
     if (!host) return;
-    const back = this.barEl.createEl('button', { cls: 'vc-map-action', attr: { 'aria-label': `Back to “${host.baseline.title}”, the chat in the panel` } });
+    const back = this.barEl.createEl('button', { cls: 'vc-map-action', attr: { 'aria-label': host.none ? 'Back to the projects' : `Back to “${host.baseline.title}”, the chat in the panel` } });
     setIcon(back.createSpan({ cls: 'vc-project-group-icon' }), 'arrow-left');
-    back.appendText('Chat');
+    back.appendText(host.none ? 'Projects' : 'Chat');
     back.addEventListener('click', () => void this.backToChat());
   }
 
@@ -921,6 +923,7 @@ export class ConnectionsView extends ItemView {
   private drawOwn(): void {
     const host = this.host;
     if (!host) return;
+    if (host.none) return this.drawProjectList(host);
     setIcon(this.barEl.createSpan({ cls: 'vc-project-group-icon' }), 'message-square');
     const barName = this.barEl.createSpan({ cls: 'vc-map-bar-name', text: host.title, attr: { title: host.title } });
     if (host.isCodex(host.baseline.id)) barName.createSpan({ cls: 'vc-engine-badge', text: 'Codex' });
@@ -939,6 +942,25 @@ export class ConnectionsView extends ItemView {
     if (!project) return;
     if (host.notes.length === 0 && home.notes.length === 0 && host.chats.length === 0) return this.drawEmptyInProject(host, project);
     this.drawProjectMap(home, { id: host.baseline.id, notes: host.notes, chats: host.chats });
+  }
+
+  /** No chat in the panel: the projects, each opening its map, and a word on how a chat's map comes. */
+  private drawProjectList(host: ChatMapHost): void {
+    setIcon(this.barEl.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
+    this.barEl.createSpan({ cls: 'vc-map-bar-name', text: 'Projects' });
+    const projects = host.projects().sort((a, b) => a.name.localeCompare(b.name));
+    if (projects.length === 0) {
+      this.mapEl.createDiv({ cls: 'vc-project-empty', text: 'No projects yet. Open a chat in the Claude panel: its connections show here, and follow it as you change chat.' });
+      return;
+    }
+    const list = this.mapEl.createDiv({ cls: 'vc-map-project-list' });
+    for (const project of projects) {
+      const row = list.createEl('a', { cls: 'vc-map-project-row', attr: { 'aria-label': 'Show the project’s map' } });
+      setIcon(row.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
+      row.appendText(project.name);
+      row.addEventListener('click', () => void this.moveToProject(project.path));
+    }
+    this.footEl.createDiv({ cls: 'vc-project-empty', text: 'No chat in the panel. Open one: its connections show here, and follow it as you change chat.' });
   }
 
   /** A chat's map: the chat in the middle, its notes round it, the chats sharing them outside. */

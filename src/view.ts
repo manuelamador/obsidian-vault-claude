@@ -2500,14 +2500,11 @@ export class ChatView extends ItemView {
 
   /**
    * The Connections pane (see ConnectionsView), showing the chat or (`atProject`) its project, and
-   * with `links` the chat's links unfolded under the map (the links chip's). Once the chat has started;
-   * one opened from outside the panel is shown look-only until its first message (see connectionsChat).
+   * with `links` the chat's links unfolded under the map (the links chip's). One opened from outside
+   * the panel is shown look-only until its first message (see connectionsChat); with no chat started
+   * (or the scratch chat), the projects, to browse.
    */
   openConnections(atProject = false, links = false): void {
-    if (!this.connectionsChat()) {
-      new Notice(this.scratch ? 'The scratch chat has no connections.' : 'Send a message first: a chat has connections once it has started.');
-      return;
-    }
     void this.plugin.openConnections(this, atProject, links);
   }
 
