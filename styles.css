@@ -3994,3 +3994,28 @@ a.vc-email-attachment:hover {
   right: auto;
   left: var(--vc-side-margin);
 }
+
+/* The map's bar: icon buttons, and × beside a project's name taking the chat out of it (see drawProjectBar). */
+.vc-map-icon {
+  flex: none;
+}
+
+.vc-map-bar-remove {
+  flex: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0 var(--size-4-1);
+}
+
+.vc-map-bar-remove:hover {
+  color: var(--text-normal);
+}
+
+/* The × follows the name at once; what comes after goes to the right. */
+.vc-map-bar-name:has(+ .vc-map-bar-remove) {
+  margin-right: 0;
+}
+
+.vc-map-bar-remove {
+  margin-right: auto;
+}

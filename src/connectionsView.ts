@@ -403,6 +403,14 @@ class MapDrawing {
   }
 }
 
+/** A flat icon button, as in the panel's header, its label shown on hover. */
+function iconButton(parent: HTMLElement, icon: string, label: string, run: (evt: MouseEvent) => void): HTMLElement {
+  const button = parent.createEl('button', { cls: 'clickable-icon vc-map-icon', attr: { 'aria-label': label } });
+  setIcon(button, icon);
+  button.addEventListener('click', run);
+  return button;
+}
+
 /**
  * Makes a note centre the map on it on a click (`centre`), and show Obsidian's preview on ⌘-hover, its
  * path in its tooltip; a right-click opens it, in a new tab too, or its local graph, or lists the chats
@@ -1022,12 +1030,7 @@ export class ConnectionsView extends ItemView {
     };
     const changed = () => void this.refresh();
     // A new chat in the chat's project, from the start (as on the project's map).
-    const newChat = (project: { name: string; path: string }) => {
-      const button = bar.createEl('button', { cls: 'vc-map-action', attr: { 'aria-label': `Starts a new chat in the panel, in “${project.name}”: its context goes with your first message.` } });
-      setIcon(button.createSpan({ cls: 'vc-project-group-icon' }), 'square-pen');
-      button.appendText('New chat');
-      button.addEventListener('click', () => host.newChatIn(project.path));
-    };
+    const newChat = (project: { name: string; path: string }) => iconButton(bar, 'square-pen', `New chat in “${project.name}”: its context goes with your first message`, () => host.newChatIn(project.path));
     if (host.lookOnly) {
       if (host.project) {
         const { project } = host;
@@ -1042,13 +1045,12 @@ export class ConnectionsView extends ItemView {
       const { project } = host;
       const name = bar.createEl('a', { cls: 'vc-map-bar-name', text: project.name, attr: { 'aria-label': 'Show the project’s map' } });
       name.addEventListener('click', () => void this.moveToProject(project.path));
-      const menuButton = bar.createEl('button', { cls: 'vc-map-action' });
-      menuButton.appendText('Project');
-      setIcon(menuButton.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
-      menuButton.addEventListener('click', (evt) => this.projectMenu(project.path, evt));
+      // × beside the name takes the chat out of it, as × on the attached note's chip detaches the note.
+      const out = bar.createSpan({ cls: 'vc-map-bar-remove', text: '×', attr: { 'aria-label': `Take this chat out of “${project.name}”` } });
+      out.addEventListener('click', () => void host.setHome(null).then(changed));
+      iconButton(bar, 'more-horizontal', 'Project actions', (evt) => this.projectMenu(project.path, evt));
       newChat(project);
-      act('Move…', () => this.pickProject(host, 'Move this chat to…', project.path, changed));
-      act('Take out', () => void host.setHome(null).then(changed));
+      iconButton(bar, 'folder-input', 'Move this chat to another project…', () => this.pickProject(host, 'Move this chat to…', project.path, changed));
       return;
     }
     bar.createSpan({ cls: 'vc-map-bar-name is-quiet', text: 'No project' });
@@ -1143,17 +1145,10 @@ export class ConnectionsView extends ItemView {
     this.backButton();
     setIcon(this.barEl.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
     this.barEl.createSpan({ cls: 'vc-map-bar-name', text: project.name, attr: { title: project.name } });
-    const menuButton = this.barEl.createEl('button', { cls: 'vc-map-action' });
-    menuButton.appendText('Project');
-    setIcon(menuButton.createSpan({ cls: 'vc-project-group-icon' }), 'chevron-down');
-    menuButton.addEventListener('click', (evt) => this.projectMenu(project.path, evt));
+    iconButton(this.barEl, 'more-horizontal', 'Project actions', (evt) => this.projectMenu(project.path, evt));
+    iconButton(this.barEl, 'square-pen', `New chat in “${project.name}”: its context goes with your first message`, () => project.newChatIn(project.path));
     const own = host.ownProject?.path === project.path;
     const chat = `“${shortLabel(host.baseline.title, 32)}”`;
-    const newChat = this.actionEl.createEl('button', { cls: 'vc-map-action' });
-    setIcon(newChat.createSpan({ cls: 'vc-project-group-icon' }), 'square-pen');
-    newChat.appendText('New chat');
-    newChat.setAttr('aria-label', `Starts a new chat in the panel, in “${project.name}”: its context goes with your first message.`);
-    newChat.addEventListener('click', () => project.newChatIn(project.path));
     const chatAction = host.lookOnly ? null : this.actionEl.createEl('button', {
       cls: `vc-map-action${own ? '' : ' mod-cta'}`,
       text: own ? `Take ${chat} out` : host.ownProject ? `Move ${chat} here` : `Put ${chat} here`,
