@@ -3176,10 +3176,22 @@ export class ChatView extends ItemView {
     confirmDelete(this.app, this.chatName ?? 'Untitled chat', this.chatId !== null, () => {
       // Another chat opened while the dialog was up: that one is not deleted.
       if ((this.chatId ?? this.resumeId) !== id) return;
-      this.newChat();
-      this.closeBackgroundChat(id);
-      void this.plugin.deleteChat(id);
+      void this.deleteChatHere(id);
     }, this.engine === 'codex');
+  }
+
+  /**
+   * Deletes chat `id` (confirmed already), from this panel's top bar or its history: on screen here, a
+   * new chat takes its place; in the background, it is stopped. Open in another panel, it is not deleted.
+   */
+  private deleteChatHere(id: string): Promise<boolean> {
+    if (this.plugin.chatHolder(id, this)) {
+      new Notice('This chat is open in another panel too. Start a new chat there, then delete it.');
+      return Promise.resolve(false);
+    }
+    if ((this.chatId ?? this.resumeId) === id) this.newChat();
+    this.closeBackgroundChat(id);
+    return this.plugin.deleteChat(id);
   }
 
   /** What the empty input says: the scratch chat's text warns that it does not keep. */
@@ -3350,7 +3362,7 @@ export class ChatView extends ItemView {
         },
         togglePin: (item) => this.plugin.togglePin(item.id),
         rename: (item, title) => void this.plugin.renameChatTitle(item.id, title),
-        remove: (item) => (item.scratch ? this.plugin.clearScratchChat().then(() => true) : this.plugin.deleteChat(item.id)),
+        remove: (item) => (item.scratch ? this.plugin.clearScratchChat().then(() => true) : this.deleteChatHere(item.id)),
         searchText: (item) => this.plugin.chatSearchText(item.id),
         stopTasks: (item) => void this.plugin.stopChatTasks(item.id),
         close: (item) => this.plugin.closeRunningChat(item.id),
