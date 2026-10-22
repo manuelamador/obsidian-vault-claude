@@ -4389,6 +4389,21 @@ export class ChatView extends ItemView {
    * chat, is named for what it holds (see copyTitle). The chat copied stays as it is. `open` false:
    * the copy is made and recorded only. Its id; null when none was made.
    */
+  /**
+   * A branch, copy or move `id` of chat `source` joins `source`'s project, as if chosen by hand: it
+   * carries the same work on, whatever notes its own part touched. Its context goes with its next message.
+   */
+  private async keepProject(source: string | null, id: string): Promise<void> {
+    const home = source ? this.plugin.homeProject(source) : null;
+    if (!home) return;
+    try {
+      await this.plugin.setHomeProject(id, home);
+      new Notice(`In project “${projectShownName(home)}”, as the chat it came from. The project chip changes it.`);
+    } catch (error) {
+      log('keeping the project of a branch failed', error);
+    }
+  }
+
   private async branch(upTo: string | undefined, newTab: boolean, start?: string, open = true, whole = false): Promise<string | null> {
     const source = this.chatId ?? this.resumeId;
     const root = this.plugin.vaultRoot();
@@ -4445,6 +4460,7 @@ export class ChatView extends ItemView {
     this.plugin.recordChat(id, title);
     // The scratch chat links no notes; carried on as a chat, the notes it changed are that chat's.
     if (from.scratch) await this.linkChangedNotes(id, root);
+    else await this.keepProject(source, id);
     if (!open) return id;
     const target = newTab ? await this.plugin.openChatTab(this.leaf) : this;
     if (!target) {
@@ -4495,6 +4511,7 @@ export class ChatView extends ItemView {
     }
     log('branched chat', { from: source, to: id, upTo: upTo ?? null, engine: 'codex' });
     this.plugin.recordChat(id, title, undefined, 'codex');
+    if (!this.scratch) await this.keepProject(source, id);
     this.plugin.setCodexChoices(id, { model: this.codexModel, effort: this.codexEffort, access: this.codexAccess });
     if (!open) return id;
     const target = newTab ? await this.plugin.openChatTab(this.leaf) : this;
