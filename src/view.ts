@@ -4316,6 +4316,8 @@ export class ChatView extends ItemView {
     const removal = this.removalFrom(uuid);
     if (!removal) return;
     new ConfirmModal(this.app, 'Move to a new chat', `This moves ${this.removalWords(removal)}`, 'Move', async () => {
+      // The chat moved from, to go back to (⌘[): the cut clears the screen before the new chat opens.
+      const from = this.navPlace();
       // All of it to the end, as all of it is cut here.
       const copy = await this.branch(undefined, false, uuid, false, true);
       const root = this.plugin.vaultRoot();
@@ -4328,6 +4330,7 @@ export class ChatView extends ItemView {
       // The copy holds the part moved: the notes that part changed list it.
       for (const path of removal.notes) this.plugin.linkNoteChat(path, copy, false);
       await this.openChat({ id: copy, title: this.plugin.chatTitleOf(copy), updatedAt: Date.now(), fromPanel: true });
+      this.remember(from);
       // The chat was on the phone: the new one, which carries it on, goes there.
       if (this.phoneAfterCut) {
         this.phoneAfterCut = false;
@@ -4352,6 +4355,7 @@ export class ChatView extends ItemView {
       (target) => {
         const id = this.chatId;
         const send = async (remove: boolean) => {
+          const from = this.navPlace();
           if (remove && (!id || !(await this.removeFrom(id, uuid, false)))) return;
           // Taken off the phone for the cut, it is not on screen to go back on: said so.
           if (this.phoneAfterCut) {
@@ -4364,6 +4368,8 @@ export class ChatView extends ItemView {
             await navigator.clipboard.writeText(text).catch(() => undefined);
             return;
           }
+          // Opened here: the chat it came from can be gone back to (⌘[), the cut having cleared the screen.
+          if (view === this) this.remember(from);
           view.addToInput(text, 'Message moved here');
         };
         const removal = this.chatId ? this.removalFrom(uuid) : null;
