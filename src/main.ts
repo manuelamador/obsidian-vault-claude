@@ -733,7 +733,6 @@ export default class VaultClaudePlugin extends Plugin {
       callback: async () => (await this.activateView())?.openHistory(false, PROJECTS_PREFIX),
     });
     this.addCommand({ id: 'create-project', name: 'Create project…', callback: () => void this.openCreateProject({ chatId: this.frontChatView()?.currentChatId() }) });
-    this.addCommand({ id: 'rebuild-connections', name: 'Rebuild connections from chat files', callback: () => this.confirmRebuildConnections() });
     this.addCommand({
       id: 'pick-up-reset',
       name: 'Pick up where you left off: show ignored chats again',

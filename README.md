@@ -295,7 +295,7 @@ The plugin reads chats and memos locally. It sends short excerpts to the selecte
 - Press **Tab** in history to browse by note. Search by note name or folder, then add words to filter chat titles, for example `with:solow diagram`. ⌘↵ opens the note.
 - Press **Tab** again to browse by folder (`in:`), then by project (`project:`). Choosing a project opens its note and lists its chats, newest first, under **New chat in this project** and **New note in** its folder; ⌫ goes back to the projects. **Open project…** opens history on the projects.
 - A grey ○ means open or idle in the background. An accent ● marks activity, pending input, background tasks or an unseen reply. No mark means the chat is closed.
-- History is reconstructed from Claude session files and recorded Codex threads. **Rebuild chat list from sessions** restores missing records, refreshes titles that still match an initial prompt, and rebuilds the chats' links to notes (as **Rebuild connections from chat files** does). It also runs automatically after an update, rebuilding the links only the first time. Chat records, settings and their backups are described under **Your data**.
+- History is reconstructed from Claude session files and recorded Codex threads. **Rebuild chat list from sessions** restores missing records, refreshes titles that still match an initial prompt, and rebuilds the chats' links to notes (as **Rebuild connections from chat files…** in the Connections ⋯ menu does). It also runs automatically after an update, rebuilding the links only the first time. Chat records, settings and their backups are described under **Your data**.
 - **History includes all vault sessions** also lists Claude sessions started in a terminal or desktop app. They appear in italics. Continuing one creates a copy so two programs do not write the same session. History groups the copies and offers the most recent one. Codex history lists chats started by the panel.
 - The New chat button starts a chat; ⌘-click creates a new tab. Hover over a panel tab's icon to see its chat title.
 
@@ -340,7 +340,7 @@ The plugin reads chats and memos locally. It sends short excerpts to the selecte
 - A **project** is a note associated with a folder. Chats join projects through the notes they use, or through **Put in**, **Move…**, **Take out** and **Add to a project…**. Project context accompanies chat messages and is sent again after Claude Code compacts the chat.
 - **Create project…** creates a project. **Write every project's context anew** asks before regenerating all project contexts.
 - **Link a chat…** links two chats for navigation. Linking alone sends no content. Tick **Include** to send a short digest of the linked chat with your next message. **Summarise first** generates a summary from more of its conversation.
-- **Rebuild connections from chat files** reads saved conversations and adds their links to notes changed, included or mentioned. It does not remove existing links. Run it from the command palette, the Connections ⋯ menu or settings.
+- **Rebuild connections from chat files** reads saved conversations and adds their links to notes changed, included or mentioned. It does not remove existing links. Run it from the Connections ⋯ menu or settings; **Rebuild chat list from sessions** in the command palette runs it too.
 
 </details>
 
