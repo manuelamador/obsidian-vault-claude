@@ -7,7 +7,7 @@ import { isAbsolute, join as joinPath } from 'path';
 import { CLAUDE_CODE_TARGET, versionDrift } from './version';
 import type { EffortLevel, ModelInfo, SessionMessage, SDKControlGetUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { patchSetMaxListenersForRenderer } from './electronCompat';
-import { chatTitle, firstPromptTitles, sessionTitle, deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
+import { chatTitle, configDir, firstPromptTitles, sessionTitle, deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
 import { codexTranscript, type CodexItem } from './codexEvents';
 import { messageSearchText } from './chatText';
 import { errorText, log } from './log';
@@ -15,7 +15,8 @@ import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
 import { findCodex, listCodexModels, readCodexLimits, readCodexThread, readCodexThreadStamp, readCodexThreads, archiveCodexThread, nameCodexThread, runCodexOneShot, stopCodexReader, warmCodexReader, type CodexLaunch, type CodexLimits, type CodexModel, type CodexThreadSummary } from './codexSession';
 import type { DoneTab } from './doneTabs';
-import { ConfirmModal, PROJECTS_PREFIX, RenameModal } from './historyModal';
+import { ChoiceModal, ConfirmModal, PROJECTS_PREFIX, RenameModal } from './historyModal';
+import { CLEANUP_DEFAULT_DAYS, KEEP_DAYS, daysText, readRetention, retentionText, userSettingsFile, writeRetention, type Retention } from './chatRetention';
 import { transcriptNotes } from './rebuildLinks';
 import { vaultRelative } from './toolSummary';
 import { followDraftNotes, followNote, forgetChat, linkNote, movedPath, noteChatEntries, unlinkNote, type NoteChatEntry, type NoteChats } from './noteChats';
@@ -394,6 +395,8 @@ interface PluginData {
   chatListRebuiltFor?: string;
   /** Whether connections were rebuilt once after an update (see rebuildChatListOnUpdate). */
   connectionsRebuiltOnUpdate?: boolean;
+  /** The plugin version how long Claude Code keeps chats was last asked for (see askRetentionOnUpdate). */
+  retentionAskedFor?: string;
   /** The shared app-server the panel started, as Codex records it (see codexDaemonIdentity). */
   startedCodexDaemon?: string | boolean;
   chats?: ChatRecord[];
@@ -975,6 +978,7 @@ export default class VaultClaudePlugin extends Plugin {
       void this.tidyPlanNotes();
       void this.nameCodexThreadsOnce();
       void this.rebuildChatListOnUpdate();
+      void this.askRetentionOnUpdate();
       // Listed once soon after starting, so that even the first history opened shows its rows at once;
       // and the note links of sessions Claude Code has since deleted are let go.
       const timer = window.setTimeout(() => {
@@ -1976,6 +1980,62 @@ export default class VaultClaudePlugin extends Plugin {
 
   /** The plugin version the chat list was last rebuilt for (see rebuildChatListOnUpdate). */
   private chatListRebuiltFor: string | null = null;
+  /** The plugin version how long Claude Code keeps chats was last asked for (see askRetentionOnUpdate). */
+  private retentionAskedFor: string | null = null;
+
+  /**
+   * Once per version, the first time Obsidian starts with it (a first install included): how long
+   * Claude Code keeps chats, asked unless it already keeps them a hundred years. Cancel asks again at
+   * the next start.
+   */
+  private async askRetentionOnUpdate(): Promise<void> {
+    if (this.retentionAskedFor === this.manifest.version) return;
+    const retention = await readRetention(userSettingsFile(configDir()));
+    if ('days' in retention && retention.days !== null && retention.days >= KEEP_DAYS) {
+      this.retentionAskedFor = this.manifest.version;
+      this.saveSoon();
+      return;
+    }
+    this.askRetention(retention, () => {
+      this.retentionAskedFor = this.manifest.version;
+      this.saveSoon();
+    });
+  }
+
+  /**
+   * Shows how long Claude Code keeps chats, as `retention` read it, and asks whether to keep them a
+   * hundred years or as they are; `decided` runs on either choice, and `changed` once the setting is written.
+   */
+  askRetention(retention: Retention, decided: () => void = () => undefined, changed: () => void = () => undefined): void {
+    const file = userSettingsFile(configDir());
+    const shown = file.startsWith(homedir()) ? `~${file.slice(homedir().length)}` : file;
+    if ('error' in retention) {
+      new Notice(`How long Claude Code keeps chats could not be read from ${shown}: ${retention.error}. It is the cleanupPeriodDays setting there.`, 10_000);
+      return;
+    }
+    const now = retentionText(retention);
+    const message =
+      `Each time Claude Code starts, from any folder, it deletes chats older than its cleanupPeriodDays setting. A deleted chat leaves the panel's history and cannot be restored. ` +
+      `It now keeps them for ${now}. Keeping them a hundred years sets cleanupPeriodDays to ${KEEP_DAYS} in ${shown}; nothing else there changes. Codex chats are not deleted.`;
+    const keepCurrent = `Keep ${daysText(retention.days ?? CLEANUP_DEFAULT_DAYS)}`;
+    new ChoiceModal(this.app, 'How long Claude Code keeps chats', message, [
+      [
+        'Keep for 100 years',
+        () => {
+          decided();
+          void writeRetention(file, KEEP_DAYS).then((failed) => {
+            if (failed) {
+              new Notice(`${shown} was left unchanged: ${failed.error}. Set cleanupPeriodDays to ${KEEP_DAYS} there by hand.`, 10_000);
+              return;
+            }
+            new Notice('Claude Code now keeps chats for 100 years.');
+            changed();
+          });
+        },
+      ],
+      [keepCurrent, decided],
+    ]).open();
+  }
   /** Whether connections were rebuilt once after an update (see rebuildChatListOnUpdate). */
   private connectionsRebuiltOnUpdate = false;
 
@@ -4681,6 +4741,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.codexThreadsNamed = raw.codexThreadsNamed === true;
     this.chatListRebuiltFor = typeof raw.chatListRebuiltFor === 'string' ? raw.chatListRebuiltFor : null;
     this.connectionsRebuiltOnUpdate = raw.connectionsRebuiltOnUpdate === true;
+    this.retentionAskedFor = typeof raw.retentionAskedFor === 'string' ? raw.retentionAskedFor : null;
     // An older version kept only whether it had started one: taken as the one running now.
     this.codexDaemonStarted = typeof raw.startedCodexDaemon === 'string' ? raw.startedCodexDaemon : raw.startedCodexDaemon === true ? codexDaemonIdentity(process.env) : null;
     this.doneTabs = Array.isArray(raw.doneTabs) ? raw.doneTabs.filter((tab) => tab && typeof tab.id === 'string' && typeof tab.title === 'string' && (tab.outcome === 'done' || tab.outcome === 'error')).map((tab) => ({ ...tab, text: typeof tab.text === 'string' ? tab.text : '' })) : [];
@@ -4734,6 +4795,7 @@ export default class VaultClaudePlugin extends Plugin {
       codexThreadsNamed: this.codexThreadsNamed,
       ...(this.chatListRebuiltFor ? { chatListRebuiltFor: this.chatListRebuiltFor } : {}),
       ...(this.connectionsRebuiltOnUpdate ? { connectionsRebuiltOnUpdate: true } : {}),
+      ...(this.retentionAskedFor ? { retentionAskedFor: this.retentionAskedFor } : {}),
       startedCodexDaemon: this.codexDaemonStarted ?? undefined,
     };
   }

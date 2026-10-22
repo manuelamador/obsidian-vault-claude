@@ -484,7 +484,7 @@ export function projectFolder(dir: string): string {
 }
 
 /** Claude Code's config folder: `CLAUDE_CONFIG_DIR`, else `~/.claude`. */
-function configDir(): string {
+export function configDir(): string {
   return (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).normalize('NFC');
 }
 

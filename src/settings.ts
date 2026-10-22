@@ -6,6 +6,8 @@ import { detectClaudePath } from './session';
 import { prettyModel } from './usageDisplay';
 import { findCodex } from './codexSession';
 import { codexAccessModes, type CodexAccess } from './codexAccess';
+import { readRetention, retentionText, userSettingsFile } from './chatRetention';
+import { configDir } from './history';
 
 export type ToolDisplay = 'summary' | 'lines' | 'hidden';
 
@@ -483,6 +485,21 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }),
       );
+
+    const retention = new Setting(containerEl)
+      .setName('Claude Code keeps chats for')
+      .setDesc('Reading Claude Code\'s cleanupPeriodDays setting…')
+      .addButton((button) =>
+        button.setButtonText('Change…').onClick(async () => {
+          const now = await readRetention(userSettingsFile(configDir()));
+          this.plugin.askRetention(now, undefined, () => this.display());
+        }),
+      );
+    void readRetention(userSettingsFile(configDir())).then((now) =>
+      retention.setDesc(
+        `${'error' in now ? `Unknown: Claude Code's settings file ${now.error}.` : `${retentionText(now)}.`} Each time Claude Code starts, from any folder, it deletes chats older than this (its cleanupPeriodDays setting, in ${userSettingsFile(configDir())}); a deleted chat leaves the history for good. Codex chats are not deleted.`,
+      ),
+    );
 
     new Setting(containerEl)
       .setName('Rebuild connections')
