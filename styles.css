@@ -2463,8 +2463,9 @@ body:has(.vc-pick-up) .popover.hover-popover {
   z-index: calc(var(--layer-modal, 50) + 1);
 }
 
-/* Projects (see projects.ts, projectModals.ts). */
-.vc-project-chip .vc-context-name {
+/* Projects (see projects.ts, projectModals.ts). The attached note's chip is as bright: both go with each message. */
+.vc-project-chip .vc-context-name,
+.vc-context-chip.is-attached .vc-context-name {
   color: var(--text-normal);
 }
 
