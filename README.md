@@ -336,7 +336,7 @@ The plugin reads chats and memos locally. It sends short excerpts to the selecte
 
 - Run **Open connections**, or use the project and links chips above the input. Connections opens as a tab beside your notes. Codex chats carry a **Codex** label.
 - Click a chat to open it in the panel. Click its project to view the project map. Use ← and → to navigate between maps. Chats started outside the panel are initially shown without editing controls.
-- Right-click a note on the map, or open a project's menu, for **Open local graph**. It opens the note and Obsidian's local graph. The Graph view core plugin must be enabled.
+- Click a note or a folder's arc to list the chats that worked with it, in history. Right-click a note to open it, in place or in a new tab, or for **Open local graph**, which opens the note beside Obsidian's local graph (the Graph view core plugin must be enabled). Right-click a folder's arc for its project's actions. A project's menu also has **Chats in this project** and **Open local graph**.
 - A **project** is a note associated with a folder. Chats join projects through the notes they use, or through **Put in**, **Move…**, **Take out** and **Add to a project…**. Project context accompanies chat messages and is sent again after Claude Code compacts the chat.
 - **Create project…** creates a project. **Write every project's context anew** asks before regenerating all project contexts.
 - **Link a chat…** links two chats for navigation. Linking alone sends no content. Tick **Include** to send a short digest of the linked chat with your next message. **Summarise first** generates a summary from more of its conversation.

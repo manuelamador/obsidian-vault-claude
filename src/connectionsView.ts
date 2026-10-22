@@ -386,18 +386,20 @@ class MapDrawing {
   }
 }
 
-/** Makes a note open in a new tab on a click and show Obsidian's preview on ⌘-hover, its path in its tooltip. */
+/**
+ * Makes a note show the chats that worked with it, in the history, on a click, and Obsidian's preview
+ * on ⌘-hover, its path in its tooltip; a right-click opens it, or its local graph.
+ */
 function noteNode(group: SVGGElement, path: string, actions: MapActions, parent: unknown, hub = false): void {
-  tooltip(group, hub ? `${path}\nA hub: linked to many chats, so it joins none of them on the map, and counts little toward a chat's project` : path);
+  tooltip(group, `${path}${hub ? "\nA hub: linked to many chats, so it joins none of them on the map, and counts little toward a chat's project" : ''}\nClick for its chats; right-click to open it`);
   group.toggleClass('is-hub', hub);
-  group.addEventListener('click', () => actions.openNote(path, true));
+  group.addEventListener('click', () => actions.showChats(noteChatsQuery(path)));
   previewOnHover(group, (evt) => actions.previewNote(path, evt, group, parent));
-  // A right-click offers the note's links to other notes, in Obsidian's local graph.
   group.addEventListener('contextmenu', (evt) => {
     evt.preventDefault();
     const menu = new Menu();
-    menu.addItem((item) => item.setTitle('Open in a new tab').setIcon('file-text').onClick(() => actions.openNote(path, true)));
-    menu.addItem((item) => item.setTitle('Chats with this note').setIcon('messages-square').onClick(() => actions.showChats(noteChatsQuery(path))));
+    menu.addItem((item) => item.setTitle('Open note').setIcon('file-text').onClick(() => actions.openNote(path, false)));
+    menu.addItem((item) => item.setTitle('Open in a new tab').setIcon('file-plus').onClick(() => actions.openNote(path, true)));
     const { localGraph } = actions;
     if (localGraph) menu.addItem((item) => item.setTitle('Open local graph').setIcon('git-fork').onClick(() => localGraph(path)));
     menu.showAtMouseEvent(evt);
@@ -432,7 +434,8 @@ function projectBadge(group: SVGGElement, at: Point, r: number): void {
 
 /**
  * Folder arcs behind the notes: tinted for `home` (the folder of the chat's or the map's project),
- * marked for another project's, each labelled inside the ring; `click` acts on one. `spans`, the
+ * marked for another project's, each labelled inside the ring; `click` acts on one, `menu` on a
+ * right-click. `spans`, the
  * folders that hold others (a project's round its subfolders), are drawn wider, behind them, with
  * their labels further in; a group that is a span's own folder has no arc of its own.
  */
@@ -443,6 +446,7 @@ function drawArcs(
   spans: RingArc[],
   label: (folder: string, outer: string | null) => { text: string; tip: string; cls: string },
   click?: (folder: string, evt: MouseEvent) => void,
+  menu?: (folder: string, evt: MouseEvent) => void,
 ): void {
   const band = (arc: RingArc, extra: number, labelGap: number) => {
     const { text, tip, cls } = label(arc.folder, arc.outer);
@@ -457,6 +461,12 @@ function drawArcs(
     if (click) {
       group.addEventListener('click', (evt) => click(arc.folder, evt));
       group.addClass('is-clickable');
+    }
+    if (menu) {
+      group.addEventListener('contextmenu', (evt) => {
+        evt.preventDefault();
+        menu(arc.folder, evt);
+      });
     }
   };
   for (const span of spans) band(span, SPAN_EXTRA, 26);
@@ -829,10 +839,11 @@ export class ConnectionsView extends ItemView {
         return {
           // Every arc by its folder's name, a project's own folder marked ◆ (its project is named in the tooltip).
           text: project && project.folder === folder ? `◆ ${shortLabel(name, 22)}` : shortLabel(name, 22),
-          tip: `${folder || 'Top of the vault'}${project ? ` · in project “${project.name}”` : ''} · click for its project`,
+          tip: `${folder || 'Top of the vault'}${project ? ` · in project “${project.name}”` : ''} · click for its chats, right-click for its project`,
           cls: own ? 'is-home' : project ? 'is-other' : 'is-plain',
         };
       },
+      (folder) => host.showChats(folderChatsQuery(folder)),
       (folder, evt) => this.folderMenu(folder, evt),
     );
     const me = host.baseline.id;
@@ -1015,9 +1026,6 @@ export class ConnectionsView extends ItemView {
     const holding = this.host?.projectHolding(folder) ?? null;
     // A folder inside a project acts as the project does.
     const actions = this.folderActions(holding && holding.folder !== folder ? holding.folder : folder);
-    const host = this.host;
-    // The folder's own chats, a folder inside a project included, whatever else it offers.
-    if (host) actions.unshift({ label: 'Chats in this folder', run: () => host.showChats(folderChatsQuery(folder)) });
     if (actions.length === 0) return;
     const menu = new Menu();
     for (const action of actions) menu.addItem((item) => item.setTitle(action.label).onClick(action.run));
@@ -1072,9 +1080,9 @@ export class ConnectionsView extends ItemView {
     drawArcs(drawing, ring, arcs, spans, (sub, outer) => ({
       text: shortLabel(sub === TOP ? 'Top of the vault' : sub.startsWith('/') ? sub.slice(1) : sub || `◆ ${project.folder.slice(project.folder.lastIndexOf('/') + 1)}`, 22),
       // The project's own band (sub '') names its folder; its subfolders, their path; folders outside it, theirs.
-      tip: sub === '' ? project.folder : sub === TOP ? 'Top of the vault' : sub.startsWith('/') ? sub.slice(1) : `${project.folder}/${sub}`,
+      tip: `${sub === '' ? project.folder : sub === TOP ? 'Top of the vault' : sub.startsWith('/') ? sub.slice(1) : `${project.folder}/${sub}`} · click for its chats`,
       cls: outer === '' || sub === '' ? 'is-home' : 'is-plain',
-    }));
+    }), (sub) => project.showChats(folderChatsQuery(sub === '' ? project.folder : sub === TOP ? '' : sub.startsWith('/') ? sub.slice(1) : `${project.folder}/${sub}`)));
     // The chats on a small ring round the project, wider when there are many.
     const inner = Math.max(70, project.chats.length * 7);
     const chatAt = new Map(project.chats.map((id, i) => [id, polar((2 * Math.PI * i) / project.chats.length, inner)]));
