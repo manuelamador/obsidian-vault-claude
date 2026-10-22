@@ -352,9 +352,10 @@ class MapDrawing {
     return group;
   }
 
-  /** A chat: a circle with a speech bubble. */
-  chat(key: string, at: Point, r: number, cls: string): SVGGElement {
-    const group = this.node(key, `is-chat ${cls}`);
+  /** A chat: a circle with a speech bubble, green for a Codex chat (`codex`). */
+  chat(key: string, at: Point, r: number, cls: string, codex = false): SVGGElement {
+    if (codex) this.drawn.add('codex');
+    const group = this.node(key, `is-chat ${cls}${codex ? ' is-codex' : ''}`);
     this.place(key, at);
     svg(group, 'circle', { cx: at.x, cy: at.y, r });
     const s = r / 10;
@@ -535,6 +536,7 @@ const LEGEND: [string, string, string][] = [
   ['arc-is-other', 'is-other', "another project's folder"],
   ['same', 'is-same', 'chat in this project'],
   ['badge', 'is-badge', 'chat in another project'],
+  ['codex', 'is-codex', 'Codex chat'],
 ];
 
 /** The Connections pane's view type (see ConnectionsView). */
@@ -959,7 +961,7 @@ export class ConnectionsView extends ItemView {
       // A chat in this chat's project takes the project's colour.
       const same = project !== null && project === host.project?.name;
       if (same) drawing.drawn.add('same');
-      const group = drawing.chat(chat.id, at, 10, `${chat.linked ? 'is-linked' : ''}${same ? ' is-same-project' : ''}`);
+      const group = drawing.chat(chat.id, at, 10, `${chat.linked ? 'is-linked' : ''}${same ? ' is-same-project' : ''}`, host.isCodex(chat.id));
       if (other) {
         projectBadge(group, at, 10);
         drawing.drawn.add('badge');
@@ -970,7 +972,7 @@ export class ConnectionsView extends ItemView {
       tooltip(group, `${host.titleOf(chat.id)}${host.isCodex(chat.id) ? ' · Codex' : ''}${project ? ` · in “${project}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : chat.linkedFrom ? ' · links to this chat' : ''}\n${CHAT_CLICK}`);
       chatNode(group, chat.id, host);
     }
-    const centreNode = drawing.chat(me, centre, 18, 'is-centre');
+    const centreNode = drawing.chat(me, centre, 18, 'is-centre', host.isCodex(me));
     const title = svg(centreNode, 'text', { x: 0, y: 34, 'text-anchor': 'middle' });
     title.textContent = shortLabel(host.title, 40);
     tooltip(centreNode, host.project ? `${host.title} · in “${host.project.name}”` : host.title);
@@ -1211,7 +1213,7 @@ export class ConnectionsView extends ItemView {
     for (const [id, at] of chatAt) {
       // Every chat here is in the project: its colour. The chat in the panel is marked, larger.
       const open = id === host.baseline.id;
-      const group = drawing.chat(id, at, open ? 14 : 11, `is-same-project${open ? ' is-open-chat' : ''}`);
+      const group = drawing.chat(id, at, open ? 14 : 11, `is-same-project${open ? ' is-open-chat' : ''}`, project.isCodex(id));
       const touched = project.links.filter(([chat]) => chat === id).length;
       tooltip(group, `${project.titleOf(id)}${project.isCodex(id) ? ' · Codex' : ''}${open ? ' · the chat in the panel' : ''} · ${touched} note${touched === 1 ? '' : 's'} here${open ? '' : `\n${CHAT_CLICK}`}`);
       // Only the panel's chat is named on the map: the chats sit inside the ring of notes, where their
@@ -1234,7 +1236,7 @@ export class ConnectionsView extends ItemView {
     tooltip(node, `${project.name}: its note\nClick to open it`);
     node.addEventListener('click', () => project.openBeside(project.path));
     previewOnHover(node, (evt) => project.previewNote(project.path, evt, node, this));
-    legend(footEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned'].includes(kind)));
+    legend(footEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned', 'codex'].includes(kind)));
     const more = [project.moreChats > 0 ? `${project.moreChats} older chat${project.moreChats === 1 ? '' : 's'}` : '', project.moreNotes > 0 ? `${project.moreNotes} more note${project.moreNotes === 1 ? '' : 's'}` : ''].filter(Boolean);
     showAll(footEl, `Point at a chat to see its notes.${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, project.all, (all) => void this.refresh(all));
   }
@@ -1300,7 +1302,7 @@ export class ConnectionsView extends ItemView {
       // The chat in the panel is marked, larger, and named; the others are named in their tooltips,
       // as on a project's map.
       const isOpen = id === host.baseline.id;
-      const group = drawing.chat(id, at, isOpen ? 14 : 11, isOpen ? 'is-open-chat' : '');
+      const group = drawing.chat(id, at, isOpen ? 14 : 11, isOpen ? 'is-open-chat' : '', note.isCodex(id));
       const project = note.projectOfChat(id);
       tooltip(group, `${note.titleOf(id)}${note.isCodex(id) ? ' · Codex' : ''}${project ? ` · in “${project}”` : ''}${isOpen ? ' · the chat in the panel' : ''} · ${kinds[weight] ?? kinds[1]}${isOpen ? '' : `\n${CHAT_CLICK}`}`);
       if (isOpen) {
@@ -1329,7 +1331,7 @@ export class ConnectionsView extends ItemView {
       footEl.createDiv({ cls: 'vc-project-empty', text: 'No chats are linked to this note.' });
       return;
     }
-    legend(footEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned'].includes(kind)));
+    legend(footEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned', 'codex'].includes(kind)));
     const more = [note.moreChats > 0 ? `${note.moreChats} more chat${note.moreChats === 1 ? '' : 's'}` : '', note.moreNotes > 0 ? `${note.moreNotes} more note${note.moreNotes === 1 ? '' : 's'}` : ''].filter(Boolean);
     showAll(footEl, `Point at a chat to see its notes.${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, note.all, (all) => void this.refresh(all));
   }
@@ -1422,7 +1424,7 @@ export class ConnectionsView extends ItemView {
       // The chat in the panel is marked, larger, and named; the others are named in their tooltips,
       // as on a note's map.
       const isOpen = id === host.baseline.id;
-      const group = drawing.chat(id, at, isOpen ? 14 : 11, isOpen ? 'is-open-chat' : '');
+      const group = drawing.chat(id, at, isOpen ? 14 : 11, isOpen ? 'is-open-chat' : '', shown.isCodex(id));
       const project = shown.projectOfChat(id);
       const touched = shown.links.filter(([chat]) => chat === id).length;
       tooltip(group, `${shown.titleOf(id)}${shown.isCodex(id) ? ' · Codex' : ''}${project ? ` · in “${project}”` : ''}${isOpen ? ' · the chat in the panel' : ''} · ${kinds[weight] ?? kinds[1]} · ${touched} note${touched === 1 ? '' : 's'} on the map${isOpen ? '' : `\n${CHAT_CLICK}`}`);
@@ -1450,7 +1452,7 @@ export class ConnectionsView extends ItemView {
       footEl.createDiv({ cls: 'vc-project-empty', text: 'No chats are linked to notes in this folder.' });
       return;
     }
-    legend(footEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned'].includes(kind)));
+    legend(footEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned', 'codex'].includes(kind)));
     const more = [shown.moreChats > 0 ? `${shown.moreChats} more chat${shown.moreChats === 1 ? '' : 's'}` : '', shown.moreNotes > 0 ? `${shown.moreNotes} more note${shown.moreNotes === 1 ? '' : 's'}` : ''].filter(Boolean);
     showAll(footEl, `Point at a chat to see its notes.${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, shown.all, (all) => void this.refresh(all));
   }

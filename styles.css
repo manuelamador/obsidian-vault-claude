@@ -4019,3 +4019,16 @@ a.vc-email-attachment:hover {
 .vc-map-bar-remove {
   margin-right: auto;
 }
+
+/* A Codex chat on the maps: its bubble green, Codex's colour (as on the phone button); the circle keeps its project or link colour. */
+.vc-map-node.is-chat.is-codex:not(.is-centre) .vc-map-bubble {
+  fill: var(--color-green);
+}
+
+.vc-map-swatch.is-codex {
+  width: 10px;
+  height: 8px;
+  border: none;
+  border-radius: 2px;
+  background: var(--color-green);
+}
