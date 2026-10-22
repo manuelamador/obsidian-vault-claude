@@ -5536,6 +5536,28 @@ async function main(): Promise<void> {
         folderFollowed === 'Chat c1 {"centre":"c1","project":null,"note":null,"folder":null}';
       console.log(`connections folder map: arc tip "${arcTip}" -> ${atFolder} chats ${folderChats}, notes ${folderNotes}, bar ${folderBar}, centre ${hasCentre}, arc menu ${arcItems}, did ${listed.join('|')}; subfolder ${sub}, ← ${folderBack}; empty ${emptyFolder}; followed ${folderFollowed} -> ${folderOk}`);
       if (!folderOk) process.exitCode = 1;
+
+      // A chat in a project with no notes and no chats yet: the chat in the middle, the project's
+      // folder an empty arc round it, and a line naming the project; a right-click on the arc gives
+      // the folder's menu. Out of a project, the line alone.
+      const bare = (project: typeof garden | null) => ({ ...host('c9'), notes: [], chats: [], folders: [], moreNotes: 0, moreChats: 0, project, reload: async () => bare(project) });
+      await pane.follow(bare(garden) as never);
+      const emptyArcs = [...root.querySelectorAll('.vc-map-arc')].map((arc) => `${arc.getAttribute('class')}:${arc.querySelector('text')?.textContent}`).join(',');
+      const emptyCentre = root.querySelector('.vc-map-node.is-centre') !== null;
+      const emptyFoot = root.querySelector('.vc-map-foot')?.textContent;
+      stub.Menu.last = null;
+      arcNamed('Garden')?.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true }));
+      const emptyMenu = (stub.Menu.last as unknown as { items: { title: string }[] } | null)?.items.map((item) => item.title).join(',');
+      await pane.follow(bare(null) as never);
+      const noProject = `${root.querySelectorAll('.vc-map-arc').length} ${root.querySelector('.vc-project-empty')?.textContent}`;
+      const emptyOk =
+        emptyArcs === 'vc-map-arc is-home is-clickable:◆ Garden' &&
+        emptyCentre &&
+        emptyFoot === 'No notes yet; this chat is in project “Garden”.' &&
+        emptyMenu === 'Show the project,Chats in this folder' &&
+        noProject === '0 This chat has worked on no notes yet, and links to no chats.';
+      console.log(`connections empty chat: arcs ${emptyArcs}, centre ${emptyCentre}, foot ${emptyFoot}, menu ${emptyMenu}; no project ${noProject} -> ${emptyOk}`);
+      if (!emptyOk) process.exitCode = 1;
       await pane.onClose();
     }
 

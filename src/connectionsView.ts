@@ -14,7 +14,7 @@ import { ProjectPicker } from './projectModals';
 import { mailThreadTitle } from './emailMessages';
 import { safeGmailUrl } from './emailSafety';
 import { folderOf } from './chatFolders';
-import { chatAngles, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
+import { chatAngles, groupDirection, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 import { previewOnHover } from './hoverPreview';
 import { folderChatsQuery, noteChatsQuery, projectChatsQuery } from './historyModal';
 import { projectShownName } from './projects';
@@ -906,7 +906,8 @@ export class ConnectionsView extends ItemView {
   private drawChatMap(host: ChatMapHost): void {
     const { mapEl, footEl } = this;
     if (host.notes.length === 0 && host.chats.length === 0) {
-      mapEl.createDiv({ cls: 'vc-project-empty', text: 'This chat has worked on no notes yet, and links to no chats.' });
+      if (host.project) this.drawEmptyInProject(host, host.project);
+      else mapEl.createDiv({ cls: 'vc-project-empty', text: 'This chat has worked on no notes yet, and links to no chats.' });
       return;
     }
     const ring = noteRing(host.notes.length);
@@ -979,6 +980,33 @@ export class ConnectionsView extends ItemView {
     legend(footEl, drawing.drawn, LEGEND);
     const more = [host.moreNotes > 0 ? `${host.moreNotes} more note${host.moreNotes === 1 ? '' : 's'}` : '', host.moreChats > 0 ? `${host.moreChats} more chat${host.moreChats === 1 ? '' : 's'}` : ''].filter(Boolean);
     showAll(footEl, more.length > 0 ? `Not shown: ${more.join(' and ')}.` : '', host.all, (all) => void this.refresh(all));
+  }
+
+  /**
+   * A chat in a project with no notes and no chats yet: the chat in the middle, its project's folder
+   * an empty arc round it, on the side its notes will take (see groupDirection); a click centres the
+   * map on the project, a right-click gives the folder's menu.
+   */
+  private drawEmptyInProject(host: ChatMapHost, project: { name: string; folder: string; path: string }): void {
+    const { mapEl, footEl } = this;
+    const drawing = new MapDrawing(mapEl, 820, 620);
+    this.drawing = drawing;
+    const direction = groupDirection(project.folder);
+    drawArcs(
+      drawing,
+      BASE_RING,
+      [{ folder: project.folder, start: direction - 0.3, end: direction + 0.3, outer: null }],
+      [],
+      (folder) => ({ text: `◆ ${shortLabel(folderName(folder), 22)}`, tip: `${folder || 'Top of the vault'} · in project “${project.name}” · click to show the project, right-click for more`, cls: 'is-home' }),
+      () => void this.moveToProject(project.path),
+      (folder, evt) => this.folderMenu(folder, evt),
+    );
+    const me = host.baseline.id;
+    const centreNode = drawing.chat(me, { x: 0, y: 0 }, 18, 'is-centre', host.isCodex(me));
+    const title = svg(centreNode, 'text', { x: 0, y: 34, 'text-anchor': 'middle' });
+    title.textContent = shortLabel(host.title, 40);
+    tooltip(centreNode, `${host.title} · in “${project.name}”`);
+    footEl.createDiv({ cls: 'vc-project-empty', text: `No notes yet; this chat is in project “${project.name}”.` });
   }
 
   /**
