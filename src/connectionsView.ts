@@ -53,6 +53,8 @@ interface MapActions {
   mentionChat(id: string): void;
   /** Opens the history at `query`: the chats with a note, in a folder or of a project (see noteChatsQuery). */
   showChats(query: string): void;
+  /** Starts a new chat in the panel, in project `path` (its note) from the start (see ChatView.startNewChatIn). */
+  newChatIn(path: string): void;
 }
 
 
@@ -981,6 +983,7 @@ export class ConnectionsView extends ItemView {
     const add = (title: string, icon: string, run: () => void) => menu.addItem((item) => item.setTitle(title).setIcon(icon).onClick(run));
     if (this.project?.path !== path) add('Show the project', 'locate-fixed', () => void this.moveToProject(path));
     add('Open project note', 'file-text', () => host.openProjectNote(path));
+    add('New chat in this project', 'square-pen', () => host.newChatIn(path));
     add('Chats in this project', 'messages-square', () => host.showChats(projectChatsQuery(projectShownName({ basename: path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '') }))));
     const { localGraph } = host;
     if (localGraph) add('Open local graph', 'git-fork', () => localGraph(path));
@@ -1137,6 +1140,11 @@ export class ConnectionsView extends ItemView {
     menuButton.addEventListener('click', (evt) => this.projectMenu(project.path, evt));
     const own = host.ownProject?.path === project.path;
     const chat = `“${shortLabel(host.baseline.title, 32)}”`;
+    const newChat = this.actionEl.createEl('button', { cls: 'vc-map-action' });
+    setIcon(newChat.createSpan({ cls: 'vc-project-group-icon' }), 'square-pen');
+    newChat.appendText('New chat');
+    newChat.setAttr('aria-label', `Starts a new chat in the panel, in “${project.name}”: its context goes with your first message.`);
+    newChat.addEventListener('click', () => project.newChatIn(project.path));
     const chatAction = host.lookOnly ? null : this.actionEl.createEl('button', {
       cls: `vc-map-action${own ? '' : ' mod-cta'}`,
       text: own ? `Take ${chat} out` : host.ownProject ? `Move ${chat} here` : `Put ${chat} here`,

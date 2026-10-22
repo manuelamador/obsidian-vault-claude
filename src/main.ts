@@ -3058,6 +3058,13 @@ export default class VaultClaudePlugin extends Plugin {
       },
       projectOfChat: (other: string) => this.homeProject(other)?.basename ?? null,
       showChats: (query: string) => void panel().then((target) => target?.openHistory(false, query)),
+      newChatIn: (path: string) =>
+        void panel().then((target) => {
+          if (!target) return;
+          // The panel brought forward, its sidebar opened if it was closed.
+          void this.app.workspace.revealLeaf(target.leaf);
+          target.startNewChatIn(path);
+        }),
     };
   }
 
