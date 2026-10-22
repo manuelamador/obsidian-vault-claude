@@ -763,6 +763,8 @@ export class ChatView extends ItemView {
   private historyButton!: HTMLButtonElement;
   /** claude.ai link while the chat on screen has Remote Control on. */
   private remoteUrl: string | null = null;
+  /** A cut that left another chat on screen (a move) took this one off the phone: that one goes on (see offPhone). */
+  private phoneAfterCut = false;
   /** Set once Claude Code on the phone has put the current session on the phone (see setChatRemote). */
   private remoteRequested = false;
   /** A chat in this panel finished while the panel was hidden; shown on the tab until it is seen. */
@@ -4117,8 +4119,8 @@ export class ChatView extends ItemView {
 
   /**
    * Why chat `id` cannot be cut now, or null when it can: its process is ended for the cut, which
-   * would stop a reply, a message waiting, a background task or the phone link, and another panel
-   * holding it would go on writing to its file.
+   * would stop a reply, a message waiting or a background task, and another panel holding it would go
+   * on writing to its file. A chat on the phone can be: it is taken off and put back (see offPhone).
    */
   private cutBlocked(id: string): string | null {
     if (this.plugin.chatHolder(id, this)) return 'This chat is open in another panel too. Open another chat there first.';
@@ -4126,8 +4128,25 @@ export class ChatView extends ItemView {
     if (this.chatId !== id) return null;
     if (this.busy || this.pending.size > 0) return 'Claude is still working. Stop it, or wait for the reply, then remove.';
     if (this.tasks.size > 0) return 'A background task of this chat is still running, and ending the chat would stop it. Wait for it to end.';
-    if (this.remoteUrl) return 'This chat is on your phone, and ending it would end that link. Take it off the phone first.';
     return null;
+  }
+
+  /**
+   * Takes the chat on screen off the phone, for a cut that ends its process (the link is the
+   * process's); whether it was on. The chat the panel shows once the cut is done goes back on it
+   * (see backOnPhone).
+   */
+  private async offPhone(): Promise<boolean> {
+    if (!this.remoteUrl) return false;
+    await this.setChatRemote(false, true);
+    return true;
+  }
+
+  /** The chat on screen put on the phone again after a cut (see offPhone), with a new link. */
+  private async backOnPhone(): Promise<void> {
+    if (this.remoteUrl || this.scratch || this.engine === 'codex') return;
+    await this.setChatRemote(true, true);
+    new Notice(this.remoteUrl ? `“${this.chatName ?? 'This chat'}” is on your phone again, with a new link: open it there from the list of sessions.` : 'The chat could not be put back on your phone: use the phone button to try again.');
   }
 
   /** What a removal takes, in words: "this message and 2 replies", and the notes changed that stay. */
@@ -4166,6 +4185,9 @@ export class ChatView extends ItemView {
     const item: HistoryItem = { id, title: this.chatName ?? 'Untitled chat', updatedAt: Date.now(), fromPanel: true };
     // The notes the part removed changed, read while it is still on screen.
     const changed = this.removalFrom(uuid)?.notes ?? [];
+    // Off the phone, whose link ends with the process; the chat shown after goes back on it.
+    const phone = await this.offPhone();
+    this.phoneAfterCut = phone && !reopen;
     // Its process ends first, and its file is cut once it has exited: it writes to the file as it exits.
     this.newChat();
     await this.plugin.processesEnded(id);
@@ -4176,6 +4198,8 @@ export class ChatView extends ItemView {
       log('removing from a message failed', error);
       new Notice(`Could not remove it: ${errorText(error)}`);
       await this.openChat(item);
+      this.phoneAfterCut = false;
+      if (phone) await this.backOnPhone();
       return false;
     }
     log('removed from a message', { chat: id, from: uuid });
@@ -4185,6 +4209,7 @@ export class ChatView extends ItemView {
     // added to one of its messages, which then goes again.
     const before = this.plugin.contextLeft(id, { sent: /<project_context>|<linked_chats>/.test(done.cut), summary: true });
     if (reopen) await this.openChat(item);
+    if (phone && reopen) await this.backOnPhone();
     let undoing = false;
     let cancelLeftovers = () => undefined as void;
     // Kept by the plugin, not this panel: closing the panel does not leave the files behind.
@@ -4268,6 +4293,7 @@ export class ChatView extends ItemView {
       new Notice('It was not put back: the new chat has messages of its own since. Copy what you need from it first, or move it back by hand.');
       return false;
     }
+    const phone = (this.chatId === item.id || (copy && this.chatId === copy.id)) && (await this.offPhone());
     if (this.chatId === item.id || (copy && this.chatId === copy.id)) this.newChat();
     await this.plugin.processesEnded(item.id);
     const put = await uncutChat(item.id, root, done).catch((error: unknown) => {
@@ -4281,6 +4307,7 @@ export class ChatView extends ItemView {
     }
     new Notice(put ? `Put back in “${item.title}”.` : 'It could not be put back: the chat has changed since.');
     await this.openChat(item);
+    if (phone) await this.backOnPhone();
     return put;
   }
 
@@ -4301,6 +4328,11 @@ export class ChatView extends ItemView {
       // The copy holds the part moved: the notes that part changed list it.
       for (const path of removal.notes) this.plugin.linkNoteChat(path, copy, false);
       await this.openChat({ id: copy, title: this.plugin.chatTitleOf(copy), updatedAt: Date.now(), fromPanel: true });
+      // The chat was on the phone: the new one, which carries it on, goes there.
+      if (this.phoneAfterCut) {
+        this.phoneAfterCut = false;
+        await this.backOnPhone();
+      }
     }).open();
   }
 
@@ -4321,6 +4353,11 @@ export class ChatView extends ItemView {
         const id = this.chatId;
         const send = async (remove: boolean) => {
           if (remove && (!id || !(await this.removeFrom(id, uuid, false)))) return;
+          // Taken off the phone for the cut, it is not on screen to go back on: said so.
+          if (this.phoneAfterCut) {
+            this.phoneAfterCut = false;
+            new Notice('The chat it was removed from is no longer on your phone: open it and use the phone button to put it back.');
+          }
           const view = await this.plugin.openChatById(target.id, target.title);
           if (!view) {
             new Notice('That chat could not be opened. The message is in your clipboard.');
