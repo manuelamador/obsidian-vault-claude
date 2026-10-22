@@ -4032,3 +4032,12 @@ a.vc-email-attachment:hover {
   border-radius: 2px;
   background: var(--color-green);
 }
+
+/* A chat's map drawn on its project's: the chat, its notes and its lines in full, the rest of the project faded (see MapDrawing.focus). */
+.vc-map.is-focus:not(.is-pointing) .vc-map-node:not(.is-mine) {
+  opacity: 0.4;
+}
+
+.vc-map.is-focus:not(.is-pointing) .vc-map-line.is-mine {
+  opacity: 1;
+}

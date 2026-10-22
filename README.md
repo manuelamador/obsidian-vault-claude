@@ -327,7 +327,7 @@ The plugin reads chats and memos locally. It sends short excerpts to the selecte
 
 ### Connections, projects and linked chats
 
-**See how a conversation connects to your work.** Connections maps the current chat, its notes grouped by folder, and other chats linked to it or sharing those notes. The map follows the panel as you switch chats.
+**See how a conversation connects to your work.** Connections maps the current chat, its notes grouped by folder, and other chats linked to it or sharing those notes. For a chat in a project, the map is the project's: the chat is ringed among the project's other chats, and its own notes and lines are drawn in full while the rest of the project is faded. The map follows the panel as you switch chats.
 
 <img src="docs/connections.webp" width="800" alt="The Connections map linking a chat, its notes and related conversations.">
 

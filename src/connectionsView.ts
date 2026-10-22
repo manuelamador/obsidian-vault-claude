@@ -308,6 +308,13 @@ class MapDrawing {
     this.ties.push({ line: svg(this.lines, 'line', { x1: from.x, y1: from.y, x2: to.x, y2: to.y, class: `vc-map-line is-${kind}` }), ends });
   }
 
+  /** Draws the nodes keyed `keys`, and the lines to chat `me`, in full and the rest faded, until a node is pointed at. */
+  focus(me: string, keys: ReadonlySet<string>): void {
+    this.root.addClass('is-focus');
+    for (const [key, group] of this.groups) if (keys.has(key)) group.addClass('is-mine');
+    for (const { line, ends } of this.ties) if (ends.includes(me)) line.addClass('is-mine');
+  }
+
   /** A node's group, lit with its lines when pointed at. */
   node(key: string, cls: string): SVGGElement {
     const group = svg(this.nodes, 'g', { class: `vc-map-node ${cls}`, tabindex: 0 });
@@ -564,6 +571,8 @@ export class ConnectionsView extends ItemView {
   private host: ChatMapHost | null = null;
   /** The map centred on a project, when it is. */
   private project: ProjectMapHost | null = null;
+  /** The map of the panel's chat's project: what the chat's own map is drawn on (see drawOwn). */
+  private home: ProjectMapHost | null = null;
   /** The map centred on a note, when it is. */
   private note: NoteMapHost | null = null;
   /** The map centred on a folder, when it is. */
@@ -651,10 +660,12 @@ export class ConnectionsView extends ItemView {
     const shown = await Promise.resolve(host).catch(() => null);
     if (generation !== this.generation || this.closedPane) return;
     const project = shown && atProject ? await shown.projectMap(atProject).catch(() => null) : null;
+    const home = shown?.project && !atProject ? await shown.projectMap(shown.project.path).catch(() => null) : null;
     host = shown;
     if (generation !== this.generation || this.closedPane) return;
     this.host = host;
     this.project = project;
+    this.home = home;
     this.note = null;
     this.folder = null;
     this.draw();
@@ -678,12 +689,25 @@ export class ConnectionsView extends ItemView {
       folder ? folder.reload(all ?? folder.all).catch(() => null) : null,
     ]);
     if (generation !== this.generation || read !== this.reads) return;
+    // The chat's own map, drawn on its project's (see drawOwn): that project's read again too, or
+    // read anew when the chat moved to another.
+    const base = nextHost ?? host;
+    const own = !project && !note && !folder;
+    const { home } = this;
+    const nextHome =
+      own && base?.project
+        ? await (home?.path === base.project.path ? home.reload(all ?? home.all) : base.projectMap(base.project.path)).catch(() => null)
+        : own
+          ? null
+          : home;
+    if (generation !== this.generation || read !== this.reads) return;
     this.pendingAll = undefined;
     // What the map shows, its functions left out (JSON drops them): unchanged, it is not drawn
     // again, so a node pointed at keeps its tooltip and label rather than being replaced under the
     // pointer by each refresh while a chat works. The links under it are drawn again all the same.
     const key = (map: unknown) => JSON.stringify(map);
-    const same = key([host, project, note, folder]) === key([nextHost ?? host, nextProject ?? project, nextNote ?? note, nextFolder ?? folder]);
+    const same = key([host, project, note, folder, home]) === key([nextHost ?? host, nextProject ?? project, nextNote ?? note, nextFolder ?? folder, nextHome]);
+    this.home = nextHome;
     if (nextHost) this.host = nextHost;
     if (nextProject) this.project = nextProject;
     if (nextNote) this.note = nextNote;
@@ -740,6 +764,8 @@ export class ConnectionsView extends ItemView {
     this.note = null;
     this.folder = null;
     this.draw();
+    // Its project's map not read yet, or another's: read, and drawn again.
+    if (this.host.project && this.home?.path !== this.host.project.path) void this.refresh();
   }
 
   /** Back to the map of the panel's chat, as a step in the tab's history. */
@@ -899,7 +925,20 @@ export class ConnectionsView extends ItemView {
     const barName = this.barEl.createSpan({ cls: 'vc-map-bar-name', text: host.title, attr: { title: host.title } });
     if (host.isCodex(host.baseline.id)) barName.createSpan({ cls: 'vc-engine-badge', text: 'Codex' });
     this.drawProjectBar(this.actionEl);
-    this.drawChatMap(host);
+    const { home } = this;
+    if (host.project && home?.path === host.project.path) this.drawChatInProject(host, home);
+    else this.drawChatMap(host);
+  }
+
+  /**
+   * A chat in a project: its project's map, with the chat ringed among the project's chats and its
+   * own notes in full, the rest faded; the chat's own map when neither has a note yet.
+   */
+  private drawChatInProject(host: ChatMapHost, home: ProjectMapHost): void {
+    const project = host.project;
+    if (!project) return;
+    if (host.notes.length === 0 && home.notes.length === 0) return this.drawEmptyInProject(host, project);
+    this.drawProjectMap(home, { id: host.baseline.id, notes: host.notes });
   }
 
   /** A chat's map: the chat in the middle, its notes round it, the chats sharing them outside. */
@@ -1170,7 +1209,7 @@ export class ConnectionsView extends ItemView {
    * opened on a click; its chats round it; their notes outside.
    */
   private drawProjectCentre(project: ProjectMapHost): void {
-    const { host, mapEl, footEl } = this;
+    const { host } = this;
     if (!host) return;
     this.backButton();
     setIcon(this.barEl.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
@@ -1185,11 +1224,27 @@ export class ConnectionsView extends ItemView {
     });
     chatAction?.setAttr('aria-label', own ? `Takes “${host.baseline.title}”, the chat in the panel, out of this project.` : `“${host.baseline.title}”, the chat in the panel. ${HOME_TIP}`);
     chatAction?.addEventListener('click', () => void host.setHome(own ? null : project.path).then(() => this.refresh()));
-    if (project.chats.length === 0) {
+    this.drawProjectMap(project, null);
+  }
+
+  /**
+   * A project's map: the project in the middle, its chats round it, their notes outside. With
+   * `focus`, a chat's map drawn on its project's: the chat among the others (added when not one of
+   * them yet), its notes added too and drawn by how it used them, and the rest faded.
+   */
+  private drawProjectMap(project: ProjectMapHost, focus: { id: string; notes: MapNote[] } | null): void {
+    const { host, mapEl, footEl } = this;
+    if (!host) return;
+    const me = focus?.id ?? null;
+    const mine = new Map((focus?.notes ?? []).map((note) => [note.path, note.weight]));
+    const chats = me && !project.chats.includes(me) ? [me, ...project.chats] : project.chats;
+    const notes = [...project.notes, ...[...mine.keys()].filter((path) => !project.notes.includes(path))];
+    const links: [string, string, number][] = me ? [...project.links.filter(([id]) => id !== me), ...[...mine].map(([path, weight]): [string, string, number] => [me, path, weight])] : project.links;
+    if (chats.length === 0) {
       mapEl.createDiv({ cls: 'vc-project-empty', text: 'No chats have worked on notes in this project yet.' });
       return;
     }
-    const ring = noteRing(project.notes.length);
+    const ring = noteRing(notes.length);
     const scale = ring / BASE_RING;
     const drawing = new MapDrawing(mapEl, 820 * scale, 560 * scale);
     this.drawing = drawing;
@@ -1206,7 +1261,7 @@ export class ConnectionsView extends ItemView {
       return `/${folder}`;
     };
     const inside = (path: string) => folderOf(path) === project.folder || folderOf(path).startsWith(`${project.folder}/`);
-    const { angles, arcs, spans } = ringLayout(project.notes, within, 0.8, (path) => (inside(path) ? '' : null));
+    const { angles, arcs, spans } = ringLayout(notes, within, 0.8, (path) => (inside(path) ? '' : null));
     // The folder a group stands for: the project's own (''), one in it, the top of the vault, one outside.
     const folderOfGroup = (sub: string) => (sub === '' ? project.folder : sub === TOP ? '' : sub.startsWith('/') ? sub.slice(1) : `${project.folder}/${sub}`);
     drawArcs(
@@ -1224,16 +1279,17 @@ export class ConnectionsView extends ItemView {
       (sub, evt) => this.folderMenu(folderOfGroup(sub), evt),
     );
     // The chats on a small ring round the project, wider when there are many.
-    const inner = Math.max(70, project.chats.length * 7);
-    const chatAt = new Map(project.chats.map((id, i) => [id, polar((2 * Math.PI * i) / project.chats.length, inner)]));
+    const inner = Math.max(70, chats.length * 7);
+    const chatAt = new Map(chats.map((id, i) => [id, polar((2 * Math.PI * i) / chats.length, inner)]));
     const noteAt = (path: string) => polar(angles.get(path) ?? 0, ring);
-    for (const [id, path, weight] of project.links) {
+    for (const [id, path, weight] of links) {
       const from = chatAt.get(id);
       if (from && angles.has(path)) drawing.line(from, noteAt(path), [id, path], LINK_KINDS[weight] ?? 'mentioned');
     }
-    const labels = new Map(placeLabels(project.notes.map((path) => ({ key: path, angle: angles.get(path) ?? 0, text: noteName(path) })), ring + ARC_WIDTH / 2 + 2, 26).map((label) => [label.key, label]));
-    for (const path of project.notes) {
-      const group = drawing.note(path, noteAt(path), 'project');
+    const labels = new Map(placeLabels(notes.map((path) => ({ key: path, angle: angles.get(path) ?? 0, text: noteName(path) })), ring + ARC_WIDTH / 2 + 2, 26).map((label) => [label.key, label]));
+    for (const path of notes) {
+      const weight = mine.get(path);
+      const group = drawing.note(path, noteAt(path), weight === undefined ? 'project' : (LINK_KINDS[weight] ?? 'mentioned'));
       const label = labels.get(path);
       if (label) drawing.label(group, label.at, label.side, label.text, 2, noteName(path));
       noteNode(group, path, project, this, (other) => void this.moveToNote(other));
@@ -1242,7 +1298,7 @@ export class ConnectionsView extends ItemView {
       // Every chat here is in the project: its colour. The chat in the panel is marked, larger.
       const open = id === host.baseline.id;
       const group = drawing.chat(id, at, open ? 14 : 11, `is-same-project${open ? ' is-open-chat' : ''}`, project.isCodex(id));
-      const touched = project.links.filter(([chat]) => chat === id).length;
+      const touched = links.filter(([chat]) => chat === id).length;
       tooltip(group, `${project.titleOf(id)}${project.isCodex(id) ? ' · Codex' : ''}${open ? ' · the chat in the panel' : ''} · ${touched} note${touched === 1 ? '' : 's'} here${open ? '' : `\n${CHAT_CLICK}`}`);
       // Only the panel's chat is named on the map: the chats sit inside the ring of notes, where their
       // names ran into each other and into the notes'. The others are named in their tooltips.
@@ -1266,7 +1322,9 @@ export class ConnectionsView extends ItemView {
     previewOnHover(node, (evt) => project.previewNote(project.path, evt, node, this));
     legend(footEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned', 'codex'].includes(kind)));
     const more = [project.moreChats > 0 ? `${project.moreChats} older chat${project.moreChats === 1 ? '' : 's'}` : '', project.moreNotes > 0 ? `${project.moreNotes} more note${project.moreNotes === 1 ? '' : 's'}` : ''].filter(Boolean);
-    showAll(footEl, `Point at a chat to see its notes.${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, project.all, (all) => void this.refresh(all));
+    const lead = me ? `This chat’s notes in full, the rest of “${project.name}” faded. Point at a chat to see its notes.` : 'Point at a chat to see its notes.';
+    showAll(footEl, `${lead}${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, project.all, (all) => void this.refresh(all));
+    if (me) drawing.focus(me, new Set([me, ...mine.keys(), key]));
   }
 
   /**
