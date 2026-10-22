@@ -308,11 +308,11 @@ class MapDrawing {
     this.ties.push({ line: svg(this.lines, 'line', { x1: from.x, y1: from.y, x2: to.x, y2: to.y, class: `vc-map-line is-${kind}` }), ends });
   }
 
-  /** Draws the nodes keyed `keys`, and the lines to chat `me`, in full and the rest faded, until a node is pointed at. */
+  /** Draws the nodes keyed `keys`, the lines to chat `me` and those between them in full, the rest faded, until a node is pointed at. */
   focus(me: string, keys: ReadonlySet<string>): void {
     this.root.addClass('is-focus');
     for (const [key, group] of this.groups) if (keys.has(key)) group.addClass('is-mine');
-    for (const { line, ends } of this.ties) if (ends.includes(me)) line.addClass('is-mine');
+    for (const { line, ends } of this.ties) if (ends.includes(me) || ends.every((end) => keys.has(end))) line.addClass('is-mine');
   }
 
   /** A node's group, lit with its lines when pointed at. */
@@ -937,8 +937,8 @@ export class ConnectionsView extends ItemView {
   private drawChatInProject(host: ChatMapHost, home: ProjectMapHost): void {
     const project = host.project;
     if (!project) return;
-    if (host.notes.length === 0 && home.notes.length === 0) return this.drawEmptyInProject(host, project);
-    this.drawProjectMap(home, { id: host.baseline.id, notes: host.notes });
+    if (host.notes.length === 0 && home.notes.length === 0 && host.chats.length === 0) return this.drawEmptyInProject(host, project);
+    this.drawProjectMap(home, { id: host.baseline.id, notes: host.notes, chats: host.chats });
   }
 
   /** A chat's map: the chat in the middle, its notes round it, the chats sharing them outside. */
@@ -1232,7 +1232,7 @@ export class ConnectionsView extends ItemView {
    * `focus`, a chat's map drawn on its project's: the chat among the others (added when not one of
    * them yet), its notes added too and drawn by how it used them, and the rest faded.
    */
-  private drawProjectMap(project: ProjectMapHost, focus: { id: string; notes: MapNote[] } | null): void {
+  private drawProjectMap(project: ProjectMapHost, focus: { id: string; notes: MapNote[]; chats: MapChat[] } | null): void {
     const { host, mapEl, footEl } = this;
     if (!host) return;
     const me = focus?.id ?? null;
@@ -1244,9 +1244,11 @@ export class ConnectionsView extends ItemView {
       mapEl.createDiv({ cls: 'vc-project-empty', text: 'No chats have worked on notes in this project yet.' });
       return;
     }
+    // With `focus`, the chats sharing its notes or linked with it that are not the project's: outside the notes, as on its own map.
+    const outside = (focus?.chats ?? []).filter((chat) => !chats.includes(chat.id));
     const ring = noteRing(notes.length);
     const scale = ring / BASE_RING;
-    const drawing = new MapDrawing(mapEl, 820 * scale, 560 * scale);
+    const drawing = new MapDrawing(mapEl, 820 * scale, (outside.length > 0 ? 620 : 560) * scale);
     this.drawing = drawing;
     // Many chats and notes make many lines: faint until a chat or note is pointed at.
     drawing.root.addClass('is-quiet');
@@ -1308,6 +1310,7 @@ export class ConnectionsView extends ItemView {
       }
       chatNode(group, id, project);
     }
+    if (me) this.drawOutsideChats(drawing, project, me, outside, focus?.chats ?? [], chatAt, angles, ring);
     // The project in the middle: its note, previewed on ⌘-hover, opened on a click. Keyed apart from
     // the project note's own node on the ring, where a chat worked on it.
     const key = `project:${project.path}`;
@@ -1320,11 +1323,56 @@ export class ConnectionsView extends ItemView {
     tooltip(node, `${project.name}: its note\nClick to open it`);
     node.addEventListener('click', () => project.openBeside(project.path));
     previewOnHover(node, (evt) => project.previewNote(project.path, evt, node, this));
-    legend(footEl, drawing.drawn, LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned', 'codex'].includes(kind)));
+    legend(footEl, drawing.drawn, me ? LEGEND : LEGEND.filter(([kind]) => ['edited', 'sent', 'mentioned', 'codex'].includes(kind)));
     const more = [project.moreChats > 0 ? `${project.moreChats} older chat${project.moreChats === 1 ? '' : 's'}` : '', project.moreNotes > 0 ? `${project.moreNotes} more note${project.moreNotes === 1 ? '' : 's'}` : ''].filter(Boolean);
     const lead = me ? `This chat’s notes in full, the rest of “${project.name}” faded. Point at a chat to see its notes.` : 'Point at a chat to see its notes.';
     showAll(footEl, `${lead}${more.length > 0 ? ` Not shown: ${more.join(' and ')}.` : ''}`, project.all, (all) => void this.refresh(all));
-    if (me) drawing.focus(me, new Set([me, ...mine.keys(), key]));
+    if (me) drawing.focus(me, new Set([me, ...mine.keys(), ...outside.map((chat) => chat.id), key]));
+  }
+
+  /**
+   * On a chat's map drawn on its project's (see drawProjectMap): the chats `outside` the project that
+   * share the chat's notes or are linked with it, on a ring outside the notes, each line to a note
+   * shared, and a line from the chat to each chat linked with it, in the project or not.
+   */
+  private drawOutsideChats(
+    drawing: MapDrawing,
+    project: ProjectMapHost,
+    me: string,
+    outside: MapChat[],
+    all: MapChat[],
+    inner: ReadonlyMap<string, Point>,
+    angles: Map<string, number>,
+    ring: number,
+  ): void {
+    const { host } = this;
+    if (!host) return;
+    const places = chatAngles(outside, angles);
+    const outerAt = new Map(outside.map((chat) => [chat.id, polar(places.get(chat.id) ?? 0, ring + CHAT_GAP)]));
+    const meAt = inner.get(me) ?? { x: 0, y: 0 };
+    for (const chat of all) {
+      const at = outerAt.get(chat.id) ?? inner.get(chat.id);
+      if (!at) continue;
+      if (outerAt.has(chat.id)) for (const path of chat.shared) if (angles.has(path)) drawing.line(at, polar(angles.get(path) ?? 0, ring), [chat.id, path], 'shared');
+      if (chat.linked || chat.linkedFrom) drawing.line(meAt, at, [me, chat.id], 'linked');
+    }
+    const labels = new Map(placeLabels(outside.map((chat) => ({ key: chat.id, angle: places.get(chat.id) ?? 0, text: project.titleOf(chat.id) })), ring + CHAT_GAP, 26).map((label) => [label.key, label]));
+    for (const chat of outside) {
+      const at = outerAt.get(chat.id) ?? { x: 0, y: 0 };
+      const other = host.projectOfChat(chat.id);
+      // One of the project's chats not among those shown (older): the project's colour.
+      const same = other === project.name;
+      const group = drawing.chat(chat.id, at, 10, `${chat.linked ? 'is-linked' : ''}${same ? ' is-same-project' : ''}`, project.isCodex(chat.id));
+      if (other && !same) {
+        projectBadge(group, at, 10);
+        drawing.drawn.add('badge');
+      }
+      const label = labels.get(chat.id);
+      if (label) drawing.label(group, label.at, label.side, label.text, 14, project.titleOf(chat.id), project.isCodex(chat.id));
+      const shared = `${chat.shared.length} shared note${chat.shared.length === 1 ? '' : 's'}`;
+      tooltip(group, `${project.titleOf(chat.id)}${project.isCodex(chat.id) ? ' · Codex' : ''}${other ? ` · in “${other}”` : ''} · ${shared}${chat.linked ? ' · linked from this chat' : chat.linkedFrom ? ' · links to this chat' : ''}\n${CHAT_CLICK}`);
+      chatNode(group, chat.id, project);
+    }
   }
 
   /**
