@@ -3034,18 +3034,28 @@ body:has(.vc-pick-up) .popover.hover-popover {
   background: rgba(var(--color-purple-rgb), 0.22);
 }
 
-/* The project in the middle of its map: its note. */
-.vc-map-node.is-project-node rect {
+/* The project in the middle of its map (its note), and the note in the middle of its own. */
+.vc-map-node.is-project-node rect,
+.vc-map-node.is-note-centre rect {
   fill: var(--interactive-accent);
   stroke: var(--background-primary);
   stroke-width: 2;
 }
 
-.vc-map-node.is-project-node .vc-map-bubble {
+.vc-map-node.is-project-node .vc-map-bubble,
+.vc-map-node.is-note-centre .vc-map-bubble {
   fill: var(--text-on-accent);
 }
 
-.vc-map-node.is-project-node text {
+/* The folded corner of the note's page, cut out in the accent colour. */
+.vc-map-centre-fold {
+  fill: none;
+  stroke: var(--interactive-accent);
+  stroke-width: 1.2;
+}
+
+.vc-map-node.is-project-node text,
+.vc-map-node.is-note-centre text {
   fill: var(--text-normal);
   font-weight: var(--font-semibold);
   font-size: 12px;

@@ -267,6 +267,45 @@ export function projectMap(
 }
 
 /**
+ * What a note's map shows: the chats linked to note `path`, each by its strongest link (see
+ * LINK_WEIGHTS), the strongest first (`recent` orders a tie, the most recent first), at most
+ * MAP_CHATS; and the other notes those chats are linked to, those shared by the most of them first
+ * (then the strongest link, then by path), at most MAP_NOTES; with which chat worked on which. Hubs
+ * (see hubNotes) are left out of those notes: one touched by many chats would tie them all together.
+ * With `all`, every chat and note, uncapped.
+ */
+export function noteMap(
+  path: string,
+  weighted: Map<string, Map<string, number>>,
+  recent: (id: string) => number,
+  all = false,
+  hubs: ReadonlySet<string> = new Set(),
+): { chats: { id: string; weight: number }[]; notes: string[]; links: [string, string, number][]; moreChats: number; moreNotes: number } {
+  const linked: { id: string; weight: number }[] = [];
+  for (const [id, paths] of weighted) {
+    const weight = paths.get(path);
+    if (weight !== undefined) linked.push({ id, weight });
+  }
+  linked.sort((a, b) => b.weight - a.weight || recent(b.id) - recent(a.id) || a.id.localeCompare(b.id));
+  const chats = all ? linked : linked.slice(0, MAP_CHATS);
+  const counts = new Map<string, number>();
+  const strongest = new Map<string, number>();
+  for (const { id } of chats) {
+    for (const [other, weight] of weighted.get(id) ?? []) {
+      if (other === path || !onMap(other) || hubs.has(other)) continue;
+      counts.set(other, (counts.get(other) ?? 0) + 1);
+      strongest.set(other, Math.max(strongest.get(other) ?? 0, weight));
+    }
+  }
+  const ranked = [...counts].sort((a, b) => b[1] - a[1] || (strongest.get(b[0]) ?? 0) - (strongest.get(a[0]) ?? 0) || a[0].localeCompare(b[0])).map(([other]) => other);
+  const notes = all ? ranked : ranked.slice(0, MAP_NOTES);
+  const kept = new Set(notes);
+  const links: [string, string, number][] = [];
+  for (const { id } of chats) for (const [other, weight] of weighted.get(id) ?? []) if (kept.has(other)) links.push([id, other, weight]);
+  return { chats, notes, links, moreChats: linked.length - chats.length, moreNotes: ranked.length - notes.length };
+}
+
+/**
  * The radius of the notes' ring for `count` notes: 150 for up to 16, wider beyond so that their
  * labels, in columns either side, stay about 14 units apart.
  */

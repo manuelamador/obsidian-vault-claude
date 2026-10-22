@@ -30,8 +30,8 @@ import { CONTEXT_SYSTEM, PROJECT_NAME_PREFIX, PROJECT_TYPE, contextHash, context
 import { ChooseFolderModal, ContextModal, CreateProjectModal, type FolderSource } from './projectModals';
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
-import { chatMap, hubNotes, projectMap, withoutHubs } from './connections';
-import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type ProjectMapHost } from './connectionsView';
+import { chatMap, hubNotes, noteMap, projectMap, withoutHubs } from './connections';
+import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type NoteMapHost, type ProjectMapHost } from './connectionsView';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
 import { claudeEnv, configuredDefaults, findClaude, probeClaude, runOneShot, type ClaudeLaunch, type ConfiguredDefaults } from './session';
@@ -3202,6 +3202,11 @@ export default class VaultClaudePlugin extends Plugin {
         if (!(file instanceof TFile)) throw new Error('the project note is gone');
         return this.projectMapHost(file, view);
       },
+      noteMap: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) throw new Error('the note is gone');
+        return this.noteMapHost(file.path, view);
+      },
       sendAgain: (path) => {
         if (this.staleMap(stale)) return;
         const state = this.projectState(id);
@@ -3279,6 +3284,24 @@ export default class VaultClaudePlugin extends Plugin {
       moreChats: Math.max(0, members.length - map.chats.length),
       all,
       reload: (more) => this.projectMapHost(file, view, more),
+    };
+  }
+
+  /**
+   * What note `path`'s map shows, read now: the chats linked to it (chats listed in the history, not
+   * scratch ones) and their other notes; with `all`, every chat and note (see noteMap).
+   */
+  private async noteMapHost(path: string, view: ChatView | null, all = false): Promise<NoteMapHost> {
+    await this.recentListing();
+    const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
+    const listed = new Set((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)).map((item) => item.id));
+    const weighted = new Map([...this.weightedNotes()].filter(([other]) => listed.has(other)));
+    return {
+      ...this.mapActions(view?.currentChatId() ?? null, view),
+      path,
+      ...noteMap(path, weighted, recent, all, this.hubNotes()),
+      all,
+      reload: (more) => this.noteMapHost(path, view, more),
     };
   }
 

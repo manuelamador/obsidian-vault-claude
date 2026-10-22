@@ -5368,6 +5368,125 @@ async function main(): Promise<void> {
     console.log(`closing the last panel says what it stopped: ${JSON.stringify(closeNotice)} -> ${closeOk}`);
     if (!closeOk) process.exitCode = 1;
 
+    // The Connections map: a click on a note centres the map on it, its chats round it and their
+    // other notes outside; the bar's Chat goes back, and the tab's ← does too; the panel changing chat
+    // draws its chat's map again, as for a project.
+    {
+      const { ConnectionsView } = await import('../src/connectionsView');
+      const { chatMap, noteMap } = await import('../src/connections');
+      // Obsidian's element helpers on SVG elements too, as the map draws with them.
+      const html = dom.window.HTMLElement.prototype as unknown as Record<string, unknown>;
+      const svgProto = dom.window.SVGElement.prototype as unknown as Record<string, unknown>;
+      for (const key of ['addClass', 'removeClass', 'toggleClass', 'setAttr', 'hide', 'show']) svgProto[key] ??= html[key];
+      const weighted = new Map([
+        ['c1', new Map([['Garden/Pruning.md', 3], ['Garden/Roses.md', 1]])],
+        ['c2', new Map([['Garden/Pruning.md', 2], ['Reading/Novels.md', 3]])],
+        ['c3', new Map([['Garden/Pruning.md', 1], ['Garden/Roses.md', 2]])],
+        ['c4', new Map([['Lonely.md', 3]])],
+      ]);
+      const listed: string[] = [];
+      const actions = {
+        titleOf: (id: string) => `Chat ${id}`,
+        isCodex: (id: string) => id === 'c3',
+        openNote: (path: string, newTab: boolean) => void listed.push(`open ${path}${newTab ? ' tab' : ''}`),
+        previewNote: () => undefined,
+        openChat: (id: string) => void listed.push(`chat ${id}`),
+        linked: () => null,
+        link: () => undefined,
+        projectOfChat: () => null,
+        mentionChat: () => undefined,
+        showChats: (query: string) => void listed.push(query),
+      };
+      const notes = (path: string, all = false) => ({ ...actions, path, ...noteMap(path, weighted, () => 0, all), all, reload: async (more: boolean) => notes(path, more) });
+      const host = (id: string) => ({
+        ...actions,
+        ...chatMap(id, weighted, [], () => 0),
+        title: `Chat ${id}`,
+        mail: [],
+        hubs: new Set<string>(),
+        project: null,
+        ownProject: null,
+        projects: () => [],
+        projectHolding: () => null,
+        lookOnly: true,
+        baseline: { id, title: `Chat ${id}` },
+        all: false,
+        linkedProject: null,
+        folderSuggestion: null,
+        reload: async () => host(id),
+        noteMap: async (path: string) => notes(path),
+        projectMap: async () => {
+          throw new Error('no projects here');
+        },
+      });
+      // The tab's history, as Obsidian keeps it: each move puts where the map was on its ← list.
+      const back: unknown[] = [];
+      const leaf = {
+        app: {},
+        setViewState: async (state: { state: unknown }) => {
+          back.push(pane.getState());
+          await pane.setState(state.state, { history: false });
+        },
+      };
+      const pane = new ConnectionsView(leaf as never, () => undefined);
+      await pane.onOpen();
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+      await pane.follow(host('c1') as never);
+      const root = pane.contentEl;
+      const barText = () => root.querySelector('.vc-map-bar-name')?.textContent ?? '';
+      const noteNodes = () => [...root.querySelectorAll<SVGGElement>('.vc-map-node.is-note')];
+      const chatIds = () => [...root.querySelectorAll('.vc-map-node.is-chat')].map((node) => node.getAttribute('aria-label')?.split(' · ')[0]).join(',');
+      const onChatMap = barText();
+      noteNodes().find((node) => node.getAttribute('aria-label')?.startsWith('Garden/Pruning.md'))?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      await settle();
+      const centred = barText();
+      const centredTitle = root.querySelector('.vc-map-bar-name')?.getAttribute('title');
+      const centredChats = chatIds();
+      const outer = noteNodes().map((node) => node.getAttribute('aria-label')?.split('\n')[0]).join(',');
+      const tip = noteNodes()[0]?.getAttribute('aria-label')?.split('\n').pop();
+      const barButtons = [...root.querySelectorAll('.vc-map-bar button')].map((button) => button.textContent).join(',');
+      root.querySelector<SVGGElement>('.vc-map-node.is-note-centre')?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      // A right-click on a note: its menu, with its chats in the history last.
+      stub.Menu.last = null;
+      noteNodes()[0]?.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true }));
+      const noteMenu = stub.Menu.last as unknown as { items: { title: string; click: (() => unknown) | null }[] } | null;
+      const menu = noteMenu?.items.map((item) => item.title).join(',');
+      noteMenu?.items.at(-1)?.click?.();
+      // A note on the note's map centres the map on it in turn; ← comes back.
+      noteNodes().find((node) => node.getAttribute('aria-label')?.startsWith('Garden/Roses.md'))?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      await settle();
+      const movedOn = barText();
+      await pane.setState(back.pop(), { history: false });
+      const steppedBack = barText();
+      root.querySelector<HTMLElement>('.vc-map-bar button')?.click();
+      await settle();
+      const backToChat = barText();
+      // A note no chat is linked to: the note alone, and a line saying so.
+      await pane.setState({ centre: 'c1', project: null, note: 'Nobody.md' }, { history: false });
+      const lonely = `${root.querySelectorAll('.vc-map-node.is-chat').length} ${root.querySelector('.vc-map-foot')?.textContent}`;
+      // The panel changing chat: its map, not the note's.
+      await pane.follow(host('c2') as never);
+      const followed = `${barText()} ${JSON.stringify(pane.getState())}`;
+      const connectionsOk =
+        onChatMap === 'Chat c1' &&
+        centred === 'Pruning' &&
+        centredTitle === 'Garden/Pruning.md' &&
+        centredChats === 'Chat c1,Chat c2,Chat c3' &&
+        outer === 'Garden/Roses.md,Reading/Novels.md' &&
+        tip === 'Click to centre the map on it; right-click to open it' &&
+        barButtons === 'Chat,Open note' &&
+        menu === 'Open note,Open in a new tab,Chats with this note' &&
+        listed.join('|') === 'open Garden/Pruning.md|with:Garden/Roses.md' &&
+        movedOn === 'Roses' &&
+        steppedBack === 'Pruning' &&
+        backToChat === 'Chat c1' &&
+        lonely === '0 No chats are linked to this note.' &&
+        followed === 'Chat c2 {"centre":"c2","project":null,"note":null}';
+      console.log(`connections note map: ${onChatMap} -> ${centred} (${centredTitle}) chats ${centredChats}, notes ${outer}, tip "${tip}", bar ${barButtons}, menu ${menu}, did ${listed.join('|')}; on to ${movedOn}, ← ${steppedBack}, Chat ${backToChat}; lonely ${lonely}; followed ${followed} -> ${connectionsOk}`);
+      if (!connectionsOk) process.exitCode = 1;
+      await pane.onClose();
+    }
+
     view.unload();
     dom.window.close();
   } catch (error) {

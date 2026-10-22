@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { HUB_CHATS, HUB_WEIGHT, MAP_NOTES, chatAngles, chatMap, groupDirection, hubNotes, withoutHubs, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
+import { HUB_CHATS, HUB_WEIGHT, MAP_CHATS, MAP_NOTES, chatAngles, chatMap, groupDirection, hubNotes, withoutHubs, noteMap, onMap, placeLabels, polar, projectMap, ringLayout, shortLabel } from '../src/connections';
 import { chatLink, isChatId, linkedChatIds, memoDescription, removeChatLinks } from '../src/memos';
 
 const weighted = new Map([
@@ -51,6 +51,24 @@ test("a project's map: its chats, the notes most of them share, and who worked o
   const map = projectMap(['x', 'me'], weighted);
   assert.deepEqual(map.notes, ['A/one.md', 'B/three.md', 'A/two.md']);
   assert.deepEqual(map.links.filter(([id]) => id === 'x'), [['x', 'A/one.md', 2], ['x', 'B/three.md', 3]]);
+});
+
+test("a note's map: its chats by their strongest link, then the other notes they share, hubs and the note itself left out", () => {
+  const recent = (id: string) => ({ me: 2, x: 1 })[id] ?? 0;
+  const map = noteMap('A/one.md', weighted, recent);
+  assert.deepEqual(map.chats, [{ id: 'me', weight: 3 }, { id: 'x', weight: 2 }]);
+  assert.deepEqual(map.notes, ['B/three.md', 'A/two.md']);
+  assert.deepEqual(map.links, [['me', 'A/two.md', 1], ['me', 'B/three.md', 2], ['x', 'B/three.md', 3]]);
+  assert.equal(map.moreChats, 0);
+  assert.deepEqual(noteMap('A/one.md', weighted, recent, false, new Set(['B/three.md'])).notes, ['A/two.md']);
+  // A tie of weight goes to the most recent chat; past MAP_CHATS, the rest are counted.
+  const many = new Map(Array.from({ length: MAP_CHATS + 2 }, (_, i) => [`c${i}`, new Map([['N.md', 1], [`O/${i}.md`, 1]])] as [string, Map<string, number>]));
+  const capped = noteMap('N.md', many, (id) => Number(id.slice(1)));
+  assert.equal(capped.chats[0].id, `c${MAP_CHATS + 1}`);
+  assert.equal(capped.moreChats, 2);
+  assert.equal(capped.notes.length, MAP_CHATS);
+  assert.equal(noteMap('N.md', many, () => 0, true).chats.length, MAP_CHATS + 2);
+  assert.deepEqual(noteMap('Z/none.md', weighted, recent).chats, []);
 });
 
 test('chats linked in a message are found by their links, each once', () => {
