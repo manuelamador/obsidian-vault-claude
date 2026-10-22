@@ -3380,6 +3380,7 @@ export class ChatView extends ItemView {
         projectPath: (item) => this.plugin.homeProject(item.id)?.path ?? null,
         newChatIn: (path) => this.startNewChatIn(path),
         newNoteIn: (folder) => void this.newNoteIn(folder),
+        showProjectMap: (path) => this.plugin.openConnections(this, path),
         // Choosing a row links it already, when linking: no Link button on the rows too.
         link: this.scratch || linking ? undefined : (item) => this.linkChatHere(item.id),
         isLinked: (item) => item.id === this.chatId || this.linksTo().some((link) => link.id === item.id),

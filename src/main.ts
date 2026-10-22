@@ -3190,7 +3190,7 @@ export default class VaultClaudePlugin extends Plugin {
    * among the notes when it is not open; `atProject`, centred on the chat's project (the project
    * chip's); `links`, with the links under the map unfolded and in view (the links chip's).
    */
-  async openConnections(view: ChatView, atProject = false, links = false): Promise<void> {
+  async openConnections(view: ChatView, atProject: boolean | string = false, links = false): Promise<void> {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(CONNECTIONS_VIEW_TYPE)[0] ?? null;
     if (!leaf) {
@@ -3206,14 +3206,14 @@ export default class VaultClaudePlugin extends Plugin {
     if (links) leaf.view.openLinks();
   }
 
-  /** Shows panel `view`'s chat in pane `pane` (none: no chat); `atProject`, centred on its project. */
-  private async followPanel(pane: ConnectionsView, view: ChatView | null, atProject = false): Promise<void> {
+  /** Shows panel `view`'s chat in pane `pane` (none: no chat); `atProject`, centred on its project, or on the project whose note it is. */
+  private async followPanel(pane: ConnectionsView, view: ChatView | null, atProject: boolean | string = false): Promise<void> {
     this.connectionsPanel = view;
     const shown = view?.connectionsChat() ?? null;
     if (!view || !shown) return pane.follow(null);
-    const home = atProject ? this.homeProject(shown.id) : null;
+    const home = typeof atProject === 'string' ? atProject : atProject ? (this.homeProject(shown.id)?.path ?? null) : null;
     // The map's read handed over unawaited: the pane claims its turn first, so that a later chat's map is not replaced by this one's.
-    await pane.follow(this.chatMapHost(view, shown.id, false, shown.lookOnly), home?.path ?? null);
+    await pane.follow(this.chatMapHost(view, shown.id, false, shown.lookOnly), home);
   }
 
   /** Panel `view` is closing: a Connections pane following it follows another panel, or none. */

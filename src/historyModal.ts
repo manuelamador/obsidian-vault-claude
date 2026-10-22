@@ -23,6 +23,8 @@ export interface HistoryActions {
   noteLinks(): { changed: NoteChats; sent: NoteChats; mentioned: NoteChats };
   /** Opens a note; resolves, where it can tell, once it is open. */
   openNote(path: string): void | Promise<void>;
+  /** Shows project `path` (its note) in Connections; resolves once it is shown. */
+  showProjectMap?(path: string): void | Promise<void>;
   /** The project folder `folder` is (its note's path), if it is one. */
   projectOf(folder: string): string | null;
   /** The name of chat `item`'s project, as shown on its row and searched, if it has one. */
@@ -605,8 +607,8 @@ export class HistoryModal extends SuggestModal<Match> {
   /**
    * A chat opens (see onChooseSuggestion); a note, or its "+N more", shows all its chats and the
    * history stays open, with the selection on the note's first chat, or the first of those just shown;
-   * except that ⌘↵ or ⌘-click on a note opens the note. A project opens its note and shows its chats,
-   * the history staying open; its New chat and New note close it.
+   * except that ⌘↵ or ⌘-click on a note opens the note. A project shows its map in Connections (its
+   * note, with ⌘) and its chats, the history staying open; its New chat and New note close it.
    */
   selectSuggestion(match: Match, evt: MouseEvent | KeyboardEvent): void {
     if (match.kind === 'chat') {
@@ -619,7 +621,9 @@ export class HistoryModal extends SuggestModal<Match> {
     } else if (match.kind === 'project') {
       this.inputEl.value = `${PROJECTS_PREFIX}${match.project.name}/`;
       this.refresh();
-      this.showNote(match.project.path);
+      // Its map in Connections; with ⌘ (or with no Connections), its note.
+      const { showProjectMap } = this.actions;
+      this.showNote(match.project.path, showProjectMap && !Keymap.isModEvent(evt) ? showProjectMap : undefined);
     } else if (match.kind === 'new-chat') {
       this.close();
       this.actions.newChatIn?.(match.project.path);
@@ -642,13 +646,13 @@ export class HistoryModal extends SuggestModal<Match> {
   /**
    * Opens note `path` with the history left open: opening a note puts the keys in its editor, so they
    * are taken back for the history's input once it is open, and once more after Obsidian's own focus
-   * changes that follow it.
+   * changes that follow it. `open` opens it some other way (a project's map).
    */
-  private showNote(path: string): void {
+  private showNote(path: string, open: (path: string) => void | Promise<void> = (note) => this.actions.openNote(note)): void {
     const refocus = () => {
       if (!this.dismissed) this.inputEl.focus();
     };
-    void Promise.resolve(this.actions.openNote(path)).then(
+    void Promise.resolve(open(path)).then(
       () => {
         refocus();
         window.setTimeout(refocus, 50);
