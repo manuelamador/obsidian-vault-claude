@@ -74,7 +74,7 @@ export interface VaultClaudeSettings {
   rememberPrompts: boolean;
   /** Zotero's works in the `@` picker, read through Zotero's local API (see zotero.ts). */
   zoteroMentions: boolean;
-  /** Codex chats run through Codex's shared app-server (its daemon) when it runs, so the phone app can open them too (see codexLaunch). */
+  /** Remote control of Codex's shared app-server (its daemon), which Codex chats run through either way, so the phone app can open them too (see setPhoneCodex). */
   phoneCodex: boolean;
   /** Codex chats kept out of Codex's own lists (the app, the phone): archived while not open in the panel. */
   codexHidden: boolean;
@@ -756,7 +756,7 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Codex on the phone')
       .setDesc(
-        "Codex chats go through Codex's shared app-server (its daemon, with remote control on), so Codex's phone app can open any of them, follow replies and write in them. Started by the panel when needed, and stopped when Obsidian quits; one started outside Obsidian is used as it is and left running.",
+        "The panel's Codex chats run through Codex's shared app-server (its daemon), started by the panel when needed and stopped when Obsidian quits if the panel started it; one started outside Obsidian is left running. This turns its remote control on or off, without interrupting the chats: on, Codex's phone app can open any of them, follow replies and write in them. While it runs, the ChatGPT desktop app shows the panel's chats read-only. If it cannot start, chats run in their own process, and the ChatGPT app can take one by writing in it; after that, only quitting ChatGPT releases it.",
       )
       .addToggle((toggle) =>
         toggle.setValue(settings.phoneCodex).onChange(async (value) => {

@@ -1788,7 +1788,8 @@ export class ChatView extends ItemView {
   /**
    * The phone button, the same in Claude and Codex chats: lit in the accent colour while Claude Code
    * is on the phone (the vault's Remote Control server, and every Claude chat running here), green
-   * while Codex is (its shared app-server, used by the panel), both when both are.
+   * while Codex is (Codex on the phone, its shared app-server running: the panel's Codex chats use that
+   * server with the setting off too, without remote control), both when both are.
    */
   updatePhoneButton(): void {
     const button = this.phoneButton;
@@ -1815,12 +1816,6 @@ export class ChatView extends ItemView {
     const session = this.session;
     if (session && !(session instanceof CodexSession && !session.live) && this.showsChat(id)) return true;
     return [...this.background].some((entry) => entry.chatId === id);
-  }
-
-  /** How many of this panel's Codex chats are working through Codex's shared app-server: on screen, or in the background. */
-  workingSharedCodex(): number {
-    const onScreen = this.session instanceof CodexSession && this.session.shared && (this.busy || this.pending.size > 0 || this.tasks.size > 0) ? 1 : 0;
-    return onScreen + [...this.background].filter((entry) => entry.session instanceof CodexSession && entry.session.shared).length;
   }
 
   /** Obsidian is quitting: this panel's Codex sessions on the shared app-server are let go of now, before it stops (see stopCodexDaemonAtQuit). Their ends. */
@@ -1855,8 +1850,8 @@ export class ChatView extends ItemView {
 
   /**
    * The Codex chat on screen could not be written: another Codex app (the ChatGPT app, written in
-   * there or from the phone through it) holds it while it is open there, which nothing here can make it
-   * give up. The message goes back to the input, marked not sent on screen, and is never sent by
+   * there or from the phone through it) holds it until that app quits, which nothing here can make it
+   * do. The message goes back to the input, marked not sent on screen, and is never sent by
    * itself: Try again reads what was written there first, so it can be changed before sending.
    */
   private holdCodexChat(): void {
@@ -1876,7 +1871,7 @@ export class ChatView extends ItemView {
   /** The note under a held chat (see holdCodexChat), with what can be done. */
   private renderHeldNotice(id: string): void {
     const el = this.container().createDiv({ cls: 'vc-notice vc-notice-error vc-held' });
-    el.appendText('This chat is open in the ChatGPT app, which holds it while it is open there (a message written in the app, or from the phone through it, opens it). Your message is back in the input. Close the chat in the ChatGPT app, or quit the app, then ');
+    el.appendText('This chat is held by the ChatGPT app, which took it when a message was written in it there (or from the phone through it) and keeps it until the app quits: closing the chat there is not enough. Your message is back in the input. Quit the ChatGPT app, then ');
     const retry = el.createEl('a', { text: 'try again', href: '#' });
     retry.addEventListener('click', (evt) => {
       evt.preventDefault();
@@ -1971,12 +1966,14 @@ export class ChatView extends ItemView {
   codexDaemonStarting = false;
 
   /**
-   * Codex's shared app-server started or stopped: the phone button follows, and an idle Codex chat
-   * reconnects through it (or not) with its next message. Settles once a chat let go of has ended.
+   * Codex's shared app-server started, or Codex on the phone switched: the phone button follows, and an
+   * idle Codex chat in a process of its own (the fallback when the shared app-server could not start)
+   * lets go of it, to go on through the shared app-server with its next message. A chat on it already
+   * stays as it is. Settles once a chat let go of has ended.
    */
   codexDaemonChanged(): Promise<void> {
     this.updatePhoneButton();
-    if (this.engine === 'codex' && this.session instanceof CodexSession && !this.busy && this.pending.size === 0 && this.tasks.size === 0) {
+    if (this.engine === 'codex' && this.session instanceof CodexSession && !this.session.shared && this.plugin.codexDaemonRunning() && !this.busy && this.pending.size === 0 && this.tasks.size === 0) {
       const session = this.session;
       this.sessionToken = null;
       this.closeSession(session);
@@ -4262,7 +4259,9 @@ export class ChatView extends ItemView {
     this.newChat();
     await this.plugin.processesEnded(id);
     try {
-      await revertCodexThread(launch, id, uuid, this.plugin.settings.codexHidden);
+      // Through Codex's shared app-server, started first if need be (see ensureCodexDaemon).
+      const ready = await this.plugin.codexLaunchReady();
+      await revertCodexThread(typeof ready === 'string' ? launch : ready, id, uuid, this.plugin.settings.codexHidden);
     } catch (error) {
       log('removing from a message failed', error);
       new Notice(`Could not remove it: ${errorText(error)}`);
@@ -4513,7 +4512,9 @@ export class ChatView extends ItemView {
     const title = branchTitle(from.title);
     let id: string;
     try {
-      id = await forkCodexThread(launch, source, upTo, this.plugin.settings.codexHidden);
+      // Through Codex's shared app-server, started first if need be (see ensureCodexDaemon).
+      const ready = await this.plugin.codexLaunchReady();
+      id = await forkCodexThread(typeof ready === 'string' ? launch : ready, source, upTo, this.plugin.settings.codexHidden);
     } catch (error) {
       log('branching failed', error);
       new Notice(`Could not branch this chat: ${errorText(error)}`);
@@ -5327,6 +5328,13 @@ export class ChatView extends ItemView {
     }
     const text = this.inputEl.value.trim();
     if (!text && this.attachments.length === 0) return false;
+    // A Codex chat's session runs through Codex's shared app-server, started first when none runs (see
+    // ensureCodexDaemon). If another chat is opened meanwhile, nothing is sent, and the text stays in this one's draft.
+    if (!this.session && (this.engine === 'codex' || this.plugin.isCodexChat(this.chatId ?? this.resumeId ?? ''))) {
+      const owner = this.draftKey();
+      await this.plugin.ensureCodexDaemon();
+      if (this.draftKey() !== owner) return false;
+    }
     const session = this.ensureSession();
     if (!session) return false;
     // Slash commands must reach Claude Code as plain text; attachments wait for the next message.
@@ -7068,6 +7076,9 @@ export class ChatView extends ItemView {
     }
     // Codex compacts on its own request, run as a turn (see CodexSession.compact).
     if (this.engine === 'codex') {
+      const owner = this.draftKey();
+      if (!this.session) await this.plugin.ensureCodexDaemon();
+      if (this.draftKey() !== owner || this.busy) return;
       const session = this.ensureSession();
       if (!(session instanceof CodexSession)) return;
       this.beginTurn([]);
@@ -7364,9 +7375,10 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * Without Codex's shared app-server, a Codex chat's own process holds its thread, and Codex's phone
-   * app cannot open it meanwhile ("another Codex session is using this task"): let go of after
-   * CODEX_IDLE_RELEASE_MS with nothing running, and started again, carrying the thread on, when a message is sent.
+   * Without Codex's shared app-server (when it could not start; see ensureCodexDaemon), a Codex chat's
+   * own process holds its thread, and Codex's phone app cannot open it meanwhile ("another Codex
+   * session is using this task"): let go of after CODEX_IDLE_RELEASE_MS with nothing running, and
+   * started again, carrying the thread on, when a message is sent.
    */
   private releaseCodexWhenIdle(): void {
     this.cancelCodexRelease();

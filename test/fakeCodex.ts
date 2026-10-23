@@ -11,12 +11,34 @@ import { chmodSync, writeFileSync } from 'node:fs';
  * elsewhere, exiting soon after; `elicitOther`, asks it for another thread; `threads`, lists two
  * threads the panel started, one page each; `turns`, finishes each turn at once and stays up
  * (the second only for the first page's `nextCursor`), and none archived; `stall`, starts a turn and never finishes it.
+ * Run as `codex app-server daemon …`, it notes the command in `daemon.log` and exits: `start` puts the
+ * shared app-server's socket and record under CODEX_HOME (see launchIn), or fails when `daemon-fails`
+ * is in `dir`; `stop` takes them away.
  */
 export function fakeCodex(dir: string, mode: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'elicitResolved' | 'elicitOther' | 'threads' | 'turns' | 'stall' = 'exit'): string {
   const file = `${dir}/codex`;
   writeFileSync(
     file,
     `#!/usr/bin/env node
+if (process.argv[3] === 'daemon') {
+  const fs = require('fs');
+  const home = process.env.CODEX_HOME;
+  fs.appendFileSync(${JSON.stringify(`${dir}/daemon.log`)}, process.argv.slice(4).join(' ') + '\\n');
+  if (process.argv[4] === 'start') {
+    if (fs.existsSync(${JSON.stringify(`${dir}/daemon-fails`)})) {
+      process.stderr.write('the daemon could not start\\n');
+      process.exit(1);
+    }
+    fs.mkdirSync(home + '/app-server-control', { recursive: true });
+    fs.mkdirSync(home + '/app-server-daemon', { recursive: true });
+    fs.writeFileSync(home + '/app-server-control/app-server-control.sock', '');
+    fs.writeFileSync(home + '/app-server-daemon/daemon.pid', JSON.stringify({ pid: 4242, processStartTime: Date.now() }));
+  } else if (process.argv[4] === 'stop') {
+    fs.rmSync(home + '/app-server-control/app-server-control.sock', { force: true });
+    fs.rmSync(home + '/app-server-daemon/daemon.pid', { force: true });
+  }
+  process.exit(0);
+}
 require('fs').writeFileSync(${JSON.stringify(`${dir}/started`)}, process.argv.slice(2).join(' '));
 const mode = ${JSON.stringify(mode)};
 let buffer = '';
@@ -74,7 +96,7 @@ process.stdin.on('data', (chunk) => {
   return file;
 }
 
-/** How to run the stand-in: node found on PATH by its first line, this one's folder first. */
+/** How to run the stand-in: node found on PATH by its first line, this one's folder first, and `dir` as Codex's home, so that no test reaches the shared app-server of the computer it runs on. */
 export function launchIn(dir: string, mode?: 'exit' | 'silent' | 'die' | 'ask' | 'elicit' | 'elicitResolved' | 'elicitOther' | 'threads' | 'turns' | 'stall') {
-  return { codexPath: fakeCodex(dir, mode), cwd: dir, env: { ...process.env, PATH: `${process.execPath.replace(/\/node$/, '')}:${process.env.PATH ?? ''}` } };
+  return { codexPath: fakeCodex(dir, mode), cwd: dir, env: { ...process.env, CODEX_HOME: dir, PATH: `${process.execPath.replace(/\/node$/, '')}:${process.env.PATH ?? ''}` } };
 }
