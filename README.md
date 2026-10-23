@@ -379,7 +379,7 @@ The phone button controls Claude Code and Codex separately. Its settings are rem
 
 The button uses the accent colour for Claude, green for Codex, and an accent colour with a green dot when both are enabled.
 
-Codex permits only one app-server to write a chat at a time. While the shared app-server runs, it holds the panel's Codex chats, and the ChatGPT desktop app shows them read-only. If the shared app-server cannot start, each chat runs in its own process, released after three idle minutes, and the ChatGPT app can take a chat by writing in it; after that, only quitting ChatGPT releases it. The panel follows conversation updates and preserves an unsent message when ownership prevents a send.
+Codex permits only one app-server to write a chat at a time. While the shared app-server runs, it holds the panel's Codex chats, and the ChatGPT desktop app shows them read-only. If the shared app-server cannot start, each chat runs in its own process, released after three idle minutes, and the ChatGPT app can take a chat by writing in it; after that, only quitting ChatGPT releases it. The panel follows conversation updates and preserves an unsent message when ownership prevents a send. When the ChatGPT app is already running before the panel starts the shared app-server, Codex's phone app may reach this Mac through ChatGPT instead and refuse the panel's chats ("Another Codex session is using this task"); quitting ChatGPT, or starting it after Obsidian, lets the phone reach them through the shared app-server.
 
 ### Safety
 
@@ -499,6 +499,7 @@ Use Obsidian's command palette and search for **Vault Claude**. Commands include
 - **Windows npm installation:** replace `claude.cmd` with the native installation that provides `claude.exe`.
 - **Failed to authenticate:** for Claude, run `claude` in a terminal and use `/login`. For Codex, run `codex` and sign in. Retry after signing in.
 - **Codex chat held by another app:** quit the ChatGPT desktop app (closing the chat there is not enough), then try again. Your unsent message stays in the panel.
+- **Phone says another Codex session is using the chat:** the ChatGPT desktop app was started before the panel's shared app-server. Quit ChatGPT, or start it after Obsidian.
 - **Other errors:** include the diagnostic log in a bug report after checking it for private paths and error details.
 
 ## Alternatives
