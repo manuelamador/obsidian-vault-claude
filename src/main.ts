@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, promises as fsPromises } from 'fs';
 import { execFile, spawn } from 'child_process';
+import { chatGptAndDaemonAges } from './codexProcesses';
 import { homedir } from 'os';
 import type { TaskInfo } from './backgroundTasks';
 import { FileSystemAdapter, Menu, Notice, Plugin, TFile, TFolder, normalizePath, parseYaml, stringifyYaml, type Editor, type TAbstractFile, type WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
@@ -1923,9 +1924,29 @@ export default class VaultClaudePlugin extends Plugin {
     if (error) {
       log(on ? 'enabling codex remote control failed' : 'disabling codex remote control failed', error);
       new Notice(on ? `Codex's shared app-server runs, but remote control did not turn on, so the phone may not reach it: ${error}` : `Codex's remote control did not turn off, so the phone may still reach the panel's Codex chats: ${error}`, 10_000);
-    }
+    } else if (on) void this.warnChatGptFirst();
     return error;
   }
+
+  /**
+   * Said once for a shared app-server: the ChatGPT app's own Codex app-server started before it, in
+   * which case Codex's phone app was found (2026-10-23) to reach this Mac through ChatGPT, which
+   * refuses the panel's chats ("Another Codex session is using this task") until ChatGPT is restarted.
+   * Read from the process list (`ps`): nothing is sent anywhere.
+   */
+  private async warnChatGptFirst(): Promise<void> {
+    if (process.platform !== 'darwin') return;
+    const listing = await new Promise<string>((resolve) => execFile('ps', ['-axo', 'etime=,command='], { timeout: 5000 }, (error, stdout) => resolve(error ? '' : stdout)));
+    const ages = chatGptAndDaemonAges(listing);
+    if (!ages || ages.chatGpt <= ages.daemon) return;
+    const daemon = codexDaemonIdentity(process.env) ?? 'running';
+    if (this.warnedChatGptFor === daemon) return;
+    this.warnedChatGptFor = daemon;
+    new Notice("The ChatGPT app was running before the panel's Codex app-server started, so Codex's phone app may open the panel's chats through ChatGPT and refuse them. Quit ChatGPT and open it again for the phone to reach them.", 15_000);
+  }
+
+  /** The shared app-server warnChatGptFirst spoke of last. */
+  private warnedChatGptFor: string | null = null;
 
   /** The shared app-server the panel started, as Codex records it (see codexDaemonIdentity), kept across reloads of the plugin; null for none. */
   private codexDaemonStarted: string | null = null;
