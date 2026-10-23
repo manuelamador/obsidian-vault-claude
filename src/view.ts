@@ -6198,15 +6198,21 @@ export class ChatView extends ItemView {
     return id ? { id, title: this.chatName ?? 'Chat' } : null;
   }
 
-  /** After a move from `from` to another chat, not by the arrows: `from` goes on the back list and the forward list empties. */
+  /**
+   * After a move from `from` to another chat, not by the arrows: `from` goes on the back list and
+   * the forward list is kept, so the chat now shown sits between them rather than cutting off the
+   * chats gone back past. A chat already on either list is moved, not listed twice.
+   */
   private remember(from: { id: string; title: string } | null): void {
     const now = this.navPlace();
     if (this.navigating || !from || from.id === now?.id) return;
     // Already the last one back (remembered twice for one move): not again.
     if (this.navBack[this.navBack.length - 1]?.id === from.id) return;
+    const elsewhere = (place: { id: string }) => place.id !== from.id && place.id !== now?.id;
+    this.navBack = this.navBack.filter(elsewhere);
+    this.navForward = this.navForward.filter(elsewhere);
     this.navBack.push(from);
     if (this.navBack.length > NAV_DEPTH) this.navBack.shift();
-    this.navForward = [];
     this.updateNavButtons();
   }
 

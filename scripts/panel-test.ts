@@ -3211,14 +3211,15 @@ async function main(): Promise<void> {
       if (!deleteOk) process.exitCode = 1;
     }
 
-    // The arrows: a move to another chat (not by the arrows) puts the chat left on the back list and empties the forward list.
+    // The arrows: a move to another chat (not by the arrows) puts the chat left on the back list and
+    // keeps the forward list, a chat already on either list moved rather than listed twice.
     const navView = view as unknown as { navBack: { id: string; title: string }[]; navForward: { id: string; title: string }[]; remember(from: { id: string; title: string } | null): void; updateNavButtons(): void };
     const backArrow = root.querySelector('.vc-nav .clickable-icon') as HTMLElement;
     // Earlier steps of this test opened chats, which the arrows remember: start from none.
     navView.navBack = [];
-    navView.navForward = [{ id: 'later', title: 'Later chat' }];
+    navView.navForward = [{ id: 'later', title: 'Later chat' }, { id: 'prev', title: 'Earlier chat' }];
     navView.remember({ id: 'prev', title: 'Earlier chat' });
-    const remembered = JSON.stringify(navView.navBack) === '[{"id":"prev","title":"Earlier chat"}]' && navView.navForward.length === 0;
+    const remembered = JSON.stringify(navView.navBack) === '[{"id":"prev","title":"Earlier chat"}]' && JSON.stringify(navView.navForward) === '[{"id":"later","title":"Later chat"}]';
     const backLabel = backArrow.getAttribute('aria-label') === 'Back to “Earlier chat” (⌘[)' && !backArrow.hasClass('is-disabled');
     navView.navBack = [];
     navView.updateNavButtons();
