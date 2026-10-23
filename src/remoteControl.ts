@@ -48,6 +48,11 @@ export class RemoteControlServer {
     return this.child !== null;
   }
 
+  /** Whether the last stop was asked for (see stop), rather than the server ending on its own. */
+  get stopRequested(): boolean {
+    return this.stopping;
+  }
+
   start(options: RemoteOptions): void {
     if (this.child) return;
     const args = ['remote-control', '--name', options.name, '--permission-mode', options.permissionMode];

@@ -1350,12 +1350,14 @@ export default class VaultClaudePlugin extends Plugin {
 
   private onRemoteChange(): void {
     const { state, error } = this.remote.status;
-    // Refused because the folder is served already: most often the server of before a reload of the
-    // plugin, still shutting down. Tried again for a while before it is reported; a server started in
-    // a terminal stays, and is reported once the tries are used up.
-    if (state === 'error' && /already served/i.test(error ?? '') && this.settings.phoneClaude && this.remoteRetries < REMOTE_RETRIES) {
+    // Ended while phone access is on, not by being turned off: started again, a few times, before it is
+    // reported. Most often refused because the folder is served already (the server of before a reload
+    // of the plugin, still shutting down), or ended by Claude Code on its own; a server started in a
+    // terminal stays, and is reported once the tries are used up.
+    const ended = state === 'error' || (state === 'stopped' && !this.remote.stopRequested);
+    if (ended && this.settings.phoneClaude && this.remoteRetries < REMOTE_RETRIES) {
       this.remoteRetries++;
-      log('remote control: folder served already; trying again', { attempt: this.remoteRetries });
+      log('remote control: ended while on; trying again', { attempt: this.remoteRetries, state, error });
       window.clearTimeout(this.remoteRetryTimer);
       this.remoteRetryTimer = window.setTimeout(() => {
         if (this.settings.phoneClaude && !this.remote.isRunning()) this.startRemote();
@@ -1368,6 +1370,8 @@ export default class VaultClaudePlugin extends Plugin {
       new Notice(`Phone access on. In the Claude app, open Code and choose "${this.phoneAccessName()}".`);
     } else if (state === 'error' && this.lastRemoteState !== 'error') {
       new Notice(`Phone access stopped: ${error ?? 'unknown error'}`, 10_000);
+    } else if (state === 'stopped' && !this.remote.stopRequested && this.settings.phoneClaude && this.lastRemoteState !== 'stopped') {
+      new Notice('Claude Code on the phone stopped, and starting it again did not work. Turn it off and on in the phone menu to try again.', 10_000);
     }
     this.lastRemoteState = state;
     for (const view of this.chatViews()) view.updatePhoneButton();
