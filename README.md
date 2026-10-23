@@ -364,7 +364,7 @@ Codex chats are labelled beside their titles, in history and in Connections. The
 - Codex supports **Send this message to another chat…** and **Remove from here on**. Removal has no Undo. It cannot copy or move only the exchanges after a selected message into another chat.
 - **Compact now** requests compaction and adds a divider when it occurs. **Fast mode** (⚡) requests the fast tier for supported models and uses more of your Codex limits.
 - Chats appear in Codex's own app and phone lists under their panel titles. Context added by the panel is sent separately, so your messages remain readable as typed. Messages from before 0.35.0 retain the older combined format.
-- Without phone access, an idle Codex process is released after three minutes. See **Phone access** for shared sessions and app ownership limits.
+- Codex chats run through Codex's shared app-server, which the panel starts when a chat needs it and stops when Obsidian quits if the panel started it. See **Phone access** for remote control and the ChatGPT app.
 - Claude Code's Plan mode, `/plan` and slash commands are unavailable in Codex chats.
 
 </details>
@@ -374,11 +374,11 @@ Codex chats are labelled beside their titles, in history and in Connections. The
 The phone button controls Claude Code and Codex separately. Its settings are remembered across Obsidian restarts.
 
 - **Claude Code on the phone** makes the current Claude chat and background Claude chats available through the Claude app or claude.ai/code. New chats follow the same setting. You can also start new vault sessions from the phone.
-- **Codex on the phone** routes chats through Codex's shared app-server with remote control enabled. The plugin starts the server when needed and stops a server it owns when Obsidian quits. A server started elsewhere is left running.
+- **Codex on the phone** turns remote control of Codex's shared app-server on or off, without interrupting the chats running through it. The panel's Codex chats use that server either way: the panel starts it when needed and stops it when Obsidian quits if the panel started it. A server started elsewhere is left running.
 
 The button uses the accent colour for Claude, green for Codex, and an accent colour with a green dot when both are enabled.
 
-Codex permits only one process to write a chat at a time. If the ChatGPT desktop app holds a chat, close that chat or quit the app before continuing it in Obsidian. The panel follows conversation updates and preserves an unsent message when ownership prevents a send. A running daemon does not guarantee that another app will release the chat.
+Codex permits only one app-server to write a chat at a time. While the shared app-server runs, it holds the panel's Codex chats, and the ChatGPT desktop app shows them read-only. If the shared app-server cannot start, each chat runs in its own process, released after three idle minutes, and the ChatGPT app can take a chat by writing in it; after that, only quitting ChatGPT releases it. The panel follows conversation updates and preserves an unsent message when ownership prevents a send.
 
 ### Safety
 
@@ -465,7 +465,7 @@ Messages and context are sent through Claude Code or Codex. If Zotero integratio
 | **Phone access** | |
 | Claude Code on the phone | Enable Remote Control for Claude chats and new vault sessions; off by default |
 | Name in the Claude app | Vault name shown in the Claude app |
-| Codex on the phone | Use Codex's shared app-server; off by default |
+| Codex on the phone | Remote control of Codex's shared app-server; off by default |
 | Keep Codex chats out of Codex's own lists | Archive chats while not open in the panel; off by default |
 | **Advanced** | |
 | Extra PATH entries | Additional directories for commands run by the engine |
@@ -497,7 +497,7 @@ Use Obsidian's command palette and search for **Vault Claude**. Commands include
 - **Claude Code / SDK version notice:** update Claude Code with `claude update`, or update the plugin if Claude Code is newer than its bundled SDK expects.
 - **Windows npm installation:** replace `claude.cmd` with the native installation that provides `claude.exe`.
 - **Failed to authenticate:** for Claude, run `claude` in a terminal and use `/login`. For Codex, run `codex` and sign in. Retry after signing in.
-- **Codex chat held by another app:** close the chat in the ChatGPT desktop app, or quit that app, then try again. Your unsent message stays in the panel.
+- **Codex chat held by another app:** quit the ChatGPT desktop app (closing the chat there is not enough), then try again. Your unsent message stays in the panel.
 - **Other errors:** include the diagnostic log in a bug report after checking it for private paths and error details.
 
 ## Alternatives

@@ -28,6 +28,8 @@ test('a Codex read that fails is tried again later, and recovers the chats then,
   const answering = mkdtempSync(`${tmpdir()}/vc-codex-answering-`);
   const p = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
   p.saveSettings = async () => undefined;
+  // No panels: told nothing when Codex's shared app-server starts for a read (see ensureCodexDaemon).
+  (p as unknown as { chatViews(): unknown[] }).chatViews = () => [];
   const internals = p as unknown as { refreshCodexStamps(): Promise<void>; codexRead: Promise<void> | null; codexRecoverAll: boolean; codexReadMaxMs: number; codexRetryMs: number };
   // Records found empty at start: the Codex chats are recovered from Codex's store.
   internals.codexRecoverAll = true;
@@ -63,6 +65,8 @@ test('with records, the panel\'s Codex threads with none are not recorded again:
   const dir = mkdtempSync(`${tmpdir()}/vc-codex-kept-`);
   const p = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
   p.saveSettings = async () => undefined;
+  // No panels: told nothing when Codex's shared app-server starts for a read (see ensureCodexDaemon).
+  (p as unknown as { chatViews(): unknown[] }).chatViews = () => [];
   const internals = p as unknown as { refreshCodexStamps(): Promise<void>; codexRead: Promise<void> | null };
   p.chats = [{ id: 'p1', title: 'First', engine: 'codex', at: 0 }];
   try {
@@ -82,6 +86,8 @@ test('rebuilding by hand offers the Codex chats with no record back, and restore
   const dir = mkdtempSync(`${tmpdir()}/vc-codex-offer-`);
   const p = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
   p.saveSettings = async () => undefined;
+  // No panels: told nothing when Codex's shared app-server starts for a read (see ensureCodexDaemon).
+  (p as unknown as { chatViews(): unknown[] }).chatViews = () => [];
   p.vaultRoot = () => null;
   p.listChats = async () => [];
   const asked: string[] = [];
