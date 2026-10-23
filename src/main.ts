@@ -695,6 +695,11 @@ export default class VaultClaudePlugin extends Plugin {
       callback: async () => (await this.activateView())?.startNewChat(),
     });
     this.addCommand({
+      id: 'close-chat',
+      name: 'Close this chat',
+      callback: () => void this.frontChatView()?.closeCurrentChat(),
+    });
+    this.addCommand({
       id: 'chat-history',
       name: 'Chat history',
       callback: async () => (await this.activateView())?.openHistory(),

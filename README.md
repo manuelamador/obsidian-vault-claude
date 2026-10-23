@@ -288,6 +288,7 @@ The plugin reads chats and memos locally. It sends short excerpts to the selecte
 <details>
 <summary><strong>History, branches and background tasks</strong></summary>
 
+- **✕** beside a chat's title closes it, as a browser closes a tab: it comes off the phone and the ← → arrows, its process ends, and the chat before it (or a new chat) comes up. It stays in history. A chat still working or waiting on you asks first: leave it in the background, where it finishes and then closes, or stop it. **Close this chat** in the command palette does the same.
 - The clock opens history. A blue phone icon marks a chat available on the phone. **✕** closes a background chat's process while keeping its conversation, or takes a foreground chat off the phone. The plugin asks first if closing would interrupt work or a pending approval. ⌘↵ or ⌘-click opens a history item in a new tab.
 
   <img src="docs/history-button.png" width="265" alt="The clock button for opening chat history.">

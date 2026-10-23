@@ -566,6 +566,7 @@ export class ChatView extends ItemView {
   private scratch = false;
   /** Deletes the chat on screen; in the scratch chat, clears it. */
   private deleteButton!: HTMLElement;
+  private closeButton!: HTMLElement;
   private notesButton!: HTMLElement;
   /** How many notes the chat changed or mentioned, on the notes button; kept current by countNotesSoon. */
   private notesCount!: HTMLElement;
@@ -921,6 +922,10 @@ export class ChatView extends ItemView {
     setIcon(this.deleteButton, 'trash-2');
     this.deleteButton.hide();
     this.registerDomEvent(this.deleteButton, 'click', () => (this.scratch ? void this.plugin.clearScratchChat() : this.deleteCurrentChat()));
+    this.closeButton = titleActions.createEl('button', { cls: 'clickable-icon vc-close-chat', attr: { 'aria-label': 'Close this chat: off the arrows and the phone, its process ended; it stays in the history' } });
+    setIcon(this.closeButton, 'x');
+    this.closeButton.hide();
+    this.registerDomEvent(this.closeButton, 'click', () => void this.closeCurrentChat());
     this.phoneButton = header.createEl('button', { cls: 'clickable-icon vc-phone' });
     setIcon(this.phoneButton, 'smartphone');
     this.registerDomEvent(this.phoneButton, 'click', (evt) => this.onPhoneClick(evt));
@@ -3155,6 +3160,7 @@ export class ChatView extends ItemView {
     this.saveButton.toggle(hasSession);
     this.chatTitleEl.toggleClass('is-renamable', this.chatId !== null && !this.scratch);
     this.deleteButton?.toggle(this.scratch || hasSession);
+    this.closeButton?.toggle(hasSession && !this.scratch);
     this.deleteButton?.setAttr('aria-label', this.scratch ? 'Clear the scratch chat: it starts over' : 'Delete this chat');
     if (this.noteChatsEl) this.updateNoteChats(this.activeNote()?.file ?? null);
     // Not while Claude works: the placeholder then says that a message would be queued.
@@ -6272,6 +6278,60 @@ export class ChatView extends ItemView {
   }
 
   /** New chat, as its button and command start one: the chat left can be gone back to. */
+  /**
+   * Closes the chat on screen, as a browser closes a tab: off the phone, off the arrows, and its
+   * process ended; one still working is asked about: it finishes in the background first, then
+   * closes (see detachToBackground), or stops. The chat before it on the back arrow comes up, or a new
+   * chat. It stays in the history.
+   */
+  async closeCurrentChat(): Promise<void> {
+    const id = this.chatId ?? this.resumeId;
+    if (!id || this.scratch) return;
+    // Still working, or waiting on you: asked whether it goes on in the background or stops.
+    const waiting = this.openApprovals.length > 0;
+    if (this.busy || this.pending.size > 0 || this.tasks.size > 0 || waiting) {
+      const session = this.session;
+      const still = () => this.session === session && (this.chatId ?? this.resumeId) === id;
+      new ChoiceModal(
+        this.app,
+        'Close this chat?',
+        `“${this.chatName ?? 'This chat'}” is ${waiting ? 'waiting for your answer' : 'still working'}. In the background it ${waiting ? 'waits there, and closes once it has finished' : 'finishes, then closes'}; stopped, ${this.tasks.size > 0 ? 'its reply and background tasks end' : 'its reply ends'} now.`,
+        [
+          ['Leave it in the background', () => void (still() && this.closeChatNow(id))],
+          [
+            'Stop and close',
+            () => {
+              if (!still()) return;
+              if (this.busy) this.interruptTurn();
+              else if (this.tasks.size > 0) this.stopTasks();
+              void this.closeChatNow(id);
+            },
+          ],
+        ],
+      ).open();
+      return;
+    }
+    await this.closeChatNow(id);
+  }
+
+  /** closeCurrentChat, once settled: chat `id` closed, the one before it or a new chat shown. */
+  private async closeChatNow(id: string): Promise<void> {
+    // Off the phone first: a chat on the phone would otherwise be kept open in the background for it.
+    await this.offPhone();
+    if ((this.chatId ?? this.resumeId) !== id) return;
+    const gone = (place: { id: string }) => place.id !== id;
+    this.navBack = this.navBack.filter(gone);
+    this.navForward = this.navForward.filter(gone);
+    this.newChat();
+    if (this.navBack.length > 0) await this.navigate('back');
+    else if (this.plugin.settings.newChatEngine === 'codex') this.useEngine('codex');
+    // Not put back on either list by the move away from it.
+    this.navBack = this.navBack.filter(gone);
+    this.navForward = this.navForward.filter(gone);
+    this.updateNavButtons();
+    this.plugin.chatShown(this);
+  }
+
   startNewChat(): void {
     const from = this.navPlace();
     this.newChat();

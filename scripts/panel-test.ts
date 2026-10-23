@@ -3227,6 +3227,18 @@ async function main(): Promise<void> {
     view.newChat();
     console.log(`back arrow: remembers the chat left ${remembered}; names it ${backLabel}; off with nowhere to go ${backOff}`);
     if (!remembered || !backLabel || !backOff) process.exitCode = 1;
+    // ✕ closes the chat on screen: off both lists, a new chat in its place when there is none before it.
+    {
+      const closing = view as unknown as { chatId: string | null; closeCurrentChat(): Promise<void>; closeButton: HTMLElement };
+      closing.chatId = 'shut';
+      navView.navBack = [];
+      navView.navForward = [{ id: 'shut', title: 'Shut' }, { id: 'kept', title: 'Kept' }];
+      await closing.closeCurrentChat();
+      const closedOk = closing.chatId === null && navView.navBack.length === 0 && JSON.stringify(navView.navForward) === '[{"id":"kept","title":"Kept"}]' && !closing.closeButton.isShown();
+      console.log(`close: chat gone from screen and arrows ${closedOk}`);
+      if (!closedOk) process.exitCode = 1;
+      navView.navForward = [];
+    }
     console.log(`newChat completed; save button: ${internals.saveButton.isShown()}`);
     const clearedOk = !(root.querySelector('.vc-find') as HTMLElement).isShown();
     console.log(`new chat closes find: ${clearedOk}`);
