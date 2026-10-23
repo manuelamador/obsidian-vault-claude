@@ -84,6 +84,23 @@ export function diffHunks(diff: string, kind: string): PatchHunk[] {
   return [{ oldStart: removed ? 1 : 0, oldLines: removed ? lines.length : 0, newStart: removed ? 0 : 1, newLines: removed ? 0 : lines.length, lines: lines.map((line) => `${removed ? '-' : '+'}${line}`) }];
 }
 
+/**
+ * A message of yours (`userMessage` item) as the chat draws it: its text, or its images and text;
+ * null when it holds neither. The context the panel sent before the message (a project's, included
+ * chats': see CodexSession.addContext) is not yours to show.
+ */
+export function codexUserContent(item: CodexItem): string | Record<string, unknown>[] | null {
+  const parts = ((item as { content?: unknown[] }).content ?? []) as { type?: string; text?: string; url?: string }[];
+  const text = parts.flatMap((part) => (part.type === 'text' && part.text && !/^\s*<(project_context|linked_chats)>/.test(part.text) ? [part.text] : [])).join('\n\n');
+  // Images sent as data URLs, as the chat draws a message's images (see codexInput); others by a note of them.
+  const images = parts.flatMap((part): Record<string, unknown>[] => {
+    const data = part.type === 'image' && part.url ? /^data:([^;]+);base64,(.*)$/s.exec(part.url) : null;
+    return data ? [{ type: 'image', source: { type: 'base64', media_type: data[1], data: data[2] } }] : part.type === 'image' || part.type === 'localImage' ? [{ type: 'text', text: '[image]' }] : [];
+  });
+  if (!text.trim() && images.length === 0) return null;
+  return images.length === 0 ? text : [...images, ...(text.trim() ? [{ type: 'text', text }] : [])];
+}
+
 /** The session's start, as Claude Code's init message gives it: its id and model. */
 export function codexInit(sessionId: string, model: string | null, cwd: string): DrawnMessage {
   return { type: 'system', subtype: 'init', session_id: sessionId, model: model ?? 'codex', cwd, tools: [], mcp_servers: [], permissionMode: 'default', slash_commands: [], uuid: `${sessionId}:init` };
@@ -192,18 +209,8 @@ export function codexTranscript(sessionId: string, turns: { items?: CodexItem[] 
   for (const turn of turns) {
     for (const item of turn.items ?? []) {
       if (item.type === 'userMessage') {
-        const content = (item as { content?: { type?: string; text?: string }[] }).content ?? [];
-        // The context the panel sent before the message (a project's, included chats': see CodexSession.addContext) is not yours to show.
-        const parts = content as { type?: string; text?: string; url?: string }[];
-        const text = parts.flatMap((part) => (part.type === 'text' && part.text && !/^\s*<(project_context|linked_chats)>/.test(part.text) ? [part.text] : [])).join('\n\n');
-        // Images sent as data URLs, as the chat draws a message's images (see codexInput); others by a note of them.
-        const images = parts.flatMap((part): Record<string, unknown>[] => {
-          const data = part.type === 'image' && part.url ? /^data:([^;]+);base64,(.*)$/s.exec(part.url) : null;
-          return data ? [{ type: 'image', source: { type: 'base64', media_type: data[1], data: data[2] } }] : part.type === 'image' || part.type === 'localImage' ? [{ type: 'text', text: '[image]' }] : [];
-        });
-        if (!text.trim() && images.length === 0) continue;
-        const shown = images.length === 0 ? text : [...images, ...(text.trim() ? [{ type: 'text', text }] : [])];
-        transcript.push({ type: 'user', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, message: { role: 'user', content: shown } });
+        const shown = codexUserContent(item);
+        if (shown !== null) transcript.push({ type: 'user', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, message: { role: 'user', content: shown } });
         continue;
       }
       for (const message of [...codexItemStarted(sessionId, item, cwd), ...codexItemCompleted(sessionId, item)]) {

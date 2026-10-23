@@ -103,3 +103,9 @@ test('a Codex compaction is drawn as the divider Claude Code leaves, live and sa
   const { transcript } = codexTranscript('s', [{ items: [{ type: 'contextCompaction', id: 'k1' }] }]);
   assert.equal((transcript[0] as unknown as { type: string }).type, 'system');
 });
+
+test('a message of yours from elsewhere: its text, without the context the panel sent', async () => {
+  const { codexUserContent } = await import('../src/codexEvents');
+  assert.equal(codexUserContent({ type: 'userMessage', id: 'u1', content: [{ type: 'text', text: '<project_context>x</project_context>' }, { type: 'text', text: 'from the phone' }] } as never), 'from the phone');
+  assert.equal(codexUserContent({ type: 'userMessage', id: 'u2', content: [] } as never), null);
+});

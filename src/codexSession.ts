@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { CodexConnection, type CodexLaunch } from './codexConnection';
-import { codexInit, codexItemCompleted, codexItemStarted, codexTurnResult, type CodexItem, type CodexUsage } from './codexEvents';
+import { codexInit, codexItemCompleted, codexItemStarted, codexTurnResult, codexUserContent, type CodexItem, type CodexUsage } from './codexEvents';
 import type { SDKControlGetContextUsageResponse } from '@anthropic-ai/claude-agent-sdk';
 import { splitContext } from './history';
 import { log } from './log';
@@ -90,6 +90,15 @@ export class CodexSession {
   /** The turn running, and the messages of yours it answers. */
   private turnId: string | null = null;
   private turnMessages: string[] = [];
+  /** Messages of a turn started elsewhere (the phone, Codex's app), as Codex reported them, until the panel draws them (see takeRemotePrompts). */
+  private remotePrompts: { id: string; content: string | Record<string, unknown>[] }[] = [];
+
+  /** The messages of a turn the panel did not start, once each: Codex does not send them again. */
+  takeRemotePrompts(): { id: string; content: string | Record<string, unknown>[] }[] {
+    const prompts = this.remotePrompts;
+    this.remotePrompts = [];
+    return prompts;
+  }
   private usage: CodexUsage | null = null;
   /** The thread's context as Codex last reported it: what the last request held, and the model's window. */
   private context: { used: number; window: number } | null = null;
@@ -466,6 +475,13 @@ export class CodexSession {
         break;
       case 'item/started': {
         const item = params.item as CodexItem;
+        // A message not sent from here (from the phone, or Codex's app): kept for the panel to draw.
+        if (item.type === 'userMessage') {
+          const clientId = (item as { clientId?: string }).clientId;
+          const content = clientId && this.turnMessages.includes(clientId) ? null : codexUserContent(item);
+          if (content !== null && !this.remotePrompts.some((prompt) => prompt.id === item.id)) this.remotePrompts.push({ id: item.id, content });
+          break;
+        }
         if (item.type === 'fileChange') this.changes.set(item.id, (item.changes ?? []).map((change) => change.path));
         for (const message of codexItemStarted(id, item, this.config.cwd)) this.handlers.onMessage(message as never);
         break;

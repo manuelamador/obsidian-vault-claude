@@ -2587,6 +2587,19 @@ export class ChatView extends ItemView {
   private async beginRemoteTurn(answering?: string[]): Promise<void> {
     this.beginTurn(answering);
     const turn = this.draw.turn;
+    // Codex reports the messages of a turn started elsewhere as it starts it (see CodexSession.takeRemotePrompts).
+    if (turn && this.session instanceof CodexSession) {
+      for (const prompt of this.session.takeRemotePrompts()) {
+        if (Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).some((drawn) => drawn.dataset.uuid === prompt.id)) continue;
+        const message = messagePrompt({ type: 'user', uuid: prompt.id, session_id: '', parent_tool_use_id: null, message: { role: 'user', content: prompt.content } } as unknown as SessionMessage);
+        const shown = message && promptBubble(message.text, message.images);
+        if (!shown || shown === 'stopped') continue;
+        const bubble = this.renderUserBubble(shown.text, shown.chips, undefined, prompt.id);
+        bubble.createDiv({ cls: 'vc-origin-label', text: this.plugin.settings.phoneCodex ? 'Sent from your phone or the Codex app' : 'Sent from the Codex app' });
+        turn.before(bubble);
+      }
+      return;
+    }
     const id = this.chatId;
     const root = this.plugin.vaultRoot();
     if (!turn || !id || !root) return;
