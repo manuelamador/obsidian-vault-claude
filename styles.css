@@ -4063,3 +4063,74 @@ a.vc-email-attachment:hover {
 .vc-map-project-row:hover {
   background: var(--background-modifier-hover);
 }
+
+/* A project's chats and notes, in a window with two tabs (see ProjectListModal). */
+.vc-project-list-modal {
+  width: min(640px, 92vw);
+}
+
+.vc-project-list-filter {
+  width: 100%;
+  margin-bottom: var(--size-4-2);
+}
+
+.vc-project-list-tabs {
+  display: flex;
+  gap: var(--size-4-1);
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: var(--size-4-2);
+}
+
+.vc-project-list-tab {
+  background: none;
+  box-shadow: none;
+  border-radius: var(--radius-s) var(--radius-s) 0 0;
+  color: var(--text-muted);
+}
+
+.vc-project-list-tab.is-active {
+  color: var(--text-normal);
+  border-bottom: 2px solid var(--interactive-accent);
+}
+
+.vc-project-list {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.vc-project-list-row {
+  position: relative;
+  padding: var(--size-4-1) var(--size-4-2);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.vc-project-list-row.is-selected {
+  background: var(--background-modifier-hover);
+}
+
+.vc-project-list-prompt {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vc-project-list-heading {
+  font-weight: var(--font-semibold);
+  margin: var(--size-4-2) 0 var(--size-4-1);
+}
+
+.vc-project-list-folder {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: var(--size-4-1) 0 0;
+}
+
+.vc-project-list-map {
+  position: absolute;
+  right: var(--size-4-1);
+  top: 50%;
+  transform: translateY(-50%);
+}

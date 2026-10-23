@@ -9,7 +9,8 @@ import type { EffortLevel, ModelInfo, SessionMessage, SDKControlGetUsageResponse
 import { patchSetMaxListenersForRenderer } from './electronCompat';
 import { chatTitle, configDir, firstPromptTitles, sessionTitle, deleteSessionIfAny, deleteSessions, eachInParallel, formatDate, lastMessages, listHistory, loadChat, renameSessionTitle, sessionIds, sessionStamp, setPlansDirectory, type ChatRecord, type HistoryItem, type LoadedChat } from './history';
 import { codexTranscript, type CodexItem } from './codexEvents';
-import { messageSearchText } from './chatText';
+import { messagePrompt, messageSearchText, promptBubble, startsTurn } from './chatText';
+import { ProjectListModal } from './projectListModal';
 import { errorText, log } from './log';
 import { savedChangedFiles } from './editDiff';
 import { todoLine, withTodo } from './todos';
@@ -31,7 +32,7 @@ import { CONTEXT_SYSTEM, PROJECT_NAME_PREFIX, PROJECT_TYPE, contextHash, context
 import { ChooseFolderModal, ContextModal, CreateProjectModal, type FolderSource } from './projectModals';
 import { FRONTMATTER_SYSTEM, frontmatterPrompt, readFrontmatterSuggestions } from './frontmatterSuggest';
 import { FrontmatterModal } from './frontmatterModal';
-import { chatMap, folderMap, hubNotes, noteMap, projectMap, withoutHubs } from './connections';
+import { chatMap, folderMap, hubNotes, noteMap, onMap, projectMap, withoutHubs } from './connections';
 import { CONNECTIONS_VIEW_TYPE, ConnectionsView, type ChatMapHost, type FolderMapHost, type NoteMapHost, type ProjectMapHost } from './connectionsView';
 import { saveMathSource } from './mathSource';
 import { RemoteControlServer, type RemoteState } from './remoteControl';
@@ -3391,6 +3392,49 @@ export default class VaultClaudePlugin extends Plugin {
     };
   }
 
+  /**
+   * Project `file`'s chats and notes listed whole in a window (see ProjectListModal): its chats with
+   * their last prompts, the notes they used, and the notes in its folder none used. `showNote` centres
+   * the Connections map on a note.
+   */
+  private async openProjectList(file: TFile, view: ChatView | null, showNote: (path: string) => void): Promise<void> {
+    await this.recentListing();
+    const weighted = this.weightedNotes();
+    const counts = new Map<string, number>();
+    const chats = this.projectMembers(file).map((item) => {
+      const used = [...(weighted.get(item.id)?.keys() ?? [])].filter(onMap);
+      for (const path of used) counts.set(path, (counts.get(path) ?? 0) + 1);
+      return { id: item.id, title: this.chatTitleOf(item.id), updatedAt: item.updatedAt, codex: this.isCodexChat(item.id), notes: used.length };
+    });
+    const folder = this.projectFolder(file);
+    // A project of the whole vault: its folder's notes are every note, not listed.
+    const unused = folder === '' ? [] : this.app.vault.getMarkdownFiles().filter((note) => note.path.startsWith(`${folder}/`) && !counts.has(note.path) && onMap(note.path)).map((note) => note.path);
+    new ProjectListModal(this.app, { name: file.basename, chats, notes: [...counts].map(([path, count]) => ({ path, chats: count })), unused }, {
+      lastPrompt: (id) => this.lastPromptOf(id),
+      openChat: (id, newTab) => {
+        const title = this.chatTitleOf(id);
+        if (!newTab) return void this.openChatById(id, title, view);
+        void (async () => {
+          const panel = view ?? (await this.activateView());
+          const tab = panel && (await this.openChatTab(panel.leaf));
+          if (tab) await this.openChatById(id, title, tab);
+        })();
+      },
+      openNote: (path, newTab) => void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false),
+      showNote,
+    }).open();
+  }
+
+  /** Chat `id`'s last prompt, as its chat shows it; null when it has none, or it cannot be read. */
+  private async lastPromptOf(id: string): Promise<string | null> {
+    const dir = this.vaultRoot();
+    if (!dir) return null;
+    const [message] = await this.recentMessages(id, dir, startsTurn, 1, PICK_UP_BYTES).catch(() => []);
+    const prompt = message ? messagePrompt(message) : null;
+    const shown = prompt ? promptBubble(prompt.text, prompt.images) : null;
+    return shown && shown !== 'stopped' ? shown.text : null;
+  }
+
   /** What project `file`'s map shows, read now; with `all`, every chat and note (see projectMap). */
   private async projectMapHost(file: TFile, view: ChatView | null, all = false): Promise<ProjectMapHost> {
     await this.recentListing();
@@ -3409,6 +3453,7 @@ export default class VaultClaudePlugin extends Plugin {
       moreChats: Math.max(0, members.length - map.chats.length),
       all,
       reload: (more) => this.projectMapHost(file, view, more),
+      showList: (showNote) => void this.openProjectList(file, view, showNote),
     };
   }
 

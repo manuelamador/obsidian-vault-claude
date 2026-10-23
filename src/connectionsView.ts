@@ -1083,6 +1083,7 @@ export class ConnectionsView extends ItemView {
     if (this.project?.path !== path) add('Show the project', 'locate-fixed', () => void this.moveToProject(path));
     add('Open project note', 'file-text', () => host.openProjectNote(path));
     add('New chat in this project', 'square-pen', () => host.newChatIn(path));
+    add('Chats and notes…', 'list', () => void host.projectMap(path).then((project) => project.showList((note) => void this.moveToNote(note))));
     add('Chats in this project', 'messages-square', () => host.showChats(projectChatsQuery(projectShownName({ basename: path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '') }))));
     const { localGraph } = host;
     if (localGraph) add('Open local graph', 'git-fork', () => localGraph(path));
@@ -1237,6 +1238,7 @@ export class ConnectionsView extends ItemView {
     setIcon(this.barEl.createSpan({ cls: 'vc-project-group-icon' }), 'folder-kanban');
     this.barEl.createSpan({ cls: 'vc-map-bar-name', text: project.name, attr: { title: project.name } });
     iconButton(this.barEl, 'more-horizontal', 'Project actions', (evt) => this.projectMenu(project.path, evt));
+    iconButton(this.barEl, 'list', 'All its chats and notes', () => project.showList((path) => void this.moveToNote(path)));
     iconButton(this.barEl, 'square-pen', `New chat in “${project.name}”: its context goes with your first message`, () => project.newChatIn(project.path));
     const own = host.ownProject?.path === project.path;
     const chat = `“${shortLabel(host.baseline.title, 32)}”`;
@@ -1633,6 +1635,8 @@ export interface ProjectMapHost extends MapActions {
   all: boolean;
   /** The map's data again; with `all`, every chat and note (see projectMap). */
   reload(all: boolean): Promise<ProjectMapHost>;
+  /** Lists its chats and notes whole, in a window (see ProjectListModal); `showNote` centres the map on a note. */
+  showList(showNote: (path: string) => void): void;
 }
 
 export interface NoteMapHost extends MapActions {
