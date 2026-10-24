@@ -13,6 +13,7 @@ interface FakeView {
   changed: number;
   updatePhoneButton(): void;
   codexDaemonChanged(): Promise<void>;
+  releaseSharedCodex(): Promise<void>[];
 }
 
 /**
@@ -34,6 +35,7 @@ function pluginIn(dir: string, phoneCodex: boolean): { p: VaultClaudePlugin; vie
     codexDaemonChanged: async () => {
       view.changed += 1;
     },
+    releaseSharedCodex: () => [],
   };
   (p as unknown as { chatViews(): FakeView[] }).chatViews = () => [view];
   const daemonLog = () => (existsSync(`${dir}/daemon.log`) ? readFileSync(`${dir}/daemon.log`, 'utf8').trim().split('\n') : []);
@@ -107,4 +109,55 @@ test("when the shared app-server cannot start, Codex chats run in processes of t
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a check for turns written elsewhere (a timer's) never starts the shared app-server; with none running it checks nothing", async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-follow-`);
+  try {
+    const { p, daemonLog } = pluginIn(dir, false);
+    assert.equal(await p.codexThreadChanged('t1'), false);
+    assert.deepEqual(daemonLog(), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('none is started as Obsidian quits, and one whose start was under way at quit is stopped once it is up', async () => {
+  const dir = mkdtempSync(`${tmpdir()}/vc-codex-quit-`);
+  try {
+    const { p, daemonLog } = pluginIn(dir, false);
+    const starting = p.ensureCodexDaemon();
+    // Quit while it starts: the quit's stop found nothing of the panel's yet.
+    p.quitting = true;
+    assert.equal(await starting, 'Obsidian is quitting');
+    // Stopped by a command left to run a second later (see stopCodexDaemonAtQuit).
+    for (let waited = 0; waited < 5000 && !daemonLog().includes('stop'); waited += 100) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(daemonLog(), ['start', 'stop']);
+    assert.equal(p.startedCodexDaemon, false);
+    // Quitting, nothing is started.
+    assert.equal(await p.ensureCodexDaemon(true), 'Obsidian is quitting');
+    assert.deepEqual(daemonLog(), ['start', 'stop']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Claude Code on the phone turned off and on before its server had exited starts again once it has, but not while quitting', () => {
+  const p = new (VaultClaudePlugin as unknown as new () => VaultClaudePlugin)();
+  let starts = 0;
+  const inside = p as unknown as { remote: unknown; onRemoteChange(): void; chatViews(): unknown[]; startRemote(): void };
+  inside.remote = { status: { state: 'stopped', error: null }, stopRequested: true, isRunning: () => false };
+  inside.chatViews = () => [];
+  inside.startRemote = () => void (starts += 1);
+  p.settings.phoneClaude = true;
+  inside.onRemoteChange();
+  assert.equal(starts, 1);
+  p.quitting = true;
+  inside.onRemoteChange();
+  assert.equal(starts, 1);
+  // Turned off: not started again.
+  p.quitting = false;
+  p.settings.phoneClaude = false;
+  inside.onRemoteChange();
+  assert.equal(starts, 1);
 });

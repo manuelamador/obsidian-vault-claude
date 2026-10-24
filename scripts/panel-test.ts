@@ -5079,6 +5079,84 @@ async function main(): Promise<void> {
     }
 
     {
+      // A Codex chat's first message waits for the shared app-server: Enter again sends nothing more,
+      // and what is typed meanwhile stays (goes with the message, or stays in the input if none is sent).
+      const host = plugin as unknown as Record<string, unknown>;
+      const was = { ensureCodexDaemon: host.ensureCodexDaemon, codexThreadChanged: host.codexThreadChanged };
+      const sendView = view as unknown as {
+        send(): Promise<boolean>;
+        useEngine(engine: 'claude' | 'codex'): void;
+        followCodexChat(): Promise<void>;
+        drawSteeredPrompts(session: unknown): void;
+        renderUserBubble(text: string, chips: unknown[], parent?: HTMLElement, uuid?: string): HTMLElement;
+        inputEl: HTMLTextAreaElement;
+        messagesEl: HTMLElement;
+        chatId: string | null;
+        session: unknown;
+        busy: boolean;
+      };
+      view.newChat();
+      sendView.useEngine('codex');
+      let starts = 0;
+      let up: () => void = () => undefined;
+      host.ensureCodexDaemon = () => {
+        starts += 1;
+        return new Promise<null>((resolve) => (up = () => resolve(null)));
+      };
+      sendView.inputEl.value = 'first message';
+      const first = sendView.send();
+      const second = await sendView.send();
+      sendView.inputEl.value += ' and more';
+      up();
+      await first;
+      const guardOk = starts === 1 && second === false && sendView.inputEl.value === 'first message and more';
+      console.log(`Codex send while its app-server starts: starts ${starts}; second Enter sent ${second}; input ${JSON.stringify(sendView.inputEl.value)} -> ${guardOk}`);
+      if (!guardOk) process.exitCode = 1;
+      sendView.inputEl.value = '';
+
+      // A Codex chat in a tab not in view is checked at most every 30 seconds, not at every tick.
+      let checks = 0;
+      host.codexThreadChanged = async () => {
+        checks += 1;
+        return false;
+      };
+      sendView.chatId = 'cx-hidden';
+      const screen = sendView as unknown as { isOnScreen(): boolean };
+      screen.isOnScreen = () => false;
+      await sendView.followCodexChat();
+      await sendView.followCodexChat();
+      const hiddenChecks = checks;
+      screen.isOnScreen = () => true;
+      await sendView.followCodexChat();
+      await sendView.followCodexChat();
+      const hiddenOk = hiddenChecks === 1 && checks === 3;
+      console.log(`Codex follow in a hidden tab: ${hiddenChecks} check(s) hidden, ${checks - hiddenChecks} in view -> ${hiddenOk}`);
+      if (!hiddenOk) process.exitCode = 1;
+
+      // A message from the phone steered into a turn running here is drawn in that turn at once; one the panel sent is not drawn again.
+      const { CodexSession } = await import('../src/codexSession');
+      const codex = new CodexSession({ codexPath: '/nonexistent', cwd: '/tmp', env: {} } as never, { onMessage: () => undefined, onPermission: async () => ({ behavior: 'deny', message: '' }) as never, onEnd: () => undefined });
+      sendView.renderUserBubble('sent here', [], sendView.messagesEl, 'panel-sent');
+      (codex as unknown as { remotePrompts: unknown[] }).remotePrompts = [
+        { id: 'item-phone', content: 'steered from the phone' },
+        { id: 'item-own', clientId: 'panel-sent', content: 'sent here' },
+      ];
+      sendView.session = codex;
+      sendView.busy = true;
+      sendView.drawSteeredPrompts(codex);
+      const users = [...sendView.messagesEl.querySelectorAll('.vc-user')];
+      const phone = users.find((bubble) => bubble.textContent?.includes('steered from the phone'));
+      const steeredOk = phone?.querySelector('.vc-origin-label') !== null && phone !== undefined && users.filter((bubble) => bubble.textContent?.includes('sent here')).length === 1 && codex.takeRemotePrompts().length === 0;
+      console.log(`Codex message steered from the phone: drawn ${phone !== undefined}; own not drawn twice -> ${steeredOk}`);
+      if (!steeredOk) process.exitCode = 1;
+      sendView.busy = false;
+      sendView.session = null;
+      sendView.chatId = null;
+      Object.assign(host, was);
+      view.newChat();
+    }
+
+    {
       // A Codex chat offers fast mode where its model has Codex's fast tier, and not where it has none.
       const fastView = view as unknown as { useEngine(engine: 'claude' | 'codex'): void; fastButton: HTMLElement };
       const models = plugin as unknown as { codexModels: unknown[] };

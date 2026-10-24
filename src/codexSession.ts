@@ -79,6 +79,13 @@ export function findCodex(configured: string): string | null {
 const REQUEST_TIMEOUT_MS = 60_000;
 const INTERRUPT_WAIT_MS = 5_000;
 
+/** A message of yours not sent from the panel, as Codex reported it: its item id, what it holds, and the client's own id for it, if any. */
+export interface RemotePrompt {
+  id: string;
+  content: string | Record<string, unknown>[];
+  clientId?: string;
+}
+
 export class CodexSession {
   /** The Codex thread's id, once started: the chat's id, as a Claude session's is. */
   sessionId: string | null = null;
@@ -90,11 +97,21 @@ export class CodexSession {
   /** The turn running, and the messages of yours it answers. */
   private turnId: string | null = null;
   private turnMessages: string[] = [];
-  /** Messages of a turn started elsewhere (the phone, Codex's app), as Codex reported them, until the panel draws them (see takeRemotePrompts). */
-  private remotePrompts: { id: string; content: string | Record<string, unknown>[] }[] = [];
+  /**
+   * Messages not sent from the panel (the phone, Codex's app), as Codex reported them, until the panel
+   * draws them (see takeRemotePrompts): those that start a turn, and those steered into a turn running.
+   * Let go of when the turn ends, so that none is drawn later in another turn.
+   */
+  private remotePrompts: RemotePrompt[] = [];
+  /**
+   * Called when such a message arrives, for the panel to draw it where the turn running is now (one
+   * steered from the phone into a turn the panel started, say); the panel draws those starting a turn
+   * itself, as it begins drawing that turn.
+   */
+  onRemotePrompts: (() => void) | null = null;
 
   /** The messages of a turn the panel did not start, once each: Codex does not send them again. */
-  takeRemotePrompts(): { id: string; content: string | Record<string, unknown>[] }[] {
+  takeRemotePrompts(): RemotePrompt[] {
     const prompts = this.remotePrompts;
     this.remotePrompts = [];
     return prompts;
@@ -153,9 +170,10 @@ export class CodexSession {
           for (const each of context) each.delivered(this.sessionId, each.parts.map((part) => part.key).filter((key) => went.has(key)));
         };
         if (this.turnId) {
+          // Known as the panel's before Codex can report it (see item/started), never taken as sent from elsewhere.
+          if (uuid) this.turnMessages.push(uuid);
           try {
             await this.request('turn/steer', { threadId: this.sessionId, expectedTurnId: this.turnId, input, ...(uuid ? { clientUserMessageId: uuid } : {}) });
-            if (uuid) this.turnMessages.push(uuid);
             delivered();
             return;
           } catch (error) {
@@ -479,7 +497,10 @@ export class CodexSession {
         if (item.type === 'userMessage') {
           const clientId = (item as { clientId?: string }).clientId;
           const content = clientId && this.turnMessages.includes(clientId) ? null : codexUserContent(item);
-          if (content !== null && !this.remotePrompts.some((prompt) => prompt.id === item.id)) this.remotePrompts.push({ id: item.id, content });
+          if (content !== null && !this.remotePrompts.some((prompt) => prompt.id === item.id)) {
+            this.remotePrompts.push({ id: item.id, content, ...(clientId ? { clientId } : {}) });
+            this.onRemotePrompts?.();
+          }
           break;
         }
         if (item.type === 'fileChange') this.changes.set(item.id, (item.changes ?? []).map((change) => change.path));
@@ -505,6 +526,8 @@ export class CodexSession {
         this.changes.clear();
         const sent = this.turnMessages;
         this.turnMessages = [];
+        // Any not drawn by now (a turn with no reply to begin drawing it) are not drawn in a later turn.
+        this.remotePrompts = [];
         log('codex turn ended', { status: turn.status });
         this.handlers.onMessage(codexTurnResult(id, turn, this.usage, sent) as never);
         this.usage = null;

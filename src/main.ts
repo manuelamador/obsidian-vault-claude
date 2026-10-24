@@ -676,7 +676,11 @@ export default class VaultClaudePlugin extends Plugin {
     });
     await this.loadSettings();
     // A window closed or reloaded without the quit event (e.g. Cmd+R): the same.
-    this.registerDomEvent(window, 'beforeunload', () => this.remote.stop());
+    this.registerDomEvent(window, 'beforeunload', () => {
+      this.remoteShutDown = true;
+      window.clearTimeout(this.remoteRetryTimer);
+      this.remote.stop();
+    });
     this.registerView(VIEW_TYPE, (leaf) => new ChatView(leaf, this));
     // Opened again with the workspace: it shows the chat of the first panel.
     this.registerView(CONNECTIONS_VIEW_TYPE, (leaf) => new ConnectionsView(leaf, (pane) => void this.followPanel(pane, this.connectionsPanel ?? this.chatViews()[0] ?? null), () => this.confirmRebuildConnections()));
@@ -1189,6 +1193,8 @@ export default class VaultClaudePlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('quit', () => {
         this.quitting = true;
+        // No Remote Control server started again after this (see onRemoteChange).
+        clearTimeout(this.remoteRetryTimer);
         this.stopCodexDaemonAtQuit();
         // Obsidian does not close the panels as it quits: their chats' processes are ended here.
         for (const view of this.chatViews()) view.endAllAtQuit();
@@ -1218,6 +1224,8 @@ export default class VaultClaudePlugin extends Plugin {
     this.cleanups.clear();
     // The Codex app-server kept for reads (see CodexReader).
     stopCodexReader();
+    // As at quit: a shared app-server the panel started is not left running unseen.
+    this.stopCodexDaemonAtQuit();
     if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
     window.clearTimeout(this.remoteRetryTimer);
     this.remote.stop();
@@ -1268,6 +1276,8 @@ export default class VaultClaudePlugin extends Plugin {
   /** Tries of the vault's Remote Control server refused as the folder was served already (see onRemoteChange), and the next one's timer. */
   private remoteRetries = 0;
   private remoteRetryTimer = 0;
+  /** The window is closing or reloading (its beforeunload): the Remote Control server is not started again (see onRemoteChange). */
+  private remoteShutDown = false;
 
   startRemote(): void {
     const launch = this.launchOrNotice();
@@ -1341,12 +1351,20 @@ export default class VaultClaudePlugin extends Plugin {
     // of the plugin, still shutting down), or ended by Claude Code on its own; a server started in a
     // terminal stays, and is reported once the tries are used up.
     const ended = state === 'error' || (state === 'stopped' && !this.remote.stopRequested);
+    // Turned off and on again before the server of before had exited: the start was skipped as it still
+    // ran (see setPhoneClaude), so it is started now that it has. Not while quitting or unloading.
+    if (state === 'stopped' && this.remote.stopRequested && this.settings.phoneClaude && !this.remote.isRunning() && !this.quitting && !this.remoteShutDown) {
+      this.lastRemoteState = state;
+      this.startRemote();
+      for (const view of this.chatViews()) view.updatePhoneButton();
+      return;
+    }
     if (ended && this.settings.phoneClaude && this.remoteRetries < REMOTE_RETRIES) {
       this.remoteRetries++;
       log('remote control: ended while on; trying again', { attempt: this.remoteRetries, state, error });
       window.clearTimeout(this.remoteRetryTimer);
       this.remoteRetryTimer = window.setTimeout(() => {
-        if (this.settings.phoneClaude && !this.remote.isRunning()) this.startRemote();
+        if (!this.quitting && !this.remoteShutDown && this.settings.phoneClaude && !this.remote.isRunning()) this.startRemote();
       }, REMOTE_RETRY_MS);
       for (const view of this.chatViews()) view.updatePhoneButton();
       return;
@@ -1837,6 +1855,8 @@ export default class VaultClaudePlugin extends Plugin {
     if (typeof launch === 'string') return Promise.resolve(launch);
     if (this.codexDaemonRunning(launch.env)) return Promise.resolve(null);
     if (this.codexDaemonStart) return this.codexDaemonStart;
+    // None started as Obsidian quits or the plugin unloads: nothing would be left to stop it.
+    if (this.quitting) return Promise.resolve('Obsidian is quitting');
     const failed = this.codexDaemonFailed;
     if (failed && !retry && Date.now() - failed.at < CODEX_DAEMON_RETRY_MS) return Promise.resolve(failed.error);
     const start = this.startCodexDaemon()
@@ -1892,9 +1912,17 @@ export default class VaultClaudePlugin extends Plugin {
     };
     for (let waited = 0; waited < 30_000 && !this.codexDaemonRunning(launch.env); waited += 250) {
       claim();
+      // Quitting meanwhile: stopped as soon as it is known to be the panel's, below.
+      if (this.quitting && this.startedCodexDaemon) break;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     claim();
+    // Obsidian quit, or the plugin unloaded, while it started (see stopCodexDaemonAtQuit, which ran
+    // before it was known to be the panel's): stopped as it would have been then.
+    if (this.quitting) {
+      this.stopCodexDaemonAtQuit();
+      return 'Obsidian is quitting';
+    }
     if (!this.codexDaemonRunning(launch.env)) {
       // Not left running, unseen, by a start that failed; one never claimed may be another client's,
       // still starting. No chat uses it, so none is let go of.
@@ -1948,7 +1976,7 @@ export default class VaultClaudePlugin extends Plugin {
   /** The shared app-server warnChatGptFirst spoke of last. */
   private warnedChatGptFor: string | null = null;
 
-  /** The shared app-server the panel started, as Codex records it (see codexDaemonIdentity), kept across reloads of the plugin; null for none. */
+  /** The shared app-server the panel started, as Codex records it (see codexDaemonIdentity), kept in the plugin's data (one left by a crash is still known); null for none. */
   private codexDaemonStarted: string | null = null;
 
   /** Whether the shared app-server running now is one the panel started, and so may stop: other Codex clients may use one started elsewhere. */
@@ -1958,8 +1986,10 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   /**
-   * Obsidian is quitting (its quit event, not a reload of the plugin): a shared app-server the panel
-   * started stops with it, a moment after, by a command left to finish on its own.
+   * Obsidian is quitting, or the plugin unloading (disabled, or reloaded): a shared app-server the
+   * panel started stops with it, a moment after, by a command left to finish on its own; a later chat
+   * starts one again (see ensureCodexDaemon). Left running when the plugin is disabled, nothing would
+   * stop it. One still starting is stopped once it is known to be the panel's (see startCodexDaemon).
    */
   private stopCodexDaemonAtQuit(): void {
     if (!this.startedCodexDaemon) return;
@@ -2185,10 +2215,12 @@ export default class VaultClaudePlugin extends Plugin {
    * Whether Codex thread `id` has changed since it was last read (a turn written from Codex's app or
    * the phone, say), as Codex stamps it, without reading the conversation. Not read yet, or let go
    * of after the panel's own turn (see forgetCodexRead): its stamp now is taken as the one read.
+   * Asked by a timer (see ChatView.followCodexChat), so it never starts Codex's shared app-server:
+   * when none runs, nothing is checked (false).
    */
   async codexThreadChanged(id: string): Promise<boolean> {
-    const launch = await this.codexLaunchReady();
-    if (typeof launch === 'string') return false;
+    const launch = this.codexLaunch();
+    if (typeof launch === 'string' || !launch.shared) return false;
     const stamp = await readCodexThreadStamp(launch, id).catch(() => undefined);
     if (stamp === undefined) return false;
     const known = this.codexReadStamps.get(id);

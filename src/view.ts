@@ -162,6 +162,8 @@ const ALT_CLICK = Platform.isMacOS ? '⌥-click' : 'Alt-click';
 const LONG_MESSAGE_CHARS = 700;
 /** How often the Codex chat on screen is checked for turns written elsewhere (see followCodexChat). */
 const CODEX_FOLLOW_MS = 5_000;
+/** How often a Codex chat in a tab not in view is checked, at most (see followCodexChat): less often, as nobody is looking. */
+const CODEX_FOLLOW_HIDDEN_MS = 30_000;
 const MAX_PREVIEW_LINES = 60;
 const PLAN_USAGE_INTERVAL_MS = 60_000;
 
@@ -1812,7 +1814,7 @@ export class ChatView extends ItemView {
     else if (this.plugin.settings.phoneClaude && state === 'starting') parts.push('Claude Code on the phone: connecting…');
     else if (this.plugin.settings.phoneClaude && state === 'error') parts.push(`Claude Code on the phone stopped: ${error ?? 'unknown error'}`);
     if (codex) parts.push("Codex on the phone: Codex's phone app can open every Codex chat");
-    else if (this.codexDaemonStarting) parts.push("Codex on the phone: starting Codex's shared app-server…");
+    else if (this.codexDaemonStarting) parts.push(this.plugin.settings.phoneCodex ? "Codex on the phone: starting Codex's shared app-server…" : "Starting Codex's shared app-server…");
     button.setAttr('aria-label', parts.length > 0 ? `${parts.join('. ')}. Click for options.` : 'Phone access: off. Click to turn it on for Claude Code or Codex.');
   }
 
@@ -1942,6 +1944,11 @@ export class ChatView extends ItemView {
     const onScreen = this.isOnScreen();
     // Marked already: nothing more until it is seen.
     if (!onScreen && this.followOwed) return;
+    // Not in view: checked every CODEX_FOLLOW_HIDDEN_MS rather than at every tick.
+    if (!onScreen) {
+      if (Date.now() - this.hiddenFollowAt < CODEX_FOLLOW_HIDDEN_MS) return;
+      this.hiddenFollowAt = Date.now();
+    }
     this.following = true;
     try {
       if (!(await this.plugin.codexThreadChanged(id))) return;
@@ -1963,6 +1970,8 @@ export class ChatView extends ItemView {
 
   /** A Codex chat in a tab not in view changed elsewhere: read again once it is in view (see followCodexChat). */
   private followOwed = false;
+  /** When a Codex chat in a tab not in view was last checked (see followCodexChat). */
+  private hiddenFollowAt = 0;
 
   /** Draws Codex chat `id`, on screen, again as Codex has it now; the input's draft kept, a held chat's note too. */
   private async refreshCodexChat(id: string): Promise<void> {
@@ -1983,8 +1992,41 @@ export class ChatView extends ItemView {
     }
   }
 
-  /** Codex's shared app-server is being started (see VaultClaudePlugin.setPhoneCodex). */
+  /** Codex's shared app-server is being started (see VaultClaudePlugin.setPhoneCodex, and awaitCodexDaemon). */
   codexDaemonStarting = false;
+
+  /** A Codex chat's first message, or compaction, is waiting for Codex's shared app-server (see awaitCodexDaemon). */
+  private codexStartWait = false;
+
+  /**
+   * Waits for Codex's shared app-server, started if none runs (see VaultClaudePlugin.ensureCodexDaemon),
+   * before a Codex chat's session opens: it can take up to half a minute, said meanwhile in a notice
+   * and on the phone button. True once it runs (or could not start: the chat then runs in a process of
+   * its own); false when such a wait is under way already (Enter pressed again), or another chat was
+   * opened meanwhile, in which case nothing is to be sent.
+   */
+  private async awaitCodexDaemon(): Promise<boolean> {
+    if (this.codexStartWait) return false;
+    const owner = this.draftKey();
+    this.codexStartWait = true;
+    const starts = !this.plugin.codexDaemonRunning();
+    const notice = starts ? new Notice('Starting Codex…', 0) : null;
+    if (starts) {
+      this.codexDaemonStarting = true;
+      this.updatePhoneButton();
+    }
+    try {
+      await this.plugin.ensureCodexDaemon();
+    } finally {
+      this.codexStartWait = false;
+      notice?.hide();
+      if (starts) {
+        this.codexDaemonStarting = false;
+        this.updatePhoneButton();
+      }
+    }
+    return this.draftKey() === owner;
+  }
 
   /**
    * Codex's shared app-server started, or Codex on the phone switched: the phone button follows, and an
@@ -2600,6 +2642,38 @@ export class ChatView extends ItemView {
   }
 
   /**
+   * Codex chat messages not sent from the panel (see CodexSession.takeRemotePrompts), labelled as such
+   * and each put in place by `place`; one the panel sent, or drawn already, is not drawn again.
+   */
+  private drawRemotePrompts(session: CodexSession, place: (bubble: HTMLElement) => void): void {
+    const drawn = Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).flatMap((bubble) => [bubble.dataset.uuid, bubble.dataset.sentUuid]);
+    for (const prompt of session.takeRemotePrompts()) {
+      const ids = [prompt.id, ...(prompt.clientId ? [prompt.clientId] : [])];
+      if (ids.some((id) => drawn.includes(id) || this.sentIds.has(id) || this.pending.has(id))) continue;
+      const message = messagePrompt({ type: 'user', uuid: prompt.id, session_id: '', parent_tool_use_id: null, message: { role: 'user', content: prompt.content } } as unknown as SessionMessage);
+      const shown = message && promptBubble(message.text, message.images);
+      if (!shown || shown === 'stopped') continue;
+      const bubble = this.renderUserBubble(shown.text, shown.chips, undefined, prompt.id);
+      bubble.createDiv({ cls: 'vc-origin-label', text: CODEX_ELSEWHERE });
+      place(bubble);
+    }
+  }
+
+  /**
+   * A message written from the phone or Codex's app steered into the turn running in the Codex chat on
+   * screen: drawn where the turn is now, as a message queued here is (see drawQueued). One that starts a
+   * turn waits for that turn to be drawn (see beginRemoteTurn).
+   */
+  private drawSteeredPrompts(session: CodexSession): void {
+    if (this.session !== session || !this.busy) return;
+    this.drawRemotePrompts(session, (bubble) => {
+      (this.draw.turn ?? this.messagesEl).appendChild(bubble);
+      this.draw.group = null;
+    });
+    this.scrollToBottom();
+  }
+
+  /**
    * A turn the panel did not start: sent from the phone, or one Claude Code started itself (a
    * background agent finishing, say). `answering`: the uuids of the messages it answers, from its
    * first reply frame, which are those messages' uuids in the session file; absent from older
@@ -2610,15 +2684,7 @@ export class ChatView extends ItemView {
     const turn = this.draw.turn;
     // Codex reports the messages of a turn started elsewhere as it starts it (see CodexSession.takeRemotePrompts).
     if (turn && this.session instanceof CodexSession) {
-      for (const prompt of this.session.takeRemotePrompts()) {
-        if (Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.vc-user')).some((drawn) => drawn.dataset.uuid === prompt.id)) continue;
-        const message = messagePrompt({ type: 'user', uuid: prompt.id, session_id: '', parent_tool_use_id: null, message: { role: 'user', content: prompt.content } } as unknown as SessionMessage);
-        const shown = message && promptBubble(message.text, message.images);
-        if (!shown || shown === 'stopped') continue;
-        const bubble = this.renderUserBubble(shown.text, shown.chips, undefined, prompt.id);
-        bubble.createDiv({ cls: 'vc-origin-label', text: CODEX_ELSEWHERE });
-        turn.before(bubble);
-      }
+      this.drawRemotePrompts(this.session, (bubble) => turn.before(bubble));
       return;
     }
     const id = this.chatId;
@@ -5362,15 +5428,16 @@ export class ChatView extends ItemView {
         return false;
       }
     }
+    if (!this.inputEl.value.trim() && this.attachments.length === 0) return false;
+    // A Codex chat's session runs through Codex's shared app-server, started first when none runs (see
+    // awaitCodexDaemon). If another chat is opened meanwhile, nothing is sent, and the text stays in this
+    // one's draft; Enter pressed again meanwhile sends nothing more. What is in the input is read after
+    // the wait, so what was typed during it goes with the message rather than being lost.
+    if (!this.session && (this.engine === 'codex' || this.plugin.isCodexChat(this.chatId ?? this.resumeId ?? ''))) {
+      if (!(await this.awaitCodexDaemon())) return false;
+    }
     const text = this.inputEl.value.trim();
     if (!text && this.attachments.length === 0) return false;
-    // A Codex chat's session runs through Codex's shared app-server, started first when none runs (see
-    // ensureCodexDaemon). If another chat is opened meanwhile, nothing is sent, and the text stays in this one's draft.
-    if (!this.session && (this.engine === 'codex' || this.plugin.isCodexChat(this.chatId ?? this.resumeId ?? ''))) {
-      const owner = this.draftKey();
-      await this.plugin.ensureCodexDaemon();
-      if (this.draftKey() !== owner) return false;
-    }
     const session = this.ensureSession();
     if (!session) return false;
     // Slash commands must reach Claude Code as plain text; attachments wait for the next message.
@@ -5643,11 +5710,13 @@ export class ChatView extends ItemView {
     }
     const token = {};
     this.sessionToken = token;
-    this.session = new CodexSession(
+    const session = new CodexSession(
       { ...launch, resume: this.resumeId ?? undefined, developerInstructions: APPEND_SYSTEM_PROMPT, model: this.codexModel, effort: this.codexEffort, access: this.codexAccess, fast: this.fastMode, hidden: this.plugin.settings.codexHidden, denyRules: denyRuleList(this.plugin.settings.denyRules), connectorAllowances: this.plugin.connectorAllowances },
       this.foregroundHandlers(token),
     );
-    return this.session;
+    session.onRemotePrompts = () => this.drawSteeredPrompts(session);
+    this.session = session;
+    return session;
   }
 
   /** A new chat run by Codex: the controls Claude Code's settings drive are hidden, Codex using its own. */
@@ -7112,9 +7181,8 @@ export class ChatView extends ItemView {
     }
     // Codex compacts on its own request, run as a turn (see CodexSession.compact).
     if (this.engine === 'codex') {
-      const owner = this.draftKey();
-      if (!this.session) await this.plugin.ensureCodexDaemon();
-      if (this.draftKey() !== owner || this.busy) return;
+      if (!this.session && !(await this.awaitCodexDaemon())) return;
+      if (this.busy) return;
       const session = this.ensureSession();
       if (!(session instanceof CodexSession)) return;
       this.beginTurn([]);
