@@ -17,7 +17,7 @@ import { folderOf } from './chatFolders';
 import { chatAngles, groupDirection, noteRing, placeLabels, polar, ringLayout, shortLabel, type MapChat, type MapNote, type Point, type RingArc } from './connections';
 import { previewOnHover } from './hoverPreview';
 import { folderChatsQuery, noteChatsQuery, projectChatsQuery } from './historyModal';
-import { projectShownName } from './projects';
+import { projectShownName, uniqueProjectNames } from './projects';
 
 const SVG = 'http://www.w3.org/2000/svg';
 /** What a click on a chat does, said in its tooltip. */
@@ -691,6 +691,8 @@ export class ConnectionsView extends ItemView {
       folder ? folder.reload(all ?? folder.all).catch(() => null) : null,
     ]);
     if (generation !== this.generation || read !== this.reads) return;
+    // The note or folder shown is gone (deleted or renamed): the chat's own map instead, as a step back to one does (see showNote).
+    if ((note && !nextNote) || (folder && !nextFolder)) return this.showOwn();
     // The chat's own map, drawn on its project's (see drawOwn): that project's read again too, or
     // read anew when the chat moved to another.
     const base = nextHost ?? host;
@@ -1084,7 +1086,11 @@ export class ConnectionsView extends ItemView {
     add('Open project note', 'file-text', () => host.openProjectNote(path));
     add('New chat in this project', 'square-pen', () => host.newChatIn(path));
     add('Chats and notes…', 'list', () => void host.projectMap(path).then((project) => project.showList((note) => void this.moveToNote(note))));
-    add('Chats in this project', 'messages-square', () => host.showChats(projectChatsQuery(projectShownName({ basename: path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '') }))));
+    add('Chats in this project', 'messages-square', () => {
+      // By the name the history's projects view gives it, told apart from another of the same name (see uniqueProjectNames).
+      const names = uniqueProjectNames(host.projects().map((project) => ({ path: project.path, name: projectShownName({ basename: project.name }) })));
+      host.showChats(projectChatsQuery(names.get(path) ?? projectShownName({ basename: path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '') })));
+    });
     const { localGraph } = host;
     if (localGraph) add('Open local graph', 'git-fork', () => localGraph(path));
     if (host.lookOnly) {

@@ -3132,7 +3132,7 @@ export default class VaultClaudePlugin extends Plugin {
       mentionChat: (id: string) => void panel().then((target) => target?.mentionChat(id)),
       titleOf: (id: string) => this.chatTitleOf(id),
       isCodex: (id: string) => this.isCodexChat(id),
-      openNote: (path: string, newTab: boolean) => void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false),
+      openNote: (path: string, newTab: boolean) => this.openExistingNote(path, newTab),
       ...(this.graphPluginOn() ? { localGraph: (path: string) => void this.openLocalGraph(path) } : {}),
       previewNote: (path: string, event: MouseEvent | KeyboardEvent, target: Element, parent: unknown) =>
         this.app.workspace.trigger('hover-link', { event, source: VIEW_TYPE, hoverParent: parent, targetEl: target, linktext: path }),
@@ -3345,11 +3345,20 @@ export default class VaultClaudePlugin extends Plugin {
    * has no session of its own yet (see ChatView.connectionsChat): its map is looked at, and nothing is
    * changed for it. With no chat (`id` ''): the maps of projects, notes and folders browsed without one.
    */
+  /**
+   * When each chat in the last listing changed (see lastListing), looked up by id: built once for a
+   * map's read, as the maps sort by it, which looks it up for every comparison.
+   */
+  private listingStamps(): (id: string) => number {
+    const stamps = new Map((this.lastListing ?? []).map((item) => [item.id, item.updatedAt]));
+    return (id) => stamps.get(id) ?? 0;
+  }
+
   private async chatMapHost(view: ChatView | null, id: string, all = false, lookOnly = false): Promise<ChatMapHost> {
     const none = id === '';
     if (none) lookOnly = true;
     await this.recentListing();
-    const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
+    const recent = this.listingStamps();
     const listed = new Set((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)).map((item) => item.id));
     const weighted = new Map([...this.weightedNotes()].filter(([other]) => other === id || listed.has(other)));
     const to = (this.chatLinks[id] ?? []).filter((other) => listed.has(other));
@@ -3473,7 +3482,7 @@ export default class VaultClaudePlugin extends Plugin {
           if (tab) await this.openChatById(id, title, tab);
         })();
       },
-      openNote: (path, newTab) => void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false),
+      openNote: (path, newTab) => this.openExistingNote(path, newTab),
       showNote,
     }).open();
   }
@@ -3515,8 +3524,10 @@ export default class VaultClaudePlugin extends Plugin {
    * scratch ones) and their other notes; with `all`, every chat and note (see noteMap).
    */
   private async noteMapHost(path: string, view: ChatView | null, all = false): Promise<NoteMapHost> {
+    // Deleted or renamed since: a map that reads it again falls back to the chat's (see ConnectionsView.refresh).
+    if (!(this.app.vault.getAbstractFileByPath(path) instanceof TFile)) throw new Error('the note is gone');
     await this.recentListing();
-    const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
+    const recent = this.listingStamps();
     const listed = new Set((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)).map((item) => item.id));
     const weighted = new Map([...this.weightedNotes()].filter(([other]) => listed.has(other)));
     return {
@@ -3534,8 +3545,10 @@ export default class VaultClaudePlugin extends Plugin {
    * (see folderMap).
    */
   private async folderMapHost(folder: string, view: ChatView | null, all = false): Promise<FolderMapHost> {
+    // As for a note (see noteMapHost); the top of the vault ('') is always there.
+    if (folder !== '' && !(this.app.vault.getAbstractFileByPath(folder) instanceof TFolder)) throw new Error('the folder is gone');
     await this.recentListing();
-    const recent = (other: string) => this.lastListing?.find((item) => item.id === other)?.updatedAt ?? 0;
+    const recent = this.listingStamps();
     const listed = new Set((this.lastListing ?? []).filter((item) => !this.isScratchChat(item)).map((item) => item.id));
     const weighted = new Map([...this.weightedNotes()].filter(([other]) => listed.has(other)));
     return {
@@ -3545,6 +3558,18 @@ export default class VaultClaudePlugin extends Plugin {
       all,
       reload: (more) => this.folderMapHost(folder, view, more),
     };
+  }
+
+  /**
+   * Opens note `path`, here or in a new tab, if it is still there; one deleted or renamed since a map
+   * was drawn is said to be gone, rather than created anew, empty, at the old path (as opening its link would).
+   */
+  private openExistingNote(path: string, newTab: boolean): void {
+    if (!(this.app.vault.getAbstractFileByPath(path) instanceof TFile)) {
+      new Notice('That note is no longer there: it was deleted or renamed.');
+      return;
+    }
+    void this.app.workspace.openLinkText(path, '', newTab ? 'tab' : false);
   }
 
   /** Chat `id`'s home project, if it has one. */

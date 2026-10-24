@@ -3240,6 +3240,44 @@ async function main(): Promise<void> {
       if (!closedOk) process.exitCode = 1;
       navView.navForward = [];
     }
+    // Stop and close on a chat that works, has a background task and waits on you: the reply and the
+    // task are both stopped, and what waits on you is refused, so no "waiting for your answer" follows it.
+    {
+      const stopping = view as unknown as {
+        chatId: string | null;
+        busy: boolean;
+        session: unknown;
+        tasks: Set<string>;
+        openApprovals: unknown[];
+        closeCurrentChat(): Promise<void>;
+        closeChatNow(id: string): Promise<void>;
+      };
+      let interrupted = 0;
+      const stoppedTasks: string[] = [];
+      let answer: { behavior: string; message?: string } | null = null;
+      let closedId: string | null = null;
+      stopping.chatId = 'stop-close';
+      stopping.busy = true;
+      stopping.session = { interrupt: async () => void (interrupted += 1), stopTask: async (task: string) => void stoppedTasks.push(task) };
+      stopping.tasks.add('task-1');
+      stopping.openApprovals = [{ request: { toolName: 'Bash', signal: new AbortController().signal }, resolve: (result: { behavior: string; message?: string }) => (answer = result), notePath: null }];
+      stopping.closeChatNow = async (id: string) => void (closedId = id);
+      stub.Modal.last = null;
+      await stopping.closeCurrentChat();
+      const dialog = stub.Modal.last as unknown as { onOpen(): void; contentEl: HTMLElement } | null;
+      dialog?.onOpen();
+      [...(dialog?.contentEl.querySelectorAll('button') ?? [])].find((button) => button.textContent === 'Stop and close')?.click();
+      const refused = (answer as { behavior: string } | null)?.behavior === 'deny' && stopping.openApprovals.length === 0;
+      const stopOk = interrupted === 1 && stoppedTasks.join() === 'task-1' && refused && closedId === 'stop-close';
+      console.log(`Stop and close: reply stopped ${interrupted}; tasks stopped ${stoppedTasks.join()}; approval refused ${refused}; closed ${closedId} -> ${stopOk}`);
+      if (!stopOk) process.exitCode = 1;
+      delete (stopping as unknown as Record<string, unknown>).closeChatNow;
+      stopping.tasks.clear();
+      stopping.busy = false;
+      stopping.session = null;
+      stopping.chatId = null;
+      view.newChat();
+    }
     console.log(`newChat completed; save button: ${internals.saveButton.isShown()}`);
     const clearedOk = !(root.querySelector('.vc-find') as HTMLElement).isShown();
     console.log(`new chat closes find: ${clearedOk}`);
@@ -5650,6 +5688,19 @@ async function main(): Promise<void> {
         noProject === '0 This chat has worked on no notes yet, and links to no chats.';
       console.log(`connections empty chat: arcs ${emptyArcs}, centre ${emptyCentre}, foot ${emptyFoot}, menu ${emptyMenu}; no project ${noProject} -> ${emptyOk}`);
       if (!emptyOk) process.exitCode = 1;
+
+      // A note shown in the map deleted or renamed since: read again, the map goes back to the chat's own.
+      let noteGone = false;
+      const goneHost = { ...host('c1'), noteMap: async (path: string) => ({ ...notes(path), reload: async () => (noteGone ? Promise.reject(new Error('the note is gone')) : notes(path)) }) };
+      await pane.follow(goneHost as never);
+      await pane.setState({ centre: 'c1', project: null, note: 'Beds.md', folder: null }, { history: false });
+      const atNote = (pane.getState() as { note: string | null }).note;
+      noteGone = true;
+      await pane.refresh();
+      const afterGone = pane.getState() as { note: string | null; centre: string | null };
+      const goneOk = atNote === 'Beds.md' && afterGone.note === null && afterGone.centre === 'c1';
+      console.log(`connections map of a note gone: centred on ${atNote}, then ${JSON.stringify(afterGone)} -> ${goneOk}`);
+      if (!goneOk) process.exitCode = 1;
       await pane.onClose();
     }
 

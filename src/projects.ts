@@ -136,9 +136,38 @@ export function readProjectQuery(rest: string): { project: string | null; words:
 }
 
 /**
+ * Names for projects `projects` (by their notes' paths) that tell them apart: a project's shown name,
+ * or, for two or more with the same one (two notes "Swaps" in different folders, say), that name with
+ * its note's folder after it, `Swaps (Research › Swaps)`. No name holds a `/`, which ends a project's
+ * name in the history's query (see readProjectQuery).
+ */
+export function uniqueProjectNames(projects: { path: string; name: string }[]): Map<string, string> {
+  const counts = new Map<string, number>();
+  for (const project of projects) counts.set(project.name.toLowerCase(), (counts.get(project.name.toLowerCase()) ?? 0) + 1);
+  const readable = (path: string) => path.split('/').join(' › ');
+  const names = new Map<string, string>();
+  for (const project of projects) {
+    if ((counts.get(project.name.toLowerCase()) ?? 0) < 2) {
+      names.set(project.path, project.name);
+      continue;
+    }
+    const slash = project.path.lastIndexOf('/');
+    names.set(project.path, `${project.name} (${slash > 0 ? readable(project.path.slice(0, slash)) : 'top of the vault'})`);
+  }
+  // Two in the same folder, their notes named apart but shown alike: their whole paths.
+  const taken = new Map<string, number>();
+  for (const name of names.values()) taken.set(name.toLowerCase(), (taken.get(name.toLowerCase()) ?? 0) + 1);
+  for (const project of projects) {
+    const name = names.get(project.path) ?? project.name;
+    if ((taken.get(name.toLowerCase()) ?? 0) > 1) names.set(project.path, `${project.name} (${readable(project.path.replace(/\.md$/, ''))})`);
+  }
+  return names;
+}
+
+/**
  * What the projects view lists: every project in `projects`, with the chats of `chats` whose home it is
- * (`homeOf`: a chat's project note path, or null), newest first. `words` (lower case) keep the
- * projects whose name holds them all. The project with the most recent chat first, then by name.
+ * (`homeOf`: a chat's project note path, or null), newest first, each named apart from the others (see
+ * uniqueProjectNames). `words` (lower case) keep the projects whose name holds them all. The project with the most recent chat first, then by name.
  */
 export function projectView(
   projects: { path: string; name: string; folder: string }[],
@@ -149,9 +178,15 @@ export function projectView(
   const byProject = new Map<string, { id: string; updatedAt: number }[]>();
   for (const chat of chats) {
     const home = homeOf(chat.id);
-    if (home !== null) byProject.set(home, [...(byProject.get(home) ?? []), chat]);
+    if (home === null) continue;
+    const own = byProject.get(home);
+    if (own) own.push(chat);
+    else byProject.set(home, [chat]);
   }
+  // Each project by a name of its own, so that the query naming it finds that one alone.
+  const names = uniqueProjectNames(projects);
   return projects
+    .map((project) => ({ ...project, name: names.get(project.path) ?? project.name }))
     .filter((project) => words.every((word) => project.name.toLowerCase().includes(word)))
     .map((project) => {
       const own = [...(byProject.get(project.path) ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);

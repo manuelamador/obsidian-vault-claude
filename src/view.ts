@@ -334,6 +334,8 @@ function isMailRead(el: HTMLElement): boolean {
 
 /** The answer to a plan, questions or an approval still waiting when the panel closes (see ChatView.onClose). */
 const PANEL_CLOSED_ANSWER = 'Not answered: the Claude panel was closed. Nothing was approved.';
+/** The answer to what waited on you in a chat stopped and closed (see closeCurrentChat). */
+const STOPPED_CLOSED_ANSWER = 'Not answered: the chat was stopped and closed. Nothing was approved.';
 
 /** How long a chat whose waiting requests were just answered has to take the answers before its process is ended (see ChatView.closeAfterAnswer). */
 const ANSWER_WAIT_MS = 3000;
@@ -6073,7 +6075,8 @@ export class ChatView extends ItemView {
   /**
    * Follows a note, or a folder's notes, that moved to `to` or was deleted (`to` null), wherever this
    * panel holds it by path: the drafts of chats not started yet, the note attached to the chat on
-   * screen, the draft note it writes in, and files and selections waiting in the tray (see
+   * screen, the project a new chat was started in, the draft note it writes in, and files and
+   * selections waiting in the tray (see
    * VaultClaudePlugin.noteMoved).
    */
   followNote(from: string, to: string | null): void {
@@ -6085,6 +6088,16 @@ export class ChatView extends ItemView {
     }
     const attached = this.attachedNote === null ? undefined : movedPath(this.attachedNote, from, to);
     if (attached !== undefined) this.attachNote(attached);
+    // The project a new chat was started in, here or sent to the background before its id came (see startOf).
+    const project = this.startProject === null ? undefined : movedPath(this.startProject, from, to);
+    if (project !== undefined) {
+      this.startProject = project;
+      this.updateContextChip();
+    }
+    for (const entry of this.background) {
+      const moved = entry.start?.project ? movedPath(entry.start.project, from, to) : undefined;
+      if (entry.start && moved !== undefined) entry.start.project = moved;
+    }
     const draftNote = this.draftPath === null ? undefined : movedPath(this.draftPath, from, to);
     if (draftNote !== undefined) {
       this.draftPath = draftNote;
@@ -6415,8 +6428,11 @@ export class ChatView extends ItemView {
             'Stop and close',
             () => {
               if (!still()) return;
+              // What waits on you is refused first: in the background it would say it still waits.
+              this.refuseOpenApprovals(STOPPED_CLOSED_ANSWER);
+              // The reply and the background tasks alike, as the dialog says.
               if (this.busy) this.interruptTurn();
-              else if (this.tasks.size > 0) this.stopTasks();
+              if (this.tasks.size > 0) this.stopTasks();
               void this.closeChatNow(id);
             },
           ],

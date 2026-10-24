@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { bubbleOf } from '../src/chatText';
 import { stripContext } from '../src/history';
-import { CONTEXT_MAX_CHARS, contextBlock, contextHash, contextPrompt, homeOf, linkedChatsBlock, type ContextPart, noteOpening, projectContextBlock, projectNoteMarkdown, projectParts, projectView, readContext, readProjectQuery, withContext, withGenerated } from '../src/projects';
+import { CONTEXT_MAX_CHARS, contextBlock, contextHash, contextPrompt, homeOf, linkedChatsBlock, type ContextPart, noteOpening, projectContextBlock, projectNoteMarkdown, projectParts, projectView, readContext, uniqueProjectNames, readProjectQuery, withContext, withGenerated } from '../src/projects';
 import { prompt } from './transcript';
 
 const note = projectNoteMarkdown({ name: 'Tariffs', folder: 'Research/Tariffs', added: ['a', 'b'], date: '2026-10-06' });
@@ -169,4 +169,23 @@ test('the projects view: each with its chats newest first; the most recently use
   );
   assert.deepEqual(projectView(projects, chats, (id) => homes[id] ?? null, ['wa']).map((row) => row.name), ['Swaps']);
   assert.deepEqual(projectView(projects, chats, (id) => homes[id] ?? null, ['ta', 'ff']).map((row) => row.name), ['Tariffs']);
+});
+
+test('two projects with the same shown name are told apart by their folders, each with its own chats', () => {
+  const projects = [
+    { path: 'Research/Swaps.md', name: 'Swaps', folder: 'Research' },
+    { path: 'Teaching/Swaps.md', name: 'swaps', folder: 'Teaching' },
+    { path: 'Top.md', name: 'Top', folder: '' },
+  ];
+  const homes: Record<string, string> = { a: 'Research/Swaps.md', b: 'Teaching/Swaps.md' };
+  const rows = projectView(projects, [{ id: 'a', updatedAt: 2 }, { id: 'b', updatedAt: 1 }], (id) => homes[id] ?? null, []);
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.path, row.chats.join()]),
+    [['Swaps (Research)', 'Research/Swaps.md', 'a'], ['swaps (Teaching)', 'Teaching/Swaps.md', 'b'], ['Top', 'Top.md', '']],
+  );
+  // None holds a `/`, which would end the project's name in the query.
+  assert.ok(rows.every((row) => !row.name.includes('/')));
+  // Shown alike in one folder (a prefix taken off one of them): their whole paths.
+  const same = uniqueProjectNames([{ path: 'A/B/Swaps.md', name: 'Swaps' }, { path: 'A/B/Project — Swaps.md', name: 'Swaps' }]);
+  assert.deepEqual([...same.values()], ['Swaps (A › B › Swaps)', 'Swaps (A › B › Project — Swaps)']);
 });
