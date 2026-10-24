@@ -993,7 +993,11 @@ export default class VaultClaudePlugin extends Plugin {
       // Listed once soon after starting, so that even the first history opened shows its rows at once;
       // and the note links of sessions Claude Code has since deleted are let go.
       const timer = window.setTimeout(() => {
-        void this.listChats().catch((error: unknown) => log('listing history failed', error));
+        // Project notes' added chats, once listed: a chat from outside the panel is known by its listing.
+        void this.listChats().then(
+          () => this.pruneProjectChats().catch((error: unknown) => log('pruning project chats failed', error)),
+          (error: unknown) => log('listing history failed', error),
+        );
         void this.pruneNoteLinks();
       }, FIRST_LISTING_DELAY_MS);
       this.register(() => window.clearTimeout(timer));
@@ -2674,8 +2678,47 @@ export default class VaultClaudePlugin extends Plugin {
     delete this.chatReports[id];
     delete this.reportTo[id];
     this.pruneChatLinks((other) => other !== id);
-    // Its notes no longer count toward any project's chats.
+    // Its notes no longer count toward any project's chats, nor its id in a project note's added chats.
     this.membershipChanged();
+    this.dropFromProjects((each) => each === id).catch((error: unknown) => log('taking a deleted chat out of its projects failed', error));
+  }
+
+  /**
+   * Takes the chat ids that `gone` says are gone out of every project note's added chats (`added`),
+   * as written, stamped updated as any change of a project's chats is (see setHomeProjectNow).
+   */
+  async dropFromProjects(gone: (id: string) => boolean): Promise<void> {
+    let changed = false;
+    for (const project of this.projectNotes()) {
+      if (!this.projectAdded(project).some(gone)) continue;
+      try {
+        await this.editProjectFront(project, (front) => {
+          front.added = idList(front.added).filter((each) => !gone(each));
+        });
+        changed = true;
+      } catch (error) {
+        log('taking gone chats out of a project failed', { file: project.path, error });
+      }
+    }
+    if (!changed) return;
+    this.homesChanged();
+    this.projectsChanged();
+  }
+
+  /**
+   * Takes the ids of chats that no longer exist out of the project notes' added chats: neither a
+   * session on disk, nor a chat record, nor in the listing (which holds chats from outside the panel
+   * and Codex's). Nothing goes when the sessions folder cannot be read or nothing is listed yet.
+   */
+  async pruneProjectChats(): Promise<void> {
+    const dir = this.vaultRoot();
+    const ids = dir ? await sessionIds(dir) : null;
+    const listing = this.lastListing;
+    if (!ids || !listing) return;
+    for (const chat of this.chats) ids.add(chat.id);
+    for (const item of listing) ids.add(item.id);
+    if (this.scratch) ids.add(this.scratch.id);
+    await this.dropFromProjects((id) => !ids.has(id));
   }
 
   /** Keeps only the links between chats that `keeps` keeps, both ends; whether any went. */
