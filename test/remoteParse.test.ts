@@ -34,3 +34,9 @@ test('a link cut off at the end of a read is not reported until it is finished',
   parse('abc-123\n');
   assert.equal(server.status.url, 'https://claude.ai/code?environment=env_abc-123');
 });
+
+test('once connected, a session connecting through the server does not count as the link lost', () => {
+  const { status } = read(['Connecting…\n', 'Connected · Capacity: 0/32\n', 'Connecting to a new session…\n']);
+  assert.equal(status.state, 'connected');
+  assert.equal(read(['Connected · Capacity: 0/32\n', 'Reconnecting…\n']).status.state, 'starting');
+});

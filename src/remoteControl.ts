@@ -116,9 +116,14 @@ export class RemoteControlServer {
     const text = raw.replace(ANSI, '');
     const patch: Partial<RemoteStatus> = {};
     const connectedAt = text.lastIndexOf('Connected ·');
-    const connectingAt = Math.max(text.lastIndexOf('Connecting'), text.lastIndexOf('Reconnecting'));
+    // Once connected, only a reconnection means the link was lost: "Connecting" also comes up for a
+    // session the phone opens through the server, which left the button saying it was connecting.
+    const connectingAt = this.status.state === 'connected' ? text.lastIndexOf('Reconnecting') : Math.max(text.lastIndexOf('Connecting'), text.lastIndexOf('Reconnecting'));
     if (connectedAt > connectingAt) patch.state = 'connected';
-    else if (connectingAt > connectedAt) patch.state = 'starting';
+    else if (connectingAt > connectedAt) {
+      patch.state = 'starting';
+      if (this.status.state === 'connected') log('remote control: connecting again', { line: text.slice(connectingAt, connectingAt + 80).split('\n')[0] });
+    }
     // Only a link the output has finished: one at the end of a read may be cut off.
     const url = [...text.matchAll(/https:\/\/claude\.ai\/code\?environment=[\w-]+(?=[^\w-])/g)].pop()?.[0];
     if (url) patch.url = url;
