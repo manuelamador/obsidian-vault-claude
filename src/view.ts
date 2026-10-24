@@ -1600,6 +1600,17 @@ export class ChatView extends ItemView {
     return this.app.workspace.openLinkText(link, source, beside ? newLeaf : 'tab');
   }
 
+  /** Whether this panel has anything running: a chat's process open, chats in its background, or background tasks. */
+  runsAnything(): boolean {
+    return this.session !== null || this.background.size > 0 || this.tasks.size > 0;
+  }
+
+  /** Takes the margin tabs of a panel closing at start (see closeExtraPanels) beside its own. */
+  takeDoneTabs(tabs: DoneTab[]): void {
+    this.doneTabs.restore(tabs);
+    this.plugin.doneTabsChanged();
+  }
+
   /** Whether this panel is closing, so it can take over nothing. */
   isClosing(): boolean {
     return this.closing;

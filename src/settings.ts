@@ -87,6 +87,8 @@ export interface VaultClaudeSettings {
   toolDisplay: ToolDisplay;
   /** Left and right margin of the panel, in pixels. */
   panelMargin: number;
+  /** When Obsidian starts, the Vault Claude tabs left from the last session are closed but one (see closeExtraPanels). */
+  onePanelAtStart: boolean;
   sendWithModifier: boolean;
   /** A new chat starts with the note in front attached. Renamed from `includeActiveNote`, whose old default was on. */
   attachActiveNote: boolean;
@@ -161,6 +163,7 @@ export const DEFAULT_SETTINGS: VaultClaudeSettings = {
   permissionMode: 'default',
   toolDisplay: 'summary',
   panelMargin: 20,
+  onePanelAtStart: true,
   sendWithModifier: true,
   attachActiveNote: false,
   historyIncludesAllSessions: false,
@@ -710,6 +713,16 @@ export class VaultClaudeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             this.plugin.refreshPanelMargins();
           }),
+      );
+
+    new Setting(containerEl)
+      .setName('Open one Vault Claude panel at start')
+      .setDesc('When Obsidian starts, extra Vault Claude tabs left from the last session are closed and one is kept: the sidebar panel if there is one, else the first. Their chats stay in the history.')
+      .addToggle((toggle) =>
+        toggle.setValue(settings.onePanelAtStart).onChange(async (value) => {
+          settings.onePanelAtStart = value;
+          await this.plugin.saveSettings();
+        }),
       );
 
     new Setting(containerEl)

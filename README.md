@@ -462,6 +462,7 @@ Messages and context are sent through Claude Code or Codex. If Zotero integratio
 | **Appearance and input** | |
 | Tool calls | Show a summary, individual lines, or hide them |
 | Panel side margins | Horizontal margins from 8 to 96 px |
+| Open one Vault Claude panel at start | When Obsidian starts, close the Vault Claude tabs left from the last session but one (the sidebar panel, else the first); on by default |
 | Send with ⌘+Enter (Ctrl+Enter on Windows) | Use the modifier shortcut instead of Enter |
 | **Phone access** | |
 | Claude Code on the phone | Enable Remote Control for Claude chats and new vault sessions; off by default |

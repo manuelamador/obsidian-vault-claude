@@ -665,6 +665,9 @@ export default class VaultClaudePlugin extends Plugin {
 
   async onload(): Promise<void> {
     patchSetMaxListenersForRenderer();
+    // Loaded as Obsidian starts, before it lays out the tabs of the last session; enabled or reloaded
+    // later, the layout is there already (see closeExtraPanels).
+    const atStart = !this.app.workspace.layoutReady;
     log(`plugin loaded (version ${this.manifest.version})`);
     // Obsidian's console is not visible outside the app: record this plugin's own uncaught errors.
     const ours = (error: unknown) => error instanceof Error && /vault-claude/.test(error.stack ?? '');
@@ -982,6 +985,8 @@ export default class VaultClaudePlugin extends Plugin {
     // Side chats open when Obsidian last quit: their sessions are deleted now, as closing them would have.
     const leftover = [...this.sideSessions];
     this.app.workspace.onLayoutReady(() => {
+      // One panel from the tabs of the last session, as Obsidian starts: not on a reload of the plugin.
+      if (atStart && this.settings.onePanelAtStart) this.closeExtraPanels();
       // Phone access as it was left: Claude Code's Remote Control, and Codex's shared app-server.
       if (this.settings.phoneClaude) this.startRemote();
       if (this.settings.phoneCodex && !this.codexDaemonRunning()) void this.setPhoneCodex(true);
@@ -2827,6 +2832,38 @@ export default class VaultClaudePlugin extends Plugin {
       .getLeavesOfType(VIEW_TYPE)
       .map((leaf) => leaf.view)
       .filter((view): view is ChatView => view instanceof ChatView);
+  }
+
+  /**
+   * Closes the Vault Claude tabs left from the last session but one: the panel in a sidebar if there
+   * is one, else the first. Their chats stay in the history; their margin tabs go to the one kept.
+   * A panel with anything running is left open (nothing runs yet as Obsidian starts). Tabs not yet
+   * shown are closed too: Obsidian builds a tab's view only once it is shown.
+   */
+  closeExtraPanels(): void {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+    if (leaves.length < 2) return;
+    const sidebars = [this.app.workspace.leftSplit, this.app.workspace.rightSplit];
+    const keep = leaves.find((leaf) => sidebars.includes(leaf.getRoot() as never)) ?? leaves[0];
+    const tabs: DoneTab[] = [];
+    let closed = 0;
+    for (const leaf of leaves) {
+      if (leaf === keep) continue;
+      const view = leaf.view instanceof ChatView ? leaf.view : null;
+      if (view?.runsAnything()) continue;
+      if (view) tabs.push(...view.doneTabList());
+      leaf.detach();
+      closed += 1;
+    }
+    if (closed > 0) log('extra panels closed at start', { closed });
+    if (tabs.length === 0) return;
+    if (keep.view instanceof ChatView) keep.view.takeDoneTabs(tabs);
+    else {
+      // The panel kept is built when first shown, and takes the tabs kept then (see takeKeptDoneTabs).
+      const all = [...tabs, ...this.doneTabs];
+      this.doneTabs = all.filter((tab, i) => all.findIndex((each) => each.id === tab.id) === i);
+      this.doneTabsTaken = false;
+    }
   }
 
   /**
