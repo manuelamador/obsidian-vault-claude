@@ -97,6 +97,8 @@ export class CodexSession {
   /** The turn running, and the messages of yours it answers. */
   private turnId: string | null = null;
   private turnMessages: string[] = [];
+  /** Messages whose turn/steer is still awaited (see send): not reported as answered by a turn ending meanwhile. */
+  private readonly steering = new Set<string>();
   /**
    * Messages not sent from the panel (the phone, Codex's app), as Codex reported them, until the panel
    * draws them (see takeRemotePrompts): those that start a turn, and those steered into a turn running.
@@ -171,7 +173,10 @@ export class CodexSession {
         };
         if (this.turnId) {
           // Known as the panel's before Codex can report it (see item/started), never taken as sent from elsewhere.
-          if (uuid) this.turnMessages.push(uuid);
+          if (uuid) {
+            this.turnMessages.push(uuid);
+            this.steering.add(uuid);
+          }
           try {
             await this.request('turn/steer', { threadId: this.sessionId, expectedTurnId: this.turnId, input, ...(uuid ? { clientUserMessageId: uuid } : {}) });
             delivered();
@@ -180,6 +185,8 @@ export class CodexSession {
             // The turn ended as the message went: it starts the next one instead.
             log('steering codex failed; starting a turn', error);
             this.turnId = null;
+          } finally {
+            if (uuid) this.steering.delete(uuid);
           }
         }
         if (uuid) this.turnMessages = [uuid];
@@ -524,7 +531,8 @@ export class CodexSession {
         this.turnId = null;
         this.withdrawApprovals();
         this.changes.clear();
-        const sent = this.turnMessages;
+        // A message still being steered in is not this turn's: if the steer fails, it starts the next one.
+        const sent = this.turnMessages.filter((each) => !this.steering.has(each));
         this.turnMessages = [];
         // Any not drawn by now (a turn with no reply to begin drawing it) are not drawn in a later turn.
         this.remotePrompts = [];

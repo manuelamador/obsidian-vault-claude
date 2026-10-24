@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { TFile } from 'obsidian';
-import { projectFolder } from '../src/history';
 import VaultClaudePlugin from '../src/main';
 
 /** A plugin with two project notes whose added chats are `a`, `b` and `outside`, `a` respectively. */
@@ -43,36 +40,4 @@ test('a deleted chat leaves every project note it was added to', async () => {
   assert.deepEqual(fronts['Garden/Garden.md'].added, ['b', 'outside']);
   assert.deepEqual(fronts['Papers/Papers.md'].added, []);
   assert.notEqual(fronts['Papers/Papers.md'].updated, '2026-01-01');
-});
-
-test('chats that no longer exist are pruned; a listed chat from outside the panel stays', async () => {
-  // A vault whose sessions folder, under a Claude Code config dir of the test's own, holds `b`'s session only.
-  const config = mkdtempSync(`${tmpdir()}/vault-claude-prune-`);
-  const root = mkdtempSync(`${tmpdir()}/vault-claude-vault-`);
-  const sessions = `${config}/projects/${projectFolder(root)}`;
-  mkdirSync(sessions, { recursive: true });
-  writeFileSync(`${sessions}/b.jsonl`, '');
-  const before = process.env.CLAUDE_CONFIG_DIR;
-  process.env.CLAUDE_CONFIG_DIR = config;
-  try {
-    // `a` deleted, `outside` listed only: `a` goes from both notes.
-    const { p, fronts } = setup();
-    p.vaultRoot = () => root;
-    p.chats = [];
-    (p as unknown as { lastListing: unknown }).lastListing = [{ id: 'outside', title: 'Desk', updatedAt: 0, fromPanel: false }];
-    await p.pruneProjectChats();
-    assert.deepEqual(fronts['Garden/Garden.md'].added, ['b', 'outside']);
-    assert.deepEqual(fronts['Papers/Papers.md'].added, []);
-    // Nothing listed yet: nothing goes.
-    const fresh = setup();
-    fresh.p.vaultRoot = () => root;
-    fresh.p.chats = [];
-    await fresh.p.pruneProjectChats();
-    assert.deepEqual(fresh.fronts['Papers/Papers.md'].added, ['a']);
-  } finally {
-    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-    else process.env.CLAUDE_CONFIG_DIR = before;
-    rmSync(config, { recursive: true, force: true });
-    rmSync(root, { recursive: true, force: true });
-  }
 });

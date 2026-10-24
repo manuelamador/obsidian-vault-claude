@@ -998,11 +998,10 @@ export default class VaultClaudePlugin extends Plugin {
       // Listed once soon after starting, so that even the first history opened shows its rows at once;
       // and the note links of sessions Claude Code has since deleted are let go.
       const timer = window.setTimeout(() => {
-        // Project notes' added chats, once listed: a chat from outside the panel is known by its listing.
-        void this.listChats().then(
-          () => this.pruneProjectChats().catch((error: unknown) => log('pruning project chats failed', error)),
-          (error: unknown) => log('listing history failed', error),
-        );
+        // Not followed by a sweep of project notes' added chats: a chat not known here yet (Codex's,
+        // before its records are rebuilt; another computer's) would be taken out of notes that sync.
+        // A chat leaves them when it is deleted here (see deleteChat).
+        void this.listChats().catch((error: unknown) => log('listing history failed', error));
         void this.pruneNoteLinks();
       }, FIRST_LISTING_DELAY_MS);
       this.register(() => window.clearTimeout(timer));
@@ -1233,8 +1232,8 @@ export default class VaultClaudePlugin extends Plugin {
     this.cleanups.clear();
     // The Codex app-server kept for reads (see CodexReader).
     stopCodexReader();
-    // As at quit: a shared app-server the panel started is not left running unseen.
-    this.stopCodexDaemonAtQuit();
+    // A shared app-server the panel started is stopped at quit (see stopCodexDaemonAtQuit), not here: a
+    // reload or update of the plugin would cut off phone Codex and any turn running through it.
     if (this.connectionsTimer !== null) window.clearTimeout(this.connectionsTimer);
     window.clearTimeout(this.remoteRetryTimer);
     this.remote.stop();
@@ -2708,22 +2707,6 @@ export default class VaultClaudePlugin extends Plugin {
     if (!changed) return;
     this.homesChanged();
     this.projectsChanged();
-  }
-
-  /**
-   * Takes the ids of chats that no longer exist out of the project notes' added chats: neither a
-   * session on disk, nor a chat record, nor in the listing (which holds chats from outside the panel
-   * and Codex's). Nothing goes when the sessions folder cannot be read or nothing is listed yet.
-   */
-  async pruneProjectChats(): Promise<void> {
-    const dir = this.vaultRoot();
-    const ids = dir ? await sessionIds(dir) : null;
-    const listing = this.lastListing;
-    if (!ids || !listing) return;
-    for (const chat of this.chats) ids.add(chat.id);
-    for (const item of listing) ids.add(item.id);
-    if (this.scratch) ids.add(this.scratch.id);
-    await this.dropFromProjects((id) => !ids.has(id));
   }
 
   /** Keeps only the links between chats that `keeps` keeps, both ends; whether any went. */
