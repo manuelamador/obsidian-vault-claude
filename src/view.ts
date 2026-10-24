@@ -850,6 +850,7 @@ export class ChatView extends ItemView {
       this.tickStatus();
       this.scrollToBottom();
     }
+    if (this.followOwed && this.isOnScreen()) void this.followCodexChat();
     if (!this.unseen || !this.isOnScreen()) return;
     this.unseen = null;
     this.updateTab();
@@ -1645,6 +1646,7 @@ export class ChatView extends ItemView {
     this.codexEffort = undefined;
     this.codexAccess = this.plugin.settings.codexAccess;
     this.unseen = null;
+    this.followOwed = false;
     this.lastSent = null;
     this.heldBy = null;
     this.historyAt = null;
@@ -1930,21 +1932,37 @@ export class ChatView extends ItemView {
    * The Codex chat on screen read again when Codex says it changed since it was read: turns written
    * in Codex's app or from the phone appear without leaving the chat. Not while it works here or
    * waits on you; while you type, the input keeps what is typed and where the cursor is (see refreshCodexChat).
+   * In a tab not in view, a change marks the tab and the history (New reply), as a reply finished
+   * there does; the chat is read again once the tab is in view.
    */
   private async followCodexChat(): Promise<void> {
     const id = this.chatId ?? this.resumeId;
-    if (this.following || this.opening > 0 || !id || this.engine !== 'codex' || this.scratch || !this.isOnScreen()) return;
+    if (this.following || this.opening > 0 || !id || this.engine !== 'codex' || this.scratch) return;
     if (this.busy || this.pending.size > 0 || this.tasks.size > 0 || this.openApprovals.length > 0) return;
+    const onScreen = this.isOnScreen();
+    // Marked already: nothing more until it is seen.
+    if (!onScreen && this.followOwed) return;
     this.following = true;
     try {
       if (!(await this.plugin.codexThreadChanged(id))) return;
       // A chat picked while Codex was asked opens undisturbed.
       if ((this.chatId ?? this.resumeId) !== id || this.busy || this.opening > 0) return;
+      if (!this.isOnScreen()) {
+        this.followOwed = true;
+        this.unseen = 'done';
+        this.plugin.markChatUnseen(id, 'done');
+        this.updateTab();
+        return;
+      }
+      this.followOwed = false;
       await this.refreshCodexChat(id);
     } finally {
       this.following = false;
     }
   }
+
+  /** A Codex chat in a tab not in view changed elsewhere: read again once it is in view (see followCodexChat). */
+  private followOwed = false;
 
   /** Draws Codex chat `id`, on screen, again as Codex has it now; the input's draft kept, a held chat's note too. */
   private async refreshCodexChat(id: string): Promise<void> {
