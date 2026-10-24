@@ -3319,7 +3319,6 @@ export class ChatView extends ItemView {
     new RenameModal(this.app, this.chatName ?? '', (title) => void this.plugin.renameChatTitle(id, title)).open();
   }
 
-  /** Called for every rename (from this panel, another one, or the history). */
   /**
    * A chat renamed before it went on the phone: its name sent again once it is there, since its copy
    * on claude.ai may be an older one that kept the first prompt as its name (see ClaudeSession.renameLive).
@@ -3332,6 +3331,7 @@ export class ChatView extends ItemView {
       .catch((error: unknown) => log('sending the renamed title failed', error));
   }
 
+  /** Called for every rename (from this panel, another one, or the history). */
   onChatRenamed(id: string, title: string): void {
     this.doneTabs.rename(id, title);
     // A running Claude chat is told too, for its copy on claude.ai (see ClaudeSession.renameLive).
@@ -4495,14 +4495,6 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * Copies this chat into a new one (up to `upTo`, or all of it; from message `start` of yours on,
-   * or from its beginning) and opens the copy in a new tab or in place of this chat, which then
-   * keeps running in the background if it is working. A copy of the scratch chat carries it on as a
-   * chat of its own, linked to the notes it changed; a copy from a message on, or of the scratch
-   * chat, is named for what it holds (see copyTitle). The chat copied stays as it is. `open` false:
-   * the copy is made and recorded only. Its id; null when none was made.
-   */
-  /**
    * A branch, copy or move `id` of chat `source` joins `source`'s project, as if chosen by hand: it
    * carries the same work on, whatever notes its own part touched. Its context goes with its next message.
    */
@@ -4517,6 +4509,14 @@ export class ChatView extends ItemView {
     }
   }
 
+  /**
+   * Copies this chat into a new one (up to `upTo`, or all of it; from message `start` of yours on,
+   * or from its beginning) and opens the copy in a new tab or in place of this chat, which then
+   * keeps running in the background if it is working. A copy of the scratch chat carries it on as a
+   * chat of its own, linked to the notes it changed; a copy from a message on, or of the scratch
+   * chat, is named for what it holds (see copyTitle). The chat copied stays as it is. `open` false:
+   * the copy is made and recorded only. Its id; null when none was made.
+   */
   private async branch(upTo: string | undefined, newTab: boolean, start?: string, open = true, whole = false): Promise<string | null> {
     const source = this.chatId ?? this.resumeId;
     const root = this.plugin.vaultRoot();
@@ -6403,7 +6403,6 @@ export class ChatView extends ItemView {
     void this.plugin.openChatTab(this.leaf).then((view) => view?.focusInput());
   }
 
-  /** New chat, as its button and command start one: the chat left can be gone back to. */
   /**
    * Closes the chat on screen, as a browser closes a tab: off the phone, off the arrows, and its
    * process ended; one still working is asked about: it finishes in the background first, then
@@ -6461,6 +6460,7 @@ export class ChatView extends ItemView {
     this.plugin.chatShown(this);
   }
 
+  /** New chat, as its button and command start one: the chat left can be gone back to. */
   startNewChat(): void {
     const from = this.navPlace();
     this.newChat();
