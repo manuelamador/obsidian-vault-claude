@@ -4523,7 +4523,12 @@ export default class VaultClaudePlugin extends Plugin {
     }
     this.chats = this.chats.filter((chat) => chat.id !== id);
     this.forgetChatData(id);
-    for (const view of this.chatViews()) view.dropDoneTab(id);
+    // Out of the listing kept, which the welcome's recent chats read, and the welcome drawn again.
+    if (this.lastListing) this.lastListing = this.lastListing.filter((item) => item.id !== id);
+    for (const view of this.chatViews()) {
+      view.dropDoneTab(id);
+      view.refreshWelcome();
+    }
     log('chat deleted', { id });
     await this.saveSettings();
     // The Connections pane drawn again without it, staying where it is; when the panel it follows
