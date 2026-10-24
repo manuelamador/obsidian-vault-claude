@@ -1201,6 +1201,7 @@ export default class VaultClaudePlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('quit', () => {
         this.quitting = true;
+        this.stopContextRuns();
         // No Remote Control server started again after this (see onRemoteChange).
         clearTimeout(this.remoteRetryTimer);
         this.stopCodexDaemonAtQuit();
@@ -1230,6 +1231,8 @@ export default class VaultClaudePlugin extends Plugin {
       run();
     }
     this.cleanups.clear();
+    this.unloaded = true;
+    this.stopContextRuns();
     // The Codex app-server kept for reads (see CodexReader).
     stopCodexReader();
     // A shared app-server the panel started is stopped at quit (see stopCodexDaemonAtQuit), not here: a
@@ -4002,13 +4005,18 @@ export default class VaultClaudePlugin extends Plugin {
       await this.app.workspace.getLeaf('tab').openFile(file);
       // Its Context, written straight into the note (which can then be edited); without it, the project still stands.
       const writing = new Notice(`Project “${clean}” created. Writing its context from its notes and chats…`, 0);
-      void this.writeProjectContext(file)
+      const run = new AbortController();
+      this.contextRuns.add(run);
+      void this.writeProjectContext(file, run.signal)
+        .finally(() => this.contextRuns.delete(run))
         .then(async (context) => {
           await this.saveProjectContext(file, context);
           new Notice(`The context of “${clean}” is written: edit it in the note, or Refresh context later.`);
         })
         .catch((error: unknown) => {
           log('writing a project context failed', error);
+          // Stopped as the plugin unloaded or Obsidian quit: nothing to say.
+          if (run.signal.aborted) return;
           new Notice(`The context of “${clean}” could not be written: ${errorText(error)}. Use Refresh context to try again.`);
         })
         .finally(() => writing.hide());
@@ -4101,11 +4109,21 @@ export default class VaultClaudePlugin extends Plugin {
   }
 
   private async writeContexts(projects: TFile[]): Promise<void> {
-    const notice = new Notice(`Writing the context of ${projects.length} project${projects.length === 1 ? '' : 's'}…`, 0);
+    // Stopped by its notice's Cancel, or when the plugin unloads or Obsidian quits (see contextRuns).
+    const controller = new AbortController();
+    this.contextRuns.add(controller);
+    const notice = new Notice(
+      createFragment((el) => {
+        el.appendText(`Writing the context of ${projects.length} project${projects.length === 1 ? '' : 's'}… `);
+        el.createEl('a', { text: 'Cancel' }).addEventListener('click', () => controller.abort());
+      }),
+      0,
+    );
     let done = 0;
     for (const file of projects) {
+      if (controller.signal.aborted) break;
       try {
-        await this.saveProjectContext(file, await this.writeProjectContext(file));
+        await this.saveProjectContext(file, await this.writeProjectContext(file, controller.signal));
         this.contextChanged(file.path);
         done += 1;
       } catch (error) {
@@ -4113,7 +4131,20 @@ export default class VaultClaudePlugin extends Plugin {
       }
     }
     notice.hide();
-    new Notice(`Context written for ${done} of ${projects.length} project${projects.length === 1 ? '' : 's'}.`);
+    this.contextRuns.delete(controller);
+    if (this.quitting || this.unloaded) return;
+    new Notice(`Context written for ${done} of ${projects.length} project${projects.length === 1 ? '' : 's'}${controller.signal.aborted ? ' before it was cancelled' : ''}.`);
+  }
+
+  /** Project contexts being written in the background (see writeContexts, createProject): stopped at unload and quit. */
+  private readonly contextRuns = new Set<AbortController>();
+  /** The plugin has unloaded: background runs say nothing more. */
+  private unloaded = false;
+
+  /** Stops the project contexts being written in the background (see contextRuns). */
+  private stopContextRuns(): void {
+    for (const run of this.contextRuns) run.abort();
+    this.contextRuns.clear();
   }
 
   /** A project's Context and Instructions as they go with a chat. */
