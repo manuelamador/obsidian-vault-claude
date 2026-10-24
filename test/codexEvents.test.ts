@@ -109,3 +109,9 @@ test('a message of yours from elsewhere: its text, without the context the panel
   assert.equal(codexUserContent({ type: 'userMessage', id: 'u1', content: [{ type: 'text', text: '<project_context>x</project_context>' }, { type: 'text', text: 'from the phone' }] } as never), 'from the phone');
   assert.equal(codexUserContent({ type: 'userMessage', id: 'u2', content: [] } as never), null);
 });
+
+test('a message without the panel\'s id, after one with it, is marked as sent elsewhere', () => {
+  const turn = (id: string, clientId?: string) => ({ items: [{ type: 'userMessage', id, ...(clientId ? { clientId } : {}), content: [{ type: 'text', text: id }] }] });
+  const { transcript } = codexTranscript('t', [turn('old'), turn('panel', 'c1'), turn('phone')] as never);
+  assert.deepEqual(transcript.map((message) => (message as { sentElsewhere?: boolean }).sentElsewhere === true), [false, false, true]);
+});

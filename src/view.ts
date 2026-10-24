@@ -126,6 +126,9 @@ import {
 import { codexAccessDetail, codexAccessLabel, codexAccessModes, codexAccessShort, type CodexAccess } from './codexAccess';
 import { shortTitle, zoteroCitation, zoteroItemByLink, zoteroLabel, zoteroLink, zoteroLinksIn, zoteroPdfPath } from './zotero';
 
+/** The label of a Codex message not sent from the panel (see beginRemoteTurn, renderHistoricUser). */
+const CODEX_ELSEWHERE = 'Sent from your phone or the Codex app';
+
 /** How long a Codex chat may sit idle before its own process is let go of (see releaseCodexWhenIdle). */
 const CODEX_IDLE_RELEASE_MS = 3 * 60_000;
 /** How long after a panel writes a memo's Send box its own write is told from someone else's edit (see setMemoBox). */
@@ -2595,7 +2598,7 @@ export class ChatView extends ItemView {
         const shown = message && promptBubble(message.text, message.images);
         if (!shown || shown === 'stopped') continue;
         const bubble = this.renderUserBubble(shown.text, shown.chips, undefined, prompt.id);
-        bubble.createDiv({ cls: 'vc-origin-label', text: this.plugin.settings.phoneCodex ? 'Sent from your phone or the Codex app' : 'Sent from the Codex app' });
+        bubble.createDiv({ cls: 'vc-origin-label', text: CODEX_ELSEWHERE });
         turn.before(bubble);
       }
       return;
@@ -3812,7 +3815,7 @@ export class ChatView extends ItemView {
             }
           }
           const prompt = messagePrompt(message);
-          if (prompt) lastPrompt = timed('prompts', () => this.renderHistoricUser(prompt.text, prompt.images, message.uuid, sentUuidOf(message))) ?? lastPrompt;
+          if (prompt) lastPrompt = timed('prompts', () => this.renderHistoricUser(prompt.text, prompt.images, message.uuid, sentUuidOf(message), (message as { sentElsewhere?: boolean }).sentElsewhere === true)) ?? lastPrompt;
         } else if (message.type === 'assistant' && Array.isArray(content)) {
           let textIndex = 0;
           for (const block of content as ContentBlock[]) {
@@ -3871,7 +3874,8 @@ export class ChatView extends ItemView {
    * new turn for the reply, or the Stopped notice. Returns the bubble's text, for ↑.
    */
   /** `sentUuid`: the id a queued message was sent with, when its file holds it under another (see sentUuidOf). */
-  private renderHistoricUser(raw: string, images: Chip[] = [], uuid?: string, sentUuid?: string): string | null {
+  /** `elsewhere`: a Codex message sent from the phone or Codex's app (see codexTranscript), labelled so. */
+  private renderHistoricUser(raw: string, images: Chip[] = [], uuid?: string, sentUuid?: string, elsewhere = false): string | null {
     if (raw.includes('<task-notification>')) for (const notice of parseTaskNotifications(raw).notices) this.renderTaskNotice(notice);
     const bubble = promptBubble(raw, images);
     if (bubble === 'stopped') this.renderNotice('Stopped.', 'vc-muted');
@@ -3879,6 +3883,7 @@ export class ChatView extends ItemView {
     try {
       const drawn = this.renderUserBubble(bubble.text, bubble.chips, undefined, uuid);
       if (sentUuid) drawn.dataset.sentUuid = sentUuid;
+      if (elsewhere) drawn.createDiv({ cls: 'vc-origin-label', text: CODEX_ELSEWHERE });
     } finally {
       // The reply gets a turn of its own even when the bubble could not be drawn whole, rather than
       // joining the exchange before it.

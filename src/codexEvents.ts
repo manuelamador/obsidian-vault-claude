@@ -206,11 +206,17 @@ export function codexTurnResult(sessionId: string, turn: { status: string; error
 export function codexTranscript(sessionId: string, turns: { items?: CodexItem[] }[], cwd = ''): { transcript: DrawnMessage[]; edits: Map<string, unknown> } {
   const transcript: DrawnMessage[] = [];
   const edits = new Map<string, unknown>();
+  // Since 0.34.0 the panel sends each message with an id of its own (its clientId): after the first
+  // message that has one, a message without one was sent from elsewhere (the phone, Codex's app).
+  let panelIds = false;
   for (const turn of turns) {
     for (const item of turn.items ?? []) {
       if (item.type === 'userMessage') {
+        const fromPanel = Boolean((item as { clientId?: string }).clientId);
+        const elsewhere = panelIds && !fromPanel;
+        panelIds ||= fromPanel;
         const shown = codexUserContent(item);
-        if (shown !== null) transcript.push({ type: 'user', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, message: { role: 'user', content: shown } });
+        if (shown !== null) transcript.push({ type: 'user', uuid: item.id, session_id: sessionId, parent_tool_use_id: null, message: { role: 'user', content: shown }, ...(elsewhere ? { sentElsewhere: true } : {}) });
         continue;
       }
       for (const message of [...codexItemStarted(sessionId, item, cwd), ...codexItemCompleted(sessionId, item)]) {
