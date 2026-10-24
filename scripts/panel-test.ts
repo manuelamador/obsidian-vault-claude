@@ -2989,6 +2989,42 @@ async function main(): Promise<void> {
     console.log(`scratch held by another panel: shown there ${heldKept}; one that cannot be read starts over ${goneStartsOver}`);
     if (!heldKept || !goneStartsOver) process.exitCode = 1;
 
+    // A chat is on screen in one panel only. One from outside the panel, opened and not yet sent from,
+    // is held by the id it resumes; opened in another panel, it is shown in the one holding it; and
+    // when another panel shows it while its file is read here (two opening it at once), the first keeps it.
+    {
+      const held = view as unknown as { readForOpening: unknown; resumeId: string | null; chatId: string | null };
+      const said = (id: string) => [
+        { type: 'user', uuid: `${id}-u`, session_id: id, parent_tool_use_id: null, message: { role: 'user', content: 'Hello?' } },
+        { type: 'assistant', uuid: `${id}-a`, session_id: id, parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'Hello.' }] } },
+      ];
+      held.readForOpening = async (id: string) => ({ chat: { transcript: said(id), edits: new Map() }, readMs: 0 });
+      view.newChat();
+      await view.openChat({ id: 'outside-held', title: 'Desk', updatedAt: Date.now(), fromPanel: false });
+      const byResume = held.chatId === null && held.resumeId === 'outside-held' && view.holdsChat('outside-held');
+      view.newChat();
+      const holderStub = plugin.chatHolder;
+      const shownThere: string[] = [];
+      const other = { showHeldChat: async (id: string) => void shownThere.push(id) };
+      Object.assign(plugin, { chatHolder: (id: string) => (id === 'outside-held' ? other : null) });
+      await view.openChat({ id: 'outside-held', title: 'Desk', updatedAt: Date.now(), fromPanel: false });
+      const heldElsewhere = shownThere.join() === 'outside-held' && held.resumeId === null;
+      // Another panel takes it while this one reads its file.
+      let taken = false;
+      Object.assign(plugin, { chatHolder: (id: string) => (taken && id === 'race-held' ? other : null) });
+      held.readForOpening = async (id: string) => {
+        taken = true;
+        return { chat: { transcript: said(id), edits: new Map() }, readMs: 0 };
+      };
+      await view.openChat({ id: 'race-held', title: 'Race', updatedAt: Date.now(), fromPanel: true });
+      const raceFirstKeeps = shownThere.join() === 'outside-held,race-held' && held.resumeId === null && held.chatId === null;
+      Object.assign(plugin, { chatHolder: holderStub });
+      delete (held as unknown as Record<string, unknown>).readForOpening;
+      view.newChat();
+      console.log(`chat in one panel only: held by its resume id ${byResume}; opened where held elsewhere, shown there ${heldElsewhere}; taken while read, first keeps it ${raceFirstKeeps}`);
+      if (!byResume || !heldElsewhere || !raceFirstKeeps) process.exitCode = 1;
+    }
+
     // A scratch reply carries on as a chat: named after the note it made, linked to the notes the copy
     // changed (not those of later turns), and opened with its own opening lines. A real session file,
     // under a Claude Code config dir of the test's own, is copied by the SDK.

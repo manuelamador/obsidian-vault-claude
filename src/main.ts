@@ -2786,9 +2786,12 @@ export default class VaultClaudePlugin extends Plugin {
       .filter((view): view is ChatView => view instanceof ChatView);
   }
 
-  /** The panel, other than `except`, that has chat `id` on screen or running in its background. */
+  /**
+   * The panel, other than `except`, that has chat `id` on screen or running in its background. Not
+   * one closing: its running chats are on their way to another panel (see ChatView.onClose).
+   */
   chatHolder(id: string, except?: ChatView): ChatView | null {
-    return this.chatViews().find((view) => view !== except && view.holdsChat(id)) ?? null;
+    return this.chatViews().find((view) => view !== except && !view.isClosing() && view.holdsChat(id)) ?? null;
   }
 
   /** History status labels from every panel. */
@@ -3475,7 +3478,9 @@ export default class VaultClaudePlugin extends Plugin {
       lastPrompt: (id) => this.lastPromptOf(id),
       openChat: (id, newTab) => {
         const title = this.chatTitleOf(id);
-        if (!newTab) return void this.openChatById(id, title, view);
+        // Open in a panel already: shown there, without an empty tab left behind.
+        const holder = this.chatHolder(id);
+        if (!newTab || holder) return void this.openChatById(id, title, holder ?? view);
         void (async () => {
           const panel = view ?? (await this.activateView());
           const tab = panel && (await this.openChatTab(panel.leaf));

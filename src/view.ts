@@ -2588,9 +2588,12 @@ export class ChatView extends ItemView {
     return (this.chatId ?? this.resumeId) === id;
   }
 
-  /** Whether chat `id` is on screen here or running in this panel's background. */
+  /**
+   * Whether chat `id` is on screen here or running in this panel's background. On screen by either
+   * id: a chat from outside the panel, opened and not yet sent from, has only the id it resumes.
+   */
   holdsChat(id: string): boolean {
-    return this.chatId === id || [...this.background].some((entry) => entry.chatId === id);
+    return this.showsChat(id) || [...this.background].some((entry) => entry.chatId === id);
   }
 
   /** Shows chat `id`, which this panel holds (see holdsChat), bringing it back from the background if needed. */
@@ -3513,6 +3516,9 @@ export class ChatView extends ItemView {
 
   /** Opens a chat picked in the history, here or in a new Claude tab beside this one. */
   private async pickChat(item: HistoryItem, newTab: boolean): Promise<void> {
+    // Open in a panel already: shown there, without an empty tab left behind (see openChatHere).
+    const holder = !item.scratch && newTab ? this.plugin.chatHolder(item.id) : null;
+    if (holder) return holder.showHeldChat(item.id);
     const target = newTab ? await this.plugin.openChatTab(this.leaf) : this;
     if (!target) {
       new Notice('Could not open a new tab.');
@@ -3593,8 +3599,8 @@ export class ChatView extends ItemView {
   private async openChatHere(item: HistoryItem, branch?: BranchSource): Promise<boolean> {
     // The latest pick wins: an open still reading its file gives way (see showSavedChat).
     this.chatGeneration += 1;
-    // Already on screen: reopening would start a second process on the same session.
-    if (item.id === this.chatId) return true;
+    // Already on screen (by either id): reopening would start a second process on the same session.
+    if (this.showsChat(item.id)) return true;
     const running = [...this.background].find((entry) => entry.chatId === item.id);
     if (running) {
       await this.attachBackground(running);
@@ -3630,6 +3636,13 @@ export class ChatView extends ItemView {
     if (!read) return true;
     // No longer wanted once read (a refresh overtaken by a message sent meanwhile): what is on screen stays.
     if (wanted && !wanted()) return true;
+    // Opened in another panel while its file was read here (two panels opening it at once): the first
+    // to show it keeps it, and this one shows it there, so that no chat is on screen in two panels.
+    const holder = this.showsChat(item.id) ? null : this.plugin.chatHolder(item.id, this);
+    if (holder) {
+      await holder.showHeldChat(item.id);
+      return true;
+    }
     const { chat } = read;
     if (!chat || chat.transcript.length === 0) {
       // No messages: its file holds only what Claude Code notes about a session, as when it was
@@ -6412,6 +6425,12 @@ export class ChatView extends ItemView {
   async closeCurrentChat(): Promise<void> {
     const id = this.chatId ?? this.resumeId;
     if (!id || this.scratch) return;
+    // On screen in another panel too (which should not happen): this panel lets go of it without asking,
+    // one still working going on in this panel's background, and the other panel keeps showing it.
+    if (this.plugin.chatHolder(id, this)) {
+      await this.closeChatNow(id);
+      return;
+    }
     // Still working, or waiting on you: asked whether it goes on in the background or stops.
     const waiting = this.openApprovals.length > 0;
     if (this.busy || this.pending.size > 0 || this.tasks.size > 0 || waiting) {
